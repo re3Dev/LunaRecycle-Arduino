@@ -15,4 +15,3 @@ Subsystem-purpose-component(s)
 
 ## Code Hygiene
 * Define pins as variables at the top of the page.
-* Comment (//) any required libraries at the top with the pin assignments.

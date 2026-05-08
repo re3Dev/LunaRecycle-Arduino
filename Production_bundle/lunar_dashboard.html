@@ -1361,31 +1361,35 @@
         connMeta.textContent = "retrying…";
       }
 
-      $("#interlockState").textContent = S.interlock;
-      const throughputDot = $("#throughputDot");
-      if(S.estop || S.interlock==="BLOCKED") throughputDot.className="dot bad";
-      else if(S.interlock==="CAUTION") throughputDot.className="dot warn";
-      else throughputDot.className="dot good";
+      setText("interlockState", S.interlock);
+      const throughputDot = document.getElementById("throughputDot");
+      if(throughputDot){
+        if(S.estop || S.interlock==="BLOCKED") throughputDot.className="dot bad";
+        else if(S.interlock==="CAUTION") throughputDot.className="dot warn";
+        else throughputDot.className="dot good";
+      }
 
-      $("#throughput").textContent = fmt2(S.estThroughput);
+      setText("throughput", fmt2(S.estThroughput));
 
-      $("#convA_speed_lbl").textContent = Math.round(S.convA_speed);
-      $("#convB_speed_lbl").textContent = Math.round(S.convB_speed);
-      setChip($("#chipConvA"), S.convA_on);
-      setChip($("#chipConvB"), S.convB_on);
+      setText("convA_speed_lbl", Math.round(S.convA_speed));
+      setText("convB_speed_lbl", Math.round(S.convB_speed));
+      safeSetChip("chipConvA", S.convA_on);
+      safeSetChip("chipConvB", S.convB_on);
 
-      $("#shred_dir_lbl").textContent = S.shred_dir==="fwd" ? "Forward" : "Reverse";
-      setChip($("#chipShred"), S.shred_on, false, (S.interlock==="BLOCKED"));
-      $("#shred_load_lbl").textContent = Math.round(S.shred_load);
-      $("#shred_load_bar").style.width = `${clamp(S.shred_load,0,100)}%`;
+      setText("shred_dir_lbl", S.shred_dir==="fwd" ? "Forward" : "Reverse");
+      safeSetChip("chipShred", S.shred_on, false, (S.interlock==="BLOCKED"));
+      setText("shred_load_lbl", Math.round(S.shred_load));
+      setStyle("shred_load_bar", "width", `${clamp(S.shred_load,0,100)}%`);
 
-      const shredDot = $("#shredDot");
-      if(S.shred_on){
-        shredDot.className = "dot good";
-        $("#shredStatus").textContent = S.shred_dir==="fwd" ? "RUNNING" : "REVERSE";
-      }else{
-        shredDot.className = (S.interlock==="BLOCKED") ? "dot bad" : "dot";
-        $("#shredStatus").textContent = (S.interlock==="BLOCKED") ? "BLOCKED" : "IDLE";
+      const shredDot = document.getElementById("shredDot");
+      if(shredDot){
+        if(S.shred_on){
+          shredDot.className = "dot good";
+          setText("shredStatus", S.shred_dir==="fwd" ? "RUNNING" : "REVERSE");
+        }else{
+          shredDot.className = (S.interlock==="BLOCKED") ? "dot bad" : "dot";
+          setText("shredStatus", (S.interlock==="BLOCKED") ? "BLOCKED" : "IDLE");
+        }
       }
 
       const d = S.dryerData;
@@ -1414,8 +1418,8 @@
 
       $("#dryerMode").textContent = S.dryerIoLive ? "LIVE MODBUS" : S.dryer_mode;
 
-      setChip($("#chipScrew"), S.screw_on);
-      setChip($("#chipHeater"), S.heater_on, (S.heater_on && !S.screw_on), false);
+      safeSetChip("chipScrew", S.screw_on);
+      safeSetChip("chipHeater", S.heater_on, (S.heater_on && !S.screw_on), false);
 
       const dryerDot = $("#dryerDot");
       if(S.dryerIoLive){
@@ -1446,52 +1450,43 @@
       })();
       $("#heater_stability_bar").style.width = `${stab}%`;
 
-      setChip($("#chipVac"), S.vac_on);
-      const vacDot = $("#vacDot");
-      if(S.vac_on && S.dp_kpa < 6) vacDot.className="dot good";
-      else if(S.vac_on) vacDot.className="dot warn";
-      else vacDot.className="dot";
-      $("#vacStatus").textContent = S.vac_on ? "RUNNING" : "IDLE";
+      safeSetChip("chipVac", S.vac_on);
+      const vacDot = document.getElementById("vacDot");
+      if(vacDot){
+        if(S.vac_on && S.dp_kpa < 6) vacDot.className="dot good";
+        else if(S.vac_on) vacDot.className="dot warn";
+        else vacDot.className="dot";
+      }
+      setText("vacStatus", S.vac_on ? "RUNNING" : "IDLE");
 
-      $("#dp_lbl").textContent = fmt2(S.dp_kpa);
-      $("#dp_bar").style.width = `${clamp((S.dp_kpa/12)*100, 0, 100)}%`;
+      setText("dp_lbl", fmt2(S.dp_kpa));
+      setStyle("dp_bar", "width", `${clamp((S.dp_kpa/12)*100, 0, 100)}%`);
 
-      $("#doorPosLbl").textContent = Math.round(S.door_pos);
-      $("#door_pos_readout").textContent = Math.round(S.door_pos);
-      $("#door_bar").style.width = `${S.door_pos}%`;
+      setText("doorPosLbl", Math.round(S.door_pos));
+      setText("door_pos_readout", Math.round(S.door_pos));
+      setStyle("door_bar", "width", `${S.door_pos}%`);
       const openish = S.door_pos > 65;
       const closedish = S.door_pos < 35;
-      const doorLabel = $("#doorLabel");
-      const doorDot = $("#doorDot");
-      if(openish){
-        doorLabel.textContent = "OPEN";
-        doorDot.className = "dot good";
-      }else if(closedish){
-        doorLabel.textContent = "CLOSED";
-        doorDot.className = "dot";
-      }else{
-        doorLabel.textContent = "MOVING";
-        doorDot.className = "dot warn";
-      }
-      $(".doorViz").classList.toggle("open", openish);
+      setText("doorLabel", openish ? "OPEN" : closedish ? "CLOSED" : "MOVING");
+      setClass("doorDot", openish ? "dot good" : closedish ? "dot" : "dot warn");
+      safeToggleOnQ(".doorViz", "open", openish);
 
       const feed = clamp(S.feed_pct,0,100);
-      $("#feed_readout").textContent = fmt2(feed);
-      $("#feedPct").textContent = `${Math.round(feed)}%`;
-      $("#feed_bar").style.width = `${feed}%`;
-      $("#flow_est").textContent = fmt2(S.flow_est);
+      setText("feed_readout", fmt2(feed));
+      setText("feedPct", `${Math.round(feed)}%`);
+      setStyle("feed_bar", "width", `${feed}%`);
+      setText("flow_est", fmt2(S.flow_est));
 
-      $("#feedConf").textContent = S.feed_conf;
-      const feedDot = $("#feedDot");
-      feedDot.className = S.feed_conf==="HIGH" ? "dot good" : S.feed_conf==="MED" ? "dot warn" : "dot bad";
+      setText("feedConf", S.feed_conf);
+      setClass("feedDot", S.feed_conf==="HIGH" ? "dot good" : S.feed_conf==="MED" ? "dot warn" : "dot bad");
 
       drawGauge(feed, S.feed_conf);
 
-      $("#simState").textContent = S.sim ? "ON" : "OFF";
-      $("#btnSim").classList.toggle("primary", S.sim);
+      setText("simState", S.sim ? "ON" : "OFF");
+      toggleClass("btnSim", "primary", S.sim);
 
-      $("#dryerIoState").textContent = S.dryerIoLive ? "LIVE" : "SIM";
-      $("#btnDryerMode").classList.toggle("primary", S.dryerIoLive);
+      setText("dryerIoState", S.dryerIoLive ? "LIVE" : "SIM");
+      toggleClass("btnDryerMode", "primary", S.dryerIoLive);
 
       $$(".switch").forEach(sw=>{
         const key = sw.dataset.key;
@@ -1645,6 +1640,20 @@
     }
     function procBack(){ if(procIndex > 0) procIndex--; renderProcedure(); }
 
+    function on(id, evt, fn){
+      const el = document.getElementById(id);
+      if(el) el.addEventListener(evt, fn);
+    }
+
+    // Safe wrappers used in render() to tolerate missing PLANNED-card elements
+    function setText(id, val){ const el = document.getElementById(id); if(el) el.textContent = val; }
+    function setStyle(id, prop, val){ const el = document.getElementById(id); if(el) el.style[prop] = val; }
+    function setClass(id, cls){ const el = document.getElementById(id); if(el) el.className = cls; }
+    function toggleClass(id, cls, on){ const el = document.getElementById(id); if(el) el.classList.toggle(cls, on); }
+    function safeSetChip(id, ...args){ const el = document.getElementById(id); if(el) setChip(el, ...args); }
+    function safeClassOnQ(q, cls){ const el = document.querySelector(q); if(el) el.className = cls; }
+    function safeToggleOnQ(q, cls, on){ const el = document.querySelector(q); if(el) el.classList.toggle(cls, on); }
+
     function bind(){
       $$(".switch").forEach(sw=>{
         const key = sw.dataset.key;
@@ -1692,14 +1701,14 @@
         });
       });
 
-      $("#btnBalance").addEventListener("click", ()=>{
+      on("btnBalance", "click", ()=>{
         const avg = Math.round((S.convA_speed + S.convB_speed)/2);
         S.convA_speed = avg; S.convB_speed = avg;
         log(`Conveyor speeds normalized to ${avg}%.`, "good");
         render();
       });
 
-      $("#btnPurge").addEventListener("click", ()=>{
+      on("btnPurge", "click", ()=>{
         if(S.estop){ log("E-STOP active: controls locked.", "bad"); return; }
         S.shred_on = true; S.shred_dir = "rev";
         log("Clear Jam: reverse purge started (demo).", "warn");
@@ -1712,24 +1721,24 @@
         render();
       });
 
-      $("#btnUnclog").addEventListener("click", openModal);
-      $("#btnCloseModal").addEventListener("click", closeModal);
-      $("#modal").addEventListener("click", (e)=>{ if(e.target.id==="modal") closeModal(); });
-      $("#btnStepNext").addEventListener("click", procNext);
-      $("#btnStepBack").addEventListener("click", procBack);
+      on("btnUnclog",    "click", openModal);
+      on("btnCloseModal","click", closeModal);
+      on("modal",        "click", (e)=>{ if(e.target.id==="modal") closeModal(); });
+      on("btnStepNext",  "click", procNext);
+      on("btnStepBack",  "click", procBack);
 
-      $("#btnClearLog").addEventListener("click", ()=>{
+      on("btnClearLog", "click", ()=>{
         $("#log").textContent = "";
         toast("Log cleared.", "info", "Event log reset by operator.");
       });
 
-      $("#btnSim").addEventListener("click", ()=>{
+      on("btnSim", "click", ()=>{
         S.sim = !S.sim;
         log(`Simulation ${S.sim ? "ENABLED" : "PAUSED"}.`, "info");
         render();
       });
 
-      $("#btnDryerMode").addEventListener("click", async ()=>{
+      on("btnDryerMode", "click", async ()=>{
         S.dryerIoLive = !S.dryerIoLive;
         if(S.dryerIoLive){
           log("Dryer IO switched to LIVE mode.", "warn", "Dashboard will poll local Modbus API.");
@@ -1741,46 +1750,46 @@
         render();
       });
 
-      $("#btnDryerConnect").addEventListener("click", dryerConnect);
-      $("#btnDryerDisconnect").addEventListener("click", dryerDisconnect);
-      $("#btnDryerRefresh").addEventListener("click", ()=>dryerRefresh(false));
-      $("#btnDryerToggle").addEventListener("click", dryerToggle);
-      $("#btnWriteProcessSp").addEventListener("click", writeProcessSp);
-      $("#btnWriteDewSp").addEventListener("click", writeDewSp);
+      on("btnDryerConnect",    "click", dryerConnect);
+      on("btnDryerDisconnect", "click", dryerDisconnect);
+      on("btnDryerRefresh",    "click", ()=>dryerRefresh(false));
+      on("btnDryerToggle",     "click", dryerToggle);
+      on("btnWriteProcessSp",  "click", writeProcessSp);
+      on("btnWriteDewSp",      "click", writeDewSp);
 
       // Arduino connection
-      $("#btnArduinoMode").addEventListener("click", async ()=>{
+      on("btnArduinoMode", "click", async ()=>{
         if(S.arduinoConnected){ await arduinoDisconnect(); } else { await arduinoConnect(); }
       });
-      $("#btnArduinoConnect").addEventListener("click", arduinoConnect);
-      $("#btnArduinoDisconnect").addEventListener("click", arduinoDisconnect);
-      $("#btnArduinoRefresh").addEventListener("click", ()=>arduinoRefreshStatus());
+      on("btnArduinoConnect",    "click", arduinoConnect);
+      on("btnArduinoDisconnect", "click", arduinoDisconnect);
+      on("btnArduinoRefresh",    "click", ()=>arduinoRefreshStatus());
 
       // Doors
-      $("#btnDoorOpen").addEventListener("click",   ()=>doorCmd("/door/open"));
-      $("#btnDoorClose").addEventListener("click",  ()=>doorCmd("/door/close"));
-      $("#btnDoorStop").addEventListener("click",   ()=>doorCmd("/door/stop"));
-      $("#btnDoorStatus").addEventListener("click", ()=>{
+      on("btnDoorOpen",   "click", ()=>doorCmd("/door/open"));
+      on("btnDoorClose",  "click", ()=>doorCmd("/door/close"));
+      on("btnDoorStop",   "click", ()=>doorCmd("/door/stop"));
+      on("btnDoorStatus", "click", ()=>{
         if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
         arduinoRefreshStatus();
       });
 
       // Gate
-      $("#btnGateOpen").addEventListener("click",   ()=>gateCmd("/gate/open"));
-      $("#btnGateClose").addEventListener("click",  ()=>gateCmd("/gate/close"));
-      $("#btnGateStatus").addEventListener("click", ()=>arduinoRefreshStatus());
+      on("btnGateOpen",   "click", ()=>gateCmd("/gate/open"));
+      on("btnGateClose",  "click", ()=>gateCmd("/gate/close"));
+      on("btnGateStatus", "click", ()=>arduinoRefreshStatus());
 
       // FPU
-      $("#btnFpuHome").addEventListener("click",    ()=>fpuCmd("/fpu/home"));
-      $("#btnFpuPick").addEventListener("click",    ()=>fpuCmd("/fpu/pick"));
-      $("#btnFpuStop").addEventListener("click",    ()=>fpuCmd("/fpu/stop"));
-      $("#btnFpuVacOn").addEventListener("click",   ()=>fpuCmd("/fpu/vacuum_on"));
-      $("#btnFpuVacOff").addEventListener("click",  ()=>fpuCmd("/fpu/vacuum_off"));
-      $("#btnFpuArmUp").addEventListener("click",   ()=>fpuCmd("/fpu/arm_up"));
-      $("#btnFpuArmDown").addEventListener("click", ()=>fpuCmd("/fpu/arm_down"));
-      $("#btnFpuStatus").addEventListener("click",  ()=>arduinoRefreshStatus());
+      on("btnFpuHome",    "click", ()=>fpuCmd("/fpu/home"));
+      on("btnFpuPick",    "click", ()=>fpuCmd("/fpu/pick"));
+      on("btnFpuStop",    "click", ()=>fpuCmd("/fpu/stop"));
+      on("btnFpuVacOn",   "click", ()=>fpuCmd("/fpu/vacuum_on"));
+      on("btnFpuVacOff",  "click", ()=>fpuCmd("/fpu/vacuum_off"));
+      on("btnFpuArmUp",   "click", ()=>fpuCmd("/fpu/arm_up"));
+      on("btnFpuArmDown", "click", ()=>fpuCmd("/fpu/arm_down"));
+      on("btnFpuStatus",  "click", ()=>arduinoRefreshStatus());
 
-      $("#btnEStop").addEventListener("click", async ()=>{
+      on("btnEStop", "click", async ()=>{
         S.estop = !S.estop;
         if(S.estop){
           applyRules();
@@ -1847,10 +1856,11 @@
       S.door_pos = 0;
       S.door_target = 0;
 
-      document.querySelector('input[data-key="convA_speed"]').value = S.convA_speed;
-      document.querySelector('input[data-key="convB_speed"]').value = S.convB_speed;
-      document.querySelector('input[data-key="noise"]').value = S.noise;
-      document.querySelector('select[data-key="shred_dir"]').value = S.shred_dir;
+      const _set = (sel, val) => { const el = document.querySelector(sel); if(el) el.value = val; };
+      _set('input[data-key="convA_speed"]', S.convA_speed);
+      _set('input[data-key="convB_speed"]', S.convB_speed);
+      _set('input[data-key="noise"]',       S.noise);
+      _set('select[data-key="shred_dir"]',  S.shred_dir);
 
       bind();
       render();

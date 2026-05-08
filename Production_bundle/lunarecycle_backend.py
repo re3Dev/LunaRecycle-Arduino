@@ -16,12 +16,13 @@ All endpoints return JSON:  { "ok": true, ... }  or  { "ok": false, "error": "..
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Optional
 
 import serial
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pymodbus.client import ModbusSerialClient
 
@@ -47,6 +48,14 @@ DRYER_TIMEOUT  = 0.5     # seconds
 
 app = Flask(__name__)
 CORS(app)
+
+_BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+@app.route("/")
+def serve_dashboard():
+    """Serve the dashboard HTML so it runs on http://127.0.0.1:5055 (same-origin)."""
+    return send_from_directory(_BUNDLE_DIR, "lunar_dashboard.html")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Arduino serial bridge

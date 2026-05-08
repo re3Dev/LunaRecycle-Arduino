@@ -4,6 +4,7 @@
   Commands:
     home   Home the stepper, then move to Bag 1
     pick   Run the full pick-place cycle
+    stop   Stop the current cycle and turn outputs off
     on     Turn vacuum pump on
     off    Turn vacuum pump off
     up     Move servo arm up
@@ -17,9 +18,8 @@
 
   Cycle:
     Home -> Bag 1.
-    Pick from Bag 1 and drop at shredder 4 times.
-    Move to Bag 2, pick once, drop at shredder, then stop.
-    Before each pick, the IR sensor confirms the bag stack is not empty.
+    Pick from Bag 1 and drop at shredder until the Bag 1 stack is empty.
+    Before each pick, the IR sensor confirms the Bag 1 stack is not empty.
 
   Pump safety:
     Never set IN1 LOW and IN2 HIGH. That would reverse and damage the pump.
@@ -51,13 +51,15 @@ const unsigned long servoCycleIntervalMs = 5;
 const float analogReferenceV = 5.0;
 const float vacuumThresholdV = 2.5;
 const bool vacuumDetectedWhenVoltageHigh = true;
-const int servoPickStepDeg = 10;
-const int servoReturnStepDeg = 5;
+const int servoPickStepDeg = 2;
 const unsigned long pumpPrimeMs = 75;
-const unsigned long servoStepSettleMs = 35;
-const unsigned long servoReturnStepSettleMs = 35;
+const unsigned long servoStepSettleMs = 6;
+const unsigned long vacuumCheckIntervalMs = 1;
+const unsigned long servoReturnMsPerDeg = 4;
+const unsigned long servoReturnMinMs = 150;
 const int vacuumConfirmSamples = 3;
-const unsigned long vacuumConfirmDelayMs = 15;
+const int vacuumFastConfirmSamples = 2;
+const unsigned long vacuumConfirmDelayMs = 1;
 
 // IR bag stack sensor. Most 3-pin IR obstacle sensors read LOW when an object is present.
 const bool bagPresentState = LOW;
@@ -79,14 +81,12 @@ const int microsteps = 4;
 
 // Positions, in mm from home. Negative moves away from the switch.
 const float homePos = 0.0;
-const float bag1Pos = -50.0;
-const float shredderPos = -300.0;
-const float bag2Pos = -500.0;
+const float bag1Pos = -25.0;
+const float shredderPos = -425.0;
 const float stepperMinPos = -550.0;
 const float stepperMaxPos = -10.0;
 
 const int homeDir = 1;  // Change to -1 if homing moves away from the switch.
-const int bag1TripCount = 4;
 const int pumpSpeed = 100;
 
 const unsigned long debounceMs = 50;
@@ -102,8 +102,6 @@ enum State {
   READY,
   BAG1_TO_SHREDDER,
   SHREDDER_TO_BAG1,
-  SHREDDER_TO_BAG2,
-  BAG2_TO_SHREDDER,
   MANUAL_MOVE,
   DONE
 };
@@ -172,6 +170,8 @@ void runCommand(String cmd) {
     startHome();
   } else if (cmd == "pick" || cmd == "p") {
     startPick();
+  } else if (cmd == "stop") {
+    stopPickSequence("Cycle stopped by user.");
   } else if (cmd == "on") {
     vacuumOn();
   } else if (cmd == "off") {
@@ -196,7 +196,7 @@ void runCommand(String cmd) {
   } else if (cmd == "status" || cmd == "s") {
     printStatus();
   } else if (cmd.length() > 0) {
-    Serial.println("Use: home, pick, on, off, up, down, cycle, y 0 to 180, x -550 to -10, status");
+    Serial.println("Use: home, pick, stop, on, off, up, down, cycle, y 0 to 180, x -550 to -10, status");
   }
 }
 
@@ -223,34 +223,14 @@ void runState() {
       pauseAtShredder();
       bag1TripsDone++;
       Serial.print("Bag 1 trip ");
-      Serial.print(bag1TripsDone);
-      Serial.print(" of ");
-      Serial.println(bag1TripCount);
-
-      if (bag1TripsDone < bag1TripCount) {
-        moveTo(bag1Pos, SHREDDER_TO_BAG1);
-      } else {
-        moveTo(bag2Pos, SHREDDER_TO_BAG2);
-      }
+      Serial.println(bag1TripsDone);
+      moveTo(bag1Pos, SHREDDER_TO_BAG1);
       break;
 
     case SHREDDER_TO_BAG1:
       if (pickAtBag()) {
         moveTo(shredderPos, BAG1_TO_SHREDDER);
       }
-      break;
-
-    case SHREDDER_TO_BAG2:
-      if (pickAtBag()) {
-        moveTo(shredderPos, BAG2_TO_SHREDDER);
-      }
-      break;
-
-    case BAG2_TO_SHREDDER:
-      pauseAtShredder();
-      stepper.disableOutputs();
-      state = DONE;
-      Serial.println("Bag 2 trip done. Cycle complete.");
       break;
 
     case MANUAL_MOVE:
@@ -316,12 +296,11 @@ bool pickAtBag() {
 
   for (int angle = servoUpDeg; angle <= servoDownDeg; angle += servoPickStepDeg) {
     writeServoAngle(angle);
-    delay(servoStepSettleMs);
 
-    if (vacuumDetected()) {
+    if (vacuumDetectedDuringSettle()) {
       bagGrabbed = true;
       Serial.print("Vacuum detected at servo angle ");
-      Serial.print(angle);
+      Serial.print(currentServoAngle);
       Serial.println(" deg.");
       break;
     }
@@ -338,7 +317,9 @@ bool pickAtBag() {
 }
 
 void stopPickSequence(String message) {
+  stopServoCycle();
   vacuumOff();
+  stepper.stop();
   stepper.disableOutputs();
   state = DONE;
   Serial.println(message);
@@ -412,13 +393,7 @@ bool vacuumDetected() {
   int detectedSamples = 0;
 
   for (int i = 0; i < vacuumConfirmSamples; i++) {
-    int raw = analogRead(vacuumSensorPin);
-    float voltage = rawToVoltage(raw);
-    bool detected = vacuumDetectedWhenVoltageHigh
-                      ? voltage >= vacuumThresholdV
-                      : voltage <= vacuumThresholdV;
-
-    if (detected) {
+    if (vacuumDetectedOnce()) {
       detectedSamples++;
     }
 
@@ -428,6 +403,36 @@ bool vacuumDetected() {
   }
 
   return detectedSamples == vacuumConfirmSamples;
+}
+
+bool vacuumDetectedDuringSettle() {
+  unsigned long settleStart = millis();
+  int consecutiveDetections = 0;
+
+  while (millis() - settleStart < servoStepSettleMs) {
+    if (vacuumDetectedOnce()) {
+      consecutiveDetections++;
+    } else {
+      consecutiveDetections = 0;
+    }
+
+    if (consecutiveDetections >= vacuumFastConfirmSamples) {
+      return true;
+    }
+
+    delay(vacuumCheckIntervalMs);
+  }
+
+  return false;
+}
+
+bool vacuumDetectedOnce() {
+  int raw = analogRead(vacuumSensorPin);
+  float voltage = rawToVoltage(raw);
+
+  return vacuumDetectedWhenVoltageHigh
+           ? voltage >= vacuumThresholdV
+           : voltage <= vacuumThresholdV;
 }
 
 bool bagStackEmptyConfirmed() {
@@ -477,16 +482,9 @@ void servoUp() {
 void returnServoToUp() {
   stopServoCycle();
 
-  while (currentServoAngle > servoUpDeg) {
-    int nextAngle = currentServoAngle - servoReturnStepDeg;
-
-    if (nextAngle < servoUpDeg) {
-      nextAngle = servoUpDeg;
-    }
-
-    writeServoAngle(nextAngle);
-    delay(servoReturnStepSettleMs);
-  }
+  int returnDistance = abs(currentServoAngle - servoUpDeg);
+  writeServoAngle(servoUpDeg);
+  delay(max(servoReturnMinMs, returnDistance * servoReturnMsPerDeg));
 
   Serial.println("Servo returned up.");
 }

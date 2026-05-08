@@ -19,6 +19,7 @@
     Home -> Bag 1.
     Pick from Bag 1 and drop at shredder 4 times.
     Move to Bag 2, pick once, drop at shredder, then stop.
+    Before each pick, the IR sensor confirms the bag stack is not empty.
 
   Pump safety:
     Never set IN1 LOW and IN2 HIGH. That would reverse and damage the pump.
@@ -36,6 +37,7 @@ const int IN1 = 6;
 const int IN2 = 7;
 const int limitPin = 8;
 const int servoPin = 9;
+const int bagSensorPin = 53;
 const int vacuumSensorPin = A0;
 
 // Servo angles, in degrees, for a 180-degree servo.
@@ -57,10 +59,16 @@ const unsigned long servoReturnStepSettleMs = 35;
 const int vacuumConfirmSamples = 3;
 const unsigned long vacuumConfirmDelayMs = 15;
 
+// IR bag stack sensor. Most 3-pin IR obstacle sensors read LOW when an object is present.
+const bool bagPresentState = LOW;
+const int bagSensorConfirmSamples = 5;
+const int bagSensorEmptyConfirmCount = 4;
+const unsigned long bagSensorConfirmDelayMs = 20;
+
 // Stepper motion: speed is mm/s, accel is mm/s^2.
 const float maxSpeed = 600.0;
 const float accel = 700.0;
-const float homeSpeed = 60.0;
+const float homeSpeed = 50.0;
 const int minPulseWidthUs = 2;
 
 // 3GT belt with 18T pulley.
@@ -116,6 +124,7 @@ void setup() {
   Serial.begin(9600);
 
   pinMode(limitPin, INPUT_PULLUP);
+  pinMode(bagSensorPin, INPUT);
   pinMode(ENA1, OUTPUT);
   pinMode(IN1, OUTPUT);
   pinMode(IN2, OUTPUT);
@@ -226,13 +235,15 @@ void runState() {
       break;
 
     case SHREDDER_TO_BAG1:
-      pickAtBag();
-      moveTo(shredderPos, BAG1_TO_SHREDDER);
+      if (pickAtBag()) {
+        moveTo(shredderPos, BAG1_TO_SHREDDER);
+      }
       break;
 
     case SHREDDER_TO_BAG2:
-      pickAtBag();
-      moveTo(shredderPos, BAG2_TO_SHREDDER);
+      if (pickAtBag()) {
+        moveTo(shredderPos, BAG2_TO_SHREDDER);
+      }
       break;
 
     case BAG2_TO_SHREDDER:
@@ -284,13 +295,20 @@ void startPick() {
 
   stopServoCycle();
   bag1TripsDone = 0;
-  pickAtBag();
-  moveTo(shredderPos, BAG1_TO_SHREDDER);
-  Serial.println("Pick cycle started.");
+  if (pickAtBag()) {
+    moveTo(shredderPos, BAG1_TO_SHREDDER);
+    Serial.println("Pick cycle started.");
+  }
 }
 
-void pickAtBag() {
+bool pickAtBag() {
   stopServoCycle();
+
+  if (bagStackEmptyConfirmed()) {
+    stopPickSequence("Bag stack empty. Pick sequence stopped.");
+    return false;
+  }
+
   vacuumOn();
   delay(pumpPrimeMs);
 
@@ -316,6 +334,14 @@ void pickAtBag() {
   }
 
   returnServoToUp();
+  return true;
+}
+
+void stopPickSequence(String message) {
+  vacuumOff();
+  stepper.disableOutputs();
+  state = DONE;
+  Serial.println(message);
 }
 
 void pauseAtShredder() {
@@ -402,6 +428,24 @@ bool vacuumDetected() {
   }
 
   return detectedSamples == vacuumConfirmSamples;
+}
+
+bool bagStackEmptyConfirmed() {
+  int emptySamples = 0;
+
+  for (int i = 0; i < bagSensorConfirmSamples; i++) {
+    bool bagPresent = digitalRead(bagSensorPin) == bagPresentState;
+
+    if (!bagPresent) {
+      emptySamples++;
+    }
+
+    if (i < bagSensorConfirmSamples - 1) {
+      delay(bagSensorConfirmDelayMs);
+    }
+  }
+
+  return emptySamples >= bagSensorEmptyConfirmCount;
 }
 
 void vacuumOn() {
@@ -579,6 +623,9 @@ void printStatus() {
 
   Serial.print("Limit: ");
   Serial.println(limitPressed() ? "pressed" : "open");
+
+  Serial.print("Bag stack: ");
+  Serial.println(bagStackEmptyConfirmed() ? "empty" : "bag detected");
 
   int vacuumRaw = analogRead(vacuumSensorPin);
   float vacuumVoltage = rawToVoltage(vacuumRaw);

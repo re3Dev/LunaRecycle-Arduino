@@ -510,7 +510,7 @@
       <div class="logo" aria-hidden="true"></div>
       <div>
         <h1>LunaBotXS • Operator Console</h1>
-        <div class="sub">LunaRecycle operator console — Dryer • Doors • Gate • FPU</div>
+        <div class="sub">LunaRecycle operator console — Dryer • Gate • Dryer Screw</div>
       </div>
     </div>
 
@@ -676,7 +676,7 @@
               <div class="sicon" aria-hidden="true">⎙</div>
               <div style="min-width:0">
                 <h2>Arduino</h2>
-                <div class="hint">serial bridge — Doors · Gate · FPU</div>
+                <div class="hint">serial bridge — Gate · Dryer Screw · Energy</div>
               </div>
             </div>
             <div class="pill">
@@ -748,34 +748,39 @@
           </div>
         </section>
 
-        <!-- ── FPU ────────────────────────────────────────────────────── -->
+        <!-- ── Dryer Screw ─────────────────────────────────────────────── -->
         <section class="card">
           <div class="hd">
             <div class="title">
-              <div class="sicon" aria-hidden="true">⊕</div>
+              <div class="sicon" aria-hidden="true">↺</div>
               <div style="min-width:0">
-                <h2>FPU — Pick &amp; Place</h2>
-                <div class="hint">stepper · vacuum · arm servo</div>
+                <h2>Dryer Screw</h2>
+                <div class="hint">DC motor · H-bridge · PWM speed</div>
               </div>
             </div>
-            <span class="statechip" id="fpuChip">WAIT_HOME</span>
+            <span class="statechip" id="motorChip">STOPPED</span>
           </div>
           <div class="bd">
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
-              <button class="btn mini primary" id="btnFpuHome">Home</button>
-              <button class="btn mini primary" id="btnFpuPick">Pick Cycle</button>
-              <button class="btn mini danger" id="btnFpuStop">Stop</button>
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Speed (0–255)</label>
+              <input type="number" id="motorSpeed" min="0" max="255" value="128"
+                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+              <select id="motorDir"
+                style="padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+                <option value="FWD">FWD</option>
+                <option value="REV">REV</option>
+              </select>
             </div>
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
-              <button class="btn mini" id="btnFpuVacOn">Vac ON</button>
-              <button class="btn mini" id="btnFpuVacOff">Vac OFF</button>
-              <button class="btn mini" id="btnFpuArmUp">Arm Up</button>
-              <button class="btn mini" id="btnFpuArmDown">Arm Down</button>
-              <button class="btn mini" id="btnFpuStatus">Status</button>
+            <div class="row" style="flex-wrap:wrap; gap:6px;">
+              <button class="btn mini primary" id="btnMotorSet">Set Speed</button>
+              <button class="btn mini danger"  id="btnMotorStop">Stop</button>
+              <button class="btn mini"         id="btnMotorStatus">Status</button>
+            </div>
+            <div class="kv" style="margin-top:10px;">
+              <div class="k">PWM</div><div class="v" id="motorPwmText">0</div>
             </div>
             <div class="kv">
-              <div class="k">FPU State</div>
-              <div class="v"><span id="fpuStateText">—</span> &nbsp;<small id="fpuTrips"></small></div>
+              <div class="k">Direction</div><div class="v" id="motorDirText">—</div>
             </div>
           </div>
         </section>
@@ -884,8 +889,8 @@
       doorA_min: "—", doorA_max: "—",
       doorB_min: "—", doorB_max: "—",
       gateState: "CLOSED",
-      fpuState: "WAIT_HOME",
-      fpuTrips: 0,
+      motorPwm: 0,
+      motorDir: "FWD",
 
       convA_on: false,
       convB_on: false,
@@ -1076,12 +1081,12 @@
       const gc = $("#gateChip");
       gc.textContent = S.gateState || "—";
       gc.className = "statechip" + (S.gateState==="OPEN" ? " good" : "");
-      // FPU
-      const fc = $("#fpuChip");
-      fc.textContent = S.fpuState || "—";
-      fc.className = "statechip" + (S.fpuState==="READY" ? " good" : S.fpuState==="DONE" ? " good" : S.fpuState==="HOMING" ? " warn" : "");
-      $("#fpuStateText").textContent = S.fpuState || "—";
-      $("#fpuTrips").textContent = S.fpuTrips !== undefined ? `trips: ${S.fpuTrips}` : "";
+      // Motor
+      const mc = $("#motorChip");
+      mc.textContent = S.motorPwm > 0 ? "RUNNING" : "STOPPED";
+      mc.className = "statechip" + (S.motorPwm > 0 ? " good" : "");
+      $("#motorPwmText").textContent = S.motorPwm;
+      $("#motorDirText").textContent = S.motorDir || "—";
     }
 
     async function doorCmd(endpoint){
@@ -1104,14 +1109,44 @@
       }catch(err){ log(`Gate cmd failed: ${err.message}`, "bad"); }
     }
 
-    async function fpuCmd(endpoint){
+    async function motorSet(){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      const speed = parseInt(document.getElementById("motorSpeed").value, 10);
+      const dir   = document.getElementById("motorDir").value;
+      if(isNaN(speed) || speed < 0 || speed > 255){
+        log("Speed must be 0–255.", "bad"); return;
+      }
+      try{
+        const res = await apiArduino("/motor/set", {
+          method: "POST",
+          body: JSON.stringify({ speed, dir }),
+        });
+        S.motorPwm = speed;
+        S.motorDir = dir;
+        const msg = (res.response || []).join(" | ") || `SET ${speed} ${dir}`;
+        log(`Dryer Screw: ${msg}`, "info");
+        render();
+      }catch(err){ log(`Motor set failed: ${err.message}`, "bad"); }
+    }
+
+    async function motorStop(){
       if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
       try{
-        const res = await apiArduino(endpoint, { method: "POST" });
-        const msg = (res.response || []).join(" | ") || endpoint.split("/").pop();
-        log(`FPU: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`FPU cmd failed: ${err.message}`, "bad"); }
+        const res = await apiArduino("/motor/stop", { method: "POST" });
+        S.motorPwm = 0;
+        const msg = (res.response || []).join(" | ") || "STOPPED";
+        log(`Dryer Screw: ${msg}`, "info");
+        render();
+      }catch(err){ log(`Motor stop failed: ${err.message}`, "bad"); }
+    }
+
+    async function motorStatus(){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const res = await apiArduino("/motor/status");
+        const msg = (res.response || []).join(" | ") || "—";
+        log(`Dryer Screw status: ${msg}`, "info");
+      }catch(err){ log(`Motor status failed: ${err.message}`, "bad"); }
     }
 
     async function api(path, opts={}){
@@ -1498,6 +1533,7 @@
 
     function drawGauge(pct, conf){
       const c = $("#gauge");
+      if (!c) return;
       const ctx = c.getContext("2d");
       const w = c.width, h = c.height;
       ctx.clearRect(0,0,w,h);
@@ -1779,15 +1815,10 @@
       on("btnGateClose",  "click", ()=>gateCmd("/gate/close"));
       on("btnGateStatus", "click", ()=>arduinoRefreshStatus());
 
-      // FPU
-      on("btnFpuHome",    "click", ()=>fpuCmd("/fpu/home"));
-      on("btnFpuPick",    "click", ()=>fpuCmd("/fpu/pick"));
-      on("btnFpuStop",    "click", ()=>fpuCmd("/fpu/stop"));
-      on("btnFpuVacOn",   "click", ()=>fpuCmd("/fpu/vacuum_on"));
-      on("btnFpuVacOff",  "click", ()=>fpuCmd("/fpu/vacuum_off"));
-      on("btnFpuArmUp",   "click", ()=>fpuCmd("/fpu/arm_up"));
-      on("btnFpuArmDown", "click", ()=>fpuCmd("/fpu/arm_down"));
-      on("btnFpuStatus",  "click", ()=>arduinoRefreshStatus());
+      // Dryer Screw motor
+      on("btnMotorSet",    "click", ()=>motorSet());
+      on("btnMotorStop",   "click", ()=>motorStop());
+      on("btnMotorStatus", "click", ()=>motorStatus());
 
       on("btnEStop", "click", async ()=>{
         S.estop = !S.estop;

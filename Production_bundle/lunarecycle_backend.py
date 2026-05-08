@@ -3,7 +3,7 @@ LunaRecycle Backend
 Copyright (C) re:3D, Inc. — All Rights Reserved
 
 Runs a Flask REST API on http://127.0.0.1:5055 that bridges:
-  - Arduino over serial  (Doors, Shredder Gate, FPU)
+  - Arduino over serial  (Shredder Gate, DC Motor, INA219 energy monitor)
   - Conair Dryer over Modbus RTU
 
 Usage:
@@ -30,7 +30,7 @@ from pymodbus.client import ModbusSerialClient
 #  Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-ARDUINO_PORT     = "COM3"
+ARDUINO_PORT     = "COM4"
 ARDUINO_BAUDRATE = 9600
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
 
@@ -96,12 +96,7 @@ class ArduinoBridge:
     # ── Low-level I/O ─────────────────────────────────────────────────────────
 
     def _send_command(self, cmd: str) -> list[str]:
-        """
-        Send a command string (appending \\n) and collect response lines
-        until a 1-second silence or until a line starting with '[STATUS]',
-        '[DOOR]', '[GATE]', '[FPU]', or '[SYSTEM]' is received (depending
-        on the command).  Returns all collected lines.
-        """
+        """Send a command and collect response lines until a terminal tag or timeout."""
         if not self._ser or not self._ser.is_open:
             raise RuntimeError("Arduino not connected.")
 
@@ -122,7 +117,7 @@ class ArduinoBridge:
                     lines.append(line)
                     # Stop collecting once we see a terminal message
                     if any(line.startswith(tag) for tag in
-                           ("[STATUS]", "[DOOR]", "[GATE]", "[FPU]", "[SYSTEM]")):
+                           ("[STATUS]", "[GATE]", "[MOTOR]", "[ENERGY]", "[SYSTEM]")):
                         break
             else:
                 time.sleep(0.01)
@@ -139,8 +134,7 @@ class ArduinoBridge:
     def _parse_status_line(line: str) -> dict:
         """
         Parse a [STATUS] key=value line from the firmware into a dict.
-        Example:
-          [STATUS] door_A_min=0 door_A_max=1 ... fpu_state=READY fpu_trips=2
+        Example:  [STATUS] gate=CLOSED motor_pwm=150 motor_dir=FWD
         """
         result: dict = {}
         parts = line.replace("[STATUS]", "").strip().split()
@@ -150,12 +144,32 @@ class ArduinoBridge:
                 result[k] = v
         return result
 
+    @staticmethod
+    def _parse_energy_line(line: str) -> dict:
+        """
+        Parse a [ENERGY] key=value line from the firmware into a dict.
+        Example:  [ENERGY] pwm=150 dir=FWD V=12.34 I=1.234 P=15.23
+        """
+        result: dict = {}
+        parts = line.replace("[ENERGY]", "").strip().split()
+        for part in parts:
+            if "=" in part:
+                k, _, v = part.partition("=")
+                try:
+                    result[k] = float(v)
+                except ValueError:
+                    result[k] = v
+        return result
+
     def get_status(self) -> dict:
         lines = self.send("STATUS")
+        result: dict = {}
         for line in lines:
             if line.startswith("[STATUS]"):
-                return self._parse_status_line(line)
-        return {"raw": lines}
+                result.update(self._parse_status_line(line))
+            elif line.startswith("[ENERGY]"):
+                result["energy"] = self._parse_energy_line(line)
+        return result if result else {"raw": lines}
 
 
 arduino = ArduinoBridge()
@@ -453,46 +467,6 @@ def api_arduino_status():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Routes — Doors
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.route("/api/door/open", methods=["POST"])
-def api_door_open():
-    try:
-        lines = arduino.send("DOOR_OPEN")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/door/close", methods=["POST"])
-def api_door_close():
-    try:
-        lines = arduino.send("DOOR_CLOSE")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/door/stop", methods=["POST"])
-def api_door_stop():
-    try:
-        lines = arduino.send("DOOR_STOP")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/door/status", methods=["GET"])
-def api_door_status():
-    try:
-        lines = arduino.send("DOOR_STATUS")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 #  Routes — Shredder Gate
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -524,77 +498,56 @@ def api_gate_status():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Routes — FPU
+#  Routes — DC Motor
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.route("/api/fpu/home", methods=["POST"])
-def api_fpu_home():
+@app.route("/api/motor/set", methods=["POST"])
+def api_motor_set():
+    """Body: { "speed": 0-255, "dir": "FWD" | "REV" }"""
     try:
-        lines = arduino.send("FPU_HOME")
+        speed = int(request.json["speed"])
+        direction = str(request.json["dir"]).upper()
+        if not (0 <= speed <= 255):
+            raise ValueError("speed must be 0-255")
+        if direction not in ("FWD", "REV"):
+            raise ValueError("dir must be FWD or REV")
+        lines = arduino.send(f"MOTOR_SET {speed} {direction}")
+        return jsonify({"ok": True, "speed": speed, "dir": direction, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/motor/stop", methods=["POST"])
+def api_motor_stop():
+    try:
+        lines = arduino.send("MOTOR_STOP")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/api/fpu/pick", methods=["POST"])
-def api_fpu_pick():
+@app.route("/api/motor/status", methods=["GET"])
+def api_motor_status():
     try:
-        lines = arduino.send("FPU_PICK")
+        lines = arduino.send("MOTOR_STATUS")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/api/fpu/vacuum_on", methods=["POST"])
-def api_fpu_vacuum_on():
+# ─────────────────────────────────────────────────────────────────────────────
+#  Routes — Energy monitor
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/energy/snapshot", methods=["GET"])
+def api_energy_snapshot():
+    """Sends STATUS and returns the parsed [ENERGY] line."""
     try:
-        lines = arduino.send("FPU_VACUUM_ON")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/fpu/vacuum_off", methods=["POST"])
-def api_fpu_vacuum_off():
-    try:
-        lines = arduino.send("FPU_VACUUM_OFF")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/fpu/arm_up", methods=["POST"])
-def api_fpu_arm_up():
-    try:
-        lines = arduino.send("FPU_ARM_UP")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/fpu/arm_down", methods=["POST"])
-def api_fpu_arm_down():
-    try:
-        lines = arduino.send("FPU_ARM_DOWN")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/fpu/status", methods=["GET"])
-def api_fpu_status():
-    try:
-        lines = arduino.send("FPU_STATUS")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/fpu/stop", methods=["POST"])
-def api_fpu_stop():
-    try:
-        lines = arduino.send("FPU_STOP")
-        return jsonify({"ok": True, "response": lines})
+        lines = arduino.send("STATUS")
+        for line in lines:
+            if line.startswith("[ENERGY]"):
+                return jsonify({"ok": True, "data": arduino._parse_energy_line(line)})
+        return jsonify({"ok": True, "data": {}, "note": "No energy data in response"})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
@@ -634,6 +587,6 @@ def api_estop():
 
 if __name__ == "__main__":
     print("LunaRecycle backend starting on http://127.0.0.1:5055")
-    print(f"  Arduino: {ARDUINO_PORT} @ {ARDUINO_BAUDRATE} baud")
+    print(f"  Arduino: {ARDUINO_PORT} @ {ARDUINO_BAUDRATE} baud  (Gate servos, DC motor, INA219)")
     print(f"  Dryer  : {DRYER_PORT}   @ {DRYER_BAUDRATE} baud, ID {DRYER_DEVICE_ID}")
     app.run(host="127.0.0.1", port=5055, debug=False, threaded=True)

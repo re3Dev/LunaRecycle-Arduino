@@ -510,7 +510,7 @@
       <div class="logo" aria-hidden="true"></div>
       <div>
         <h1>LunaBotXS • Operator Console</h1>
-        <div class="sub">Dryer Modbus control — other panels coming soon</div>
+        <div class="sub">LunaRecycle operator console — Dryer • Doors • Gate • FPU</div>
       </div>
     </div>
 
@@ -526,6 +526,10 @@
 
       <button class="btn mini" id="btnDryerMode">
         Dryer IO: <span id="dryerIoState">SIM</span>
+      </button>
+
+      <button class="btn mini" id="btnArduinoMode">
+        Arduino: <span id="arduinoState">DISCONNECTED</span>
       </button>
 
       <button class="btn danger mini" id="btnEStop" title="Emergency Stop (demo)">
@@ -664,7 +668,118 @@
         </section>
       </div>
 
-      <div class="stack" style="grid-template-rows: auto auto auto auto 1fr;">
+      <div class="stack" style="grid-template-rows: auto auto auto auto auto auto 1fr;">
+        <!-- ── Arduino connection ───────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">⎙</div>
+              <div style="min-width:0">
+                <h2>Arduino</h2>
+                <div class="hint">serial bridge — Doors · Gate · FPU</div>
+              </div>
+            </div>
+            <div class="pill">
+              <span class="dot" id="arduinoDot"></span>
+              <span>Arduino: <strong id="arduinoConnState">DISCONNECTED</strong></span>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="row" style="margin-bottom:8px; flex-wrap:wrap; gap:6px;">
+              <input type="text" id="arduinoPortInput" value="COM3" style="width:80px;" />
+              <button class="btn mini" id="btnArduinoConnect">Connect</button>
+              <button class="btn mini" id="btnArduinoDisconnect">Disconnect</button>
+              <button class="btn mini" id="btnArduinoRefresh">Status</button>
+            </div>
+            <div id="arduinoStatusText" class="kv" style="font-size:10px; font-family:var(--mono); color:var(--muted); min-height:24px;">—</div>
+          </div>
+        </section>
+
+        <!-- ── Doors ──────────────────────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">⊟</div>
+              <div style="min-width:0">
+                <h2>Doors</h2>
+                <div class="hint">2 linear actuators • limit switches</div>
+              </div>
+            </div>
+            <span class="statechip" id="doorChip">IDLE</span>
+          </div>
+          <div class="bd">
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+              <button class="btn mini" id="btnDoorOpen">Open</button>
+              <button class="btn mini" id="btnDoorClose">Close</button>
+              <button class="btn mini danger" id="btnDoorStop">Stop</button>
+              <button class="btn mini" id="btnDoorStatus">Status</button>
+            </div>
+            <div class="split">
+              <div class="kv">
+                <div class="k">A – MIN / MAX</div>
+                <div class="v"><span id="doorA_min">—</span> / <span id="doorA_max">—</span></div>
+              </div>
+              <div class="kv">
+                <div class="k">B – MIN / MAX</div>
+                <div class="v"><span id="doorB_min">—</span> / <span id="doorB_max">—</span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Shredder gate ───────────────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">⊞</div>
+              <div style="min-width:0">
+                <h2>Shredder Gate</h2>
+                <div class="hint">2 RC servos • open / close</div>
+              </div>
+            </div>
+            <span class="statechip" id="gateChip">CLOSED</span>
+          </div>
+          <div class="bd">
+            <div class="row" style="flex-wrap:wrap; gap:6px;">
+              <button class="btn mini" id="btnGateOpen">Open</button>
+              <button class="btn mini" id="btnGateClose">Close</button>
+              <button class="btn mini" id="btnGateStatus">Status</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── FPU ────────────────────────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">⊕</div>
+              <div style="min-width:0">
+                <h2>FPU — Pick &amp; Place</h2>
+                <div class="hint">stepper · vacuum · arm servo</div>
+              </div>
+            </div>
+            <span class="statechip" id="fpuChip">WAIT_HOME</span>
+          </div>
+          <div class="bd">
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+              <button class="btn mini primary" id="btnFpuHome">Home</button>
+              <button class="btn mini primary" id="btnFpuPick">Pick Cycle</button>
+              <button class="btn mini danger" id="btnFpuStop">Stop</button>
+            </div>
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+              <button class="btn mini" id="btnFpuVacOn">Vac ON</button>
+              <button class="btn mini" id="btnFpuVacOff">Vac OFF</button>
+              <button class="btn mini" id="btnFpuArmUp">Arm Up</button>
+              <button class="btn mini" id="btnFpuArmDown">Arm Down</button>
+              <button class="btn mini" id="btnFpuStatus">Status</button>
+            </div>
+            <div class="kv">
+              <div class="k">FPU State</div>
+              <div class="v"><span id="fpuStateText">—</span> &nbsp;<small id="fpuTrips"></small></div>
+            </div>
+          </div>
+        </section>
+
         <section class="card placeholder-card">
           <div class="hd">
             <div class="title">
@@ -751,7 +866,8 @@
   <div class="toasts" id="toasts" aria-live="polite" aria-relevant="additions"></div>
 
   <script>
-    const API_BASE = "http://127.0.0.1:5055/api/dryer";
+    const API_BASE      = "http://127.0.0.1:5055/api/dryer";
+    const ARDUINO_BASE  = "http://127.0.0.1:5055/api";
 
     const S = {
       sim: true,
@@ -762,6 +878,14 @@
       dryerIoLive: false,
       dryerApiConnected: false,
       dryerLastPollOk: false,
+
+      arduinoConnected: false,
+      doorState: "IDLE",
+      doorA_min: "—", doorA_max: "—",
+      doorB_min: "—", doorB_max: "—",
+      gateState: "CLOSED",
+      fpuState: "WAIT_HOME",
+      fpuTrips: 0,
 
       convA_on: false,
       convB_on: false,
@@ -864,6 +988,130 @@
       S[key] = !S[key];
       applyRules(`toggle:${key}`);
       render();
+    }
+
+    async function apiArduino(path, opts={}){
+      const res = await fetch(`${ARDUINO_BASE}${path}`, {
+        headers: { "Content-Type": "application/json" },
+        ...opts,
+      });
+      const data = await res.json();
+      if(!res.ok || data.ok === false){
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data;
+    }
+
+    async function arduinoConnect(){
+      const port = $("#arduinoPortInput").value.trim() || "COM3";
+      try{
+        const data = await apiArduino("/arduino/connect", {
+          method: "POST",
+          body: JSON.stringify({ port })
+        });
+        S.arduinoConnected = true;
+        log(`Arduino connected on ${data.port}.`, "good");
+        await arduinoRefreshStatus();
+      }catch(err){
+        S.arduinoConnected = false;
+        log(`Arduino connect failed: ${err.message}`, "bad");
+      }
+      renderArduino();
+    }
+
+    async function arduinoDisconnect(){
+      try{ await apiArduino("/arduino/disconnect", { method: "POST" }); }catch(_){}
+      S.arduinoConnected = false;
+      log("Arduino disconnected.", "warn");
+      renderArduino();
+    }
+
+    async function arduinoRefreshStatus(){
+      try{
+        const res = await apiArduino("/arduino/status");
+        S.arduinoConnected = !!res.connected;
+        const d = res.data || {};
+        S.doorState  = d.door_state  || "IDLE";
+        S.doorA_min  = d.door_A_min  !== undefined ? d.door_A_min  : "—";
+        S.doorA_max  = d.door_A_max  !== undefined ? d.door_A_max  : "—";
+        S.doorB_min  = d.door_B_min  !== undefined ? d.door_B_min  : "—";
+        S.doorB_max  = d.door_B_max  !== undefined ? d.door_B_max  : "—";
+        S.gateState  = d.gate        || "—";
+        S.fpuState   = d.fpu_state   || "—";
+        S.fpuTrips   = d.fpu_trips   !== undefined ? d.fpu_trips   : 0;
+        const statusEl = $("#arduinoStatusText");
+        if(res.data && Object.keys(res.data).length > 0){
+          statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
+        }
+      }catch(err){
+        S.arduinoConnected = false;
+        log(`Arduino status failed: ${err.message}`, "bad");
+      }
+      renderArduino();
+    }
+
+    function renderArduino(){
+      const dot = $("#arduinoDot");
+      const state = $("#arduinoConnState");
+      if(S.arduinoConnected){
+        dot.className = "dot good";
+        state.textContent = "CONNECTED";
+        $("#arduinoState").textContent = "CONNECTED";
+        $("#btnArduinoMode").classList.add("primary");
+      }else{
+        dot.className = "dot";
+        state.textContent = "DISCONNECTED";
+        $("#arduinoState").textContent = "DISCONNECTED";
+        $("#btnArduinoMode").classList.remove("primary");
+      }
+      // Doors
+      $("#doorA_min").textContent = S.doorA_min;
+      $("#doorA_max").textContent = S.doorA_max;
+      $("#doorB_min").textContent = S.doorB_min;
+      $("#doorB_max").textContent = S.doorB_max;
+      const dc = $("#doorChip");
+      dc.textContent = S.doorState || "IDLE";
+      dc.className = "statechip" + (S.doorState==="OPENING"||S.doorState==="CLOSING" ? " warn" : " good");
+      // Gate
+      const gc = $("#gateChip");
+      gc.textContent = S.gateState || "—";
+      gc.className = "statechip" + (S.gateState==="OPEN" ? " good" : "");
+      // FPU
+      const fc = $("#fpuChip");
+      fc.textContent = S.fpuState || "—";
+      fc.className = "statechip" + (S.fpuState==="READY" ? " good" : S.fpuState==="DONE" ? " good" : S.fpuState==="HOMING" ? " warn" : "");
+      $("#fpuStateText").textContent = S.fpuState || "—";
+      $("#fpuTrips").textContent = S.fpuTrips !== undefined ? `trips: ${S.fpuTrips}` : "";
+    }
+
+    async function doorCmd(endpoint){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const res = await apiArduino(endpoint, { method: "POST" });
+        const msg = (res.response || []).join(" | ") || endpoint.split("/").pop();
+        log(`Door: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`Door cmd failed: ${err.message}`, "bad"); }
+    }
+
+    async function gateCmd(endpoint){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const res = await apiArduino(endpoint, { method: "POST" });
+        const msg = (res.response || []).join(" | ") || endpoint.split("/").pop();
+        log(`Gate: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`Gate cmd failed: ${err.message}`, "bad"); }
+    }
+
+    async function fpuCmd(endpoint){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const res = await apiArduino(endpoint, { method: "POST" });
+        const msg = (res.response || []).join(" | ") || endpoint.split("/").pop();
+        log(`FPU: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`FPU cmd failed: ${err.message}`, "bad"); }
     }
 
     async function api(path, opts={}){
@@ -1249,6 +1497,8 @@
         const key = sw.dataset.key;
         setSwitch(sw, !!S[key]);
       });
+
+      renderArduino();
     }
 
     function drawGauge(pct, conf){
@@ -1468,19 +1718,6 @@
       $("#btnStepNext").addEventListener("click", procNext);
       $("#btnStepBack").addEventListener("click", procBack);
 
-      $("#btnDoorOpen").addEventListener("click", ()=>{
-        if(S.estop){ log("E-STOP active: controls locked.", "bad"); return; }
-        S.door_target = 100;
-        log("Door: OPEN.", "info");
-        render();
-      });
-      $("#btnDoorClose").addEventListener("click", ()=>{
-        if(S.estop){ log("E-STOP active: controls locked.", "bad"); return; }
-        S.door_target = 0;
-        log("Door: CLOSE.", "info");
-        render();
-      });
-
       $("#btnClearLog").addEventListener("click", ()=>{
         $("#log").textContent = "";
         toast("Log cleared.", "info", "Event log reset by operator.");
@@ -1511,11 +1748,45 @@
       $("#btnWriteProcessSp").addEventListener("click", writeProcessSp);
       $("#btnWriteDewSp").addEventListener("click", writeDewSp);
 
-      $("#btnEStop").addEventListener("click", ()=>{
+      // Arduino connection
+      $("#btnArduinoMode").addEventListener("click", async ()=>{
+        if(S.arduinoConnected){ await arduinoDisconnect(); } else { await arduinoConnect(); }
+      });
+      $("#btnArduinoConnect").addEventListener("click", arduinoConnect);
+      $("#btnArduinoDisconnect").addEventListener("click", arduinoDisconnect);
+      $("#btnArduinoRefresh").addEventListener("click", ()=>arduinoRefreshStatus());
+
+      // Doors
+      $("#btnDoorOpen").addEventListener("click",   ()=>doorCmd("/door/open"));
+      $("#btnDoorClose").addEventListener("click",  ()=>doorCmd("/door/close"));
+      $("#btnDoorStop").addEventListener("click",   ()=>doorCmd("/door/stop"));
+      $("#btnDoorStatus").addEventListener("click", ()=>{
+        if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+        arduinoRefreshStatus();
+      });
+
+      // Gate
+      $("#btnGateOpen").addEventListener("click",   ()=>gateCmd("/gate/open"));
+      $("#btnGateClose").addEventListener("click",  ()=>gateCmd("/gate/close"));
+      $("#btnGateStatus").addEventListener("click", ()=>arduinoRefreshStatus());
+
+      // FPU
+      $("#btnFpuHome").addEventListener("click",    ()=>fpuCmd("/fpu/home"));
+      $("#btnFpuPick").addEventListener("click",    ()=>fpuCmd("/fpu/pick"));
+      $("#btnFpuStop").addEventListener("click",    ()=>fpuCmd("/fpu/stop"));
+      $("#btnFpuVacOn").addEventListener("click",   ()=>fpuCmd("/fpu/vacuum_on"));
+      $("#btnFpuVacOff").addEventListener("click",  ()=>fpuCmd("/fpu/vacuum_off"));
+      $("#btnFpuArmUp").addEventListener("click",   ()=>fpuCmd("/fpu/arm_up"));
+      $("#btnFpuArmDown").addEventListener("click", ()=>fpuCmd("/fpu/arm_down"));
+      $("#btnFpuStatus").addEventListener("click",  ()=>arduinoRefreshStatus());
+
+      $("#btnEStop").addEventListener("click", async ()=>{
         S.estop = !S.estop;
         if(S.estop){
           applyRules();
           log("E-STOP engaged. Motion/heater disabled; door closing.", "bad");
+          // Send ESTOP to backend (covers Arduino + dryer)
+          try{ await fetch("http://127.0.0.1:5055/api/estop", { method: "POST" }); }catch(_){}
         }else{
           log("E-STOP released. Controls re-enabled.", "warn", "Verify conditions before restart.");
         }
@@ -1566,6 +1837,7 @@
       $("#log").textContent = "";
       log("Console initialized.", "good");
       log("Dryer card supports SIM and LIVE Modbus API mode.", "info");
+      log("Arduino: connect via the Arduino panel (COM3 default).", "info");
 
       S.connected = false;
       S.convA_speed = 45;

@@ -1,4 +1,16 @@
-## File naming covention: 
+## LunabotXS Subsystems:
+* Trash_Conveyor
+* Shredder
+* Mixer
+* Dryer
+* Feedstock_Conveyor
+* Feedstock_Detection
+* Environmental_Monitoring
+* Power_Monitoring
+* Safety_Systems
+* Fume_Extractor
+
+## File naming convention: 
 
 XXX-XXX-XXX
 

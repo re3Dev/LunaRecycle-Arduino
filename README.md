@@ -27,3 +27,4 @@ Subsystem-purpose-component(s)
 
 ## Code Hygiene
 * Define pins as variables at the top of the page.
+* Refer to the "LunaRecycle Hardware & Interface Requirements" spreadsheet on the G-Drive for recommended component/variable names.

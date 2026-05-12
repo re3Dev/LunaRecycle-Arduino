@@ -10,14 +10,14 @@
     status  Print sensor and motor status
 
   Pump safety:
-    Never set IN1 LOW and IN2 HIGH. That would reverse and damage the pump.
+    Never set TC_vacuumPumpRelay_IN1 LOW and TC_vacuumPumpRelay_IN2 HIGH. That would reverse and damage the pump.
 */
 
 // Pins.
-const int vacuumSensorPin = A0;
-const int ENA1 = 5;
-const int IN1 = 6;
-const int IN2 = 7;
+const int TC_vacuumSensor = A0;
+const int TC_vacuumPumpRelay_ENA = 5;
+const int TC_vacuumPumpRelay_IN1 = 6;
+const int TC_vacuumPumpRelay_IN2 = 7;
 
 // Sensor settings.
 const float analogReferenceV = 5.0;
@@ -35,9 +35,9 @@ bool motorRunning = false;
 void setup() {
   Serial.begin(9600);
 
-  pinMode(ENA1, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
+  pinMode(TC_vacuumPumpRelay_ENA, OUTPUT);
+  pinMode(TC_vacuumPumpRelay_IN1, OUTPUT);
+  pinMode(TC_vacuumPumpRelay_IN2, OUTPUT);
 
   vacuumOff();
 
@@ -90,7 +90,7 @@ void printVacuumStatusIfDue() {
 }
 
 void printVacuumStatus() {
-  int raw = analogRead(vacuumSensorPin);
+  int raw = analogRead(TC_vacuumSensor);
   float voltage = rawToVoltage(raw);
   bool detected = vacuumDetected(voltage);
 
@@ -118,16 +118,16 @@ bool vacuumDetected(float voltage) {
 
 void vacuumOn() {
   // Pump forward only. Do not reverse this pin order.
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  analogWrite(ENA1, pumpSpeed);
+  digitalWrite(TC_vacuumPumpRelay_IN1, HIGH);
+  digitalWrite(TC_vacuumPumpRelay_IN2, LOW);
+  analogWrite(TC_vacuumPumpRelay_ENA, pumpSpeed);
   motorRunning = true;
   Serial.println("Motor on.");
 }
 
 void vacuumOff() {
-  analogWrite(ENA1, 0);
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, LOW);
+  analogWrite(TC_vacuumPumpRelay_ENA, 0);
+  digitalWrite(TC_vacuumPumpRelay_IN1, LOW);
+  digitalWrite(TC_vacuumPumpRelay_IN2, LOW);
   motorRunning = false;
 }

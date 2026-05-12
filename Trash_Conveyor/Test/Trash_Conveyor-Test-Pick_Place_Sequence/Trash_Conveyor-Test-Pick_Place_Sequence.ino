@@ -22,23 +22,23 @@
     Before each pick, the IR sensor confirms the Bag 1 stack is not empty.
 
   Pump safety:
-    Never set IN1 LOW and IN2 HIGH. That would reverse and damage the pump.
+    Never set TC_vacuumPumpRelay_IN1 LOW and TC_vacuumPumpRelay_IN2 HIGH. That would reverse and damage the pump.
 */
 
 #include <AccelStepper.h>
 #include <Servo.h>
 
 // Pins.
-const int stepPin = 3;
-const int dirPin = 2;
-const int enablePin = 4;
-const int ENA1 = 5;
-const int IN1 = 6;
-const int IN2 = 7;
-const int limitPin = 8;
-const int servoPin = 9;
-const int bagSensorPin = 53;
-const int vacuumSensorPin = A0;
+const int TC_stepperMotorController_step = 3;
+const int TC_stepperMotorController_dir = 2;
+const int TC_stepperMotorController_enable = 4;
+const int TC_vacuumPumpRelay_ENA = 5;
+const int TC_vacuumPumpRelay_IN1 = 6;
+const int TC_vacuumPumpRelay_IN2 = 7;
+const int TC_stepperHomeLimit = 8;
+const int TC_servoMotor_pin = 9;
+const int TC_leftFilmSensor = 53;
+const int TC_vacuumSensor = A0;
 
 // Servo angles, in degrees, for a 180-degree servo.
 const int servoMinDeg = 0;
@@ -92,8 +92,8 @@ const int pumpSpeed = 100;
 const unsigned long debounceMs = 50;
 const unsigned long shredderPauseMs = 1000;
 
-AccelStepper stepper(AccelStepper::DRIVER, stepPin, dirPin);
-Servo armServo;
+AccelStepper stepper(AccelStepper::DRIVER, TC_stepperMotorController_step, TC_stepperMotorController_dir);
+Servo TC_servoMotor;
 
 enum State {
   WAIT_HOME,
@@ -121,18 +121,18 @@ unsigned long lastServoCycleMove = 0;
 void setup() {
   Serial.begin(9600);
 
-  pinMode(limitPin, INPUT_PULLUP);
-  pinMode(bagSensorPin, INPUT);
-  pinMode(ENA1, OUTPUT);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
+  pinMode(TC_stepperHomeLimit, INPUT_PULLUP);
+  pinMode(TC_leftFilmSensor, INPUT);
+  pinMode(TC_vacuumPumpRelay_ENA, OUTPUT);
+  pinMode(TC_vacuumPumpRelay_IN1, OUTPUT);
+  pinMode(TC_vacuumPumpRelay_IN2, OUTPUT);
 
   vacuumOff();
 
-  armServo.attach(servoPin);
+  TC_servoMotor.attach(TC_servoMotor_pin);
   servoUp();
 
-  stepper.setEnablePin(enablePin);
+  stepper.setEnablePin(TC_stepperMotorController_enable);
   stepper.setPinsInverted(false, false, true);  // Enable pin is active LOW.
   stepper.setMinPulseWidth(minPulseWidthUs);
   stepper.setMaxSpeed(mmToSteps(maxSpeed));
@@ -368,7 +368,7 @@ float stepsToMm(long steps) {
 }
 
 void readLimitSwitch() {
-  int reading = digitalRead(limitPin);
+  int reading = digitalRead(TC_stepperHomeLimit);
 
   if (reading != lastLimitRead) {
     lastLimitChange = millis();
@@ -427,7 +427,7 @@ bool vacuumDetectedDuringSettle() {
 }
 
 bool vacuumDetectedOnce() {
-  int raw = analogRead(vacuumSensorPin);
+  int raw = analogRead(TC_vacuumSensor);
   float voltage = rawToVoltage(raw);
 
   return vacuumDetectedWhenVoltageHigh
@@ -439,7 +439,7 @@ bool bagStackEmptyConfirmed() {
   int emptySamples = 0;
 
   for (int i = 0; i < bagSensorConfirmSamples; i++) {
-    bool bagPresent = digitalRead(bagSensorPin) == bagPresentState;
+    bool bagPresent = digitalRead(TC_leftFilmSensor) == bagPresentState;
 
     if (!bagPresent) {
       emptySamples++;
@@ -455,16 +455,16 @@ bool bagStackEmptyConfirmed() {
 
 void vacuumOn() {
   // Pump forward only. Do not reverse this pin order.
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  analogWrite(ENA1, pumpSpeed);
+  digitalWrite(TC_vacuumPumpRelay_IN1, HIGH);
+  digitalWrite(TC_vacuumPumpRelay_IN2, LOW);
+  analogWrite(TC_vacuumPumpRelay_ENA, pumpSpeed);
   Serial.println("Motor on.");
 }
 
 void vacuumOff() {
-  analogWrite(ENA1, 0);
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, LOW);
+  analogWrite(TC_vacuumPumpRelay_ENA, 0);
+  digitalWrite(TC_vacuumPumpRelay_IN1, LOW);
+  digitalWrite(TC_vacuumPumpRelay_IN2, LOW);
 }
 
 void servoDown() {
@@ -522,7 +522,7 @@ void handleStepperPositionCommand(String value) {
 
 void writeServoAngle(int angle) {
   currentServoAngle = constrain(angle, servoMinDeg, servoMaxDeg);
-  armServo.write(currentServoAngle);
+  TC_servoMotor.write(currentServoAngle);
 }
 
 void startServoCycle() {
@@ -551,7 +551,7 @@ void updateServoCycle() {
     servoCycleDirection = 1;
   }
 
-  armServo.write(currentServoAngle);
+  TC_servoMotor.write(currentServoAngle);
 }
 
 bool isServoAngleCommand(String cmd) {
@@ -625,7 +625,7 @@ void printStatus() {
   Serial.print("Bag stack: ");
   Serial.println(bagStackEmptyConfirmed() ? "empty" : "bag detected");
 
-  int vacuumRaw = analogRead(vacuumSensorPin);
+  int vacuumRaw = analogRead(TC_vacuumSensor);
   float vacuumVoltage = rawToVoltage(vacuumRaw);
   Serial.print("Vacuum: ");
   Serial.print(vacuumDetected() ? "detected" : "not detected");

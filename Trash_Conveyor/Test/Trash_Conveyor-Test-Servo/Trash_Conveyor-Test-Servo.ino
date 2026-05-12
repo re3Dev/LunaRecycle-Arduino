@@ -1,9 +1,9 @@
 #include <Servo.h>
 
-const int SERVO_PIN = 9;
+const int TC_servoMotor_pin = 9;
 const unsigned long CYCLE_INTERVAL_MS = 5;
 
-Servo servo;
+Servo TC_servoMotor;
 String command = "";
 bool cycling = false;
 int currentAngle = 0;
@@ -13,8 +13,8 @@ unsigned long lastCycleMove = 0;
 void setup() {
   Serial.begin(9600);
 
-  servo.attach(SERVO_PIN);
-  servo.write(currentAngle);
+  TC_servoMotor.attach(TC_servoMotor_pin);
+  TC_servoMotor.write(currentAngle);
 
   Serial.println("Servo ready at 0 degrees.");
   Serial.println("Enter an angle from 0 to 180, or type cycle:");
@@ -54,9 +54,9 @@ void handleCommand(String input) {
   int angle = constrain(input.toInt(), 0, 180);
   cycling = false;
   currentAngle = angle;
-  servo.write(currentAngle);
+  TC_servoMotor.write(currentAngle);
 
-  Serial.print("Moved servo to ");
+  Serial.print("Moved TC_servoMotor to ");
   Serial.print(currentAngle);
   Serial.println(" degrees.");
 }
@@ -77,5 +77,5 @@ void updateCycle() {
     cycleDirection = 1;
   }
 
-  servo.write(currentAngle);
+  TC_servoMotor.write(currentAngle);
 }

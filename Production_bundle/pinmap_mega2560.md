@@ -106,7 +106,12 @@
 ---
 
 ## ConAir Dryer
+### Dryer Control — Modbus RTU over USB
+| Host | Interface | Notes                                          |
+|------|-----------|------------------------------------------------|
+| RPi 5| USB       | Modbus RTU — RPi talks to dryer directly       |
 
+> The dryer's control interface is handled entirely by the RPi 5 via USB Modbus. The Mega has no direct connection to the dryer control registers.
 ### `Dryer_SSR` — SSR AC Power Control
 | Pin  | Signal      | Notes                    |
 |------|-------------|--------------------------|
@@ -175,6 +180,21 @@
 | A4   | `GBX_ACCurrent`             | Analog |
 | A5   | `Dryer_ACCurrent`           | Analog |
 | A6   | `FE_ACCurrent`              | Analog |
+
+---
+
+## RPi 5 USB Peripherals
+
+### Webcams
+| Host  | Interface | Component       | Notes                                      |
+|-------|-----------|-----------------|--------------------------------------------|
+| RPi 5 | USB       | `TC_webcam`     | Nocturne 1080p — trash conveyor view       |
+| RPi 5 | USB       | `Mixer_webcam`  | Nocturne 1080p — mixing chamber view       |
+
+### ConAir Dryer Modbus
+| Host  | Interface | Notes                                              |
+|-------|-----------|----------------------------------------------------|
+| RPi 5 | USB       | Modbus RTU adapter — dryer parameter control       |
 
 ---
 

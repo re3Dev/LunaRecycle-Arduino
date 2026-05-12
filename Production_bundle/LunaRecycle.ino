@@ -45,12 +45,12 @@
 //  Pin assignments
 // ============================================================================
 
-const int GATE_SERVO1_PIN = 9;
-const int GATE_SERVO2_PIN = 10;
+const int Mixer_shredderGateLeftServoMotor_pin = 9;
+const int Mixer_shredderGateRightServoMotor_pin = 10;
 
-const int MOTOR_ENA_PIN   = 3;   // ENA on module (Timer 2 PWM)
-const int MOTOR_IN1_PIN   = 7;   // IN1 on module
-const int MOTOR_IN2_PIN   = 8;   // IN2 on module
+const int Mixer_motorController_ENA   = 3;   // ENA on module (Timer 2 PWM)
+const int Mixer_motorController_IN1   = 7;   // IN1 on module
+const int Mixer_motorController_IN2   = 8;   // IN2 on module
 
 // ============================================================================
 //  Constants
@@ -65,9 +65,9 @@ const unsigned long ENERGY_PRINT_INTERVAL_MS = 500;
 //  Objects
 // ============================================================================
 
-Servo gateServo1;
-Servo gateServo2;
-Adafruit_INA219 ina219;
+Servo Mixer_shredderGateLeftServoMotor;
+Servo Mixer_shredderGateRightServoMotor;
+Adafruit_INA219 Mixer_screwMotorCurrentSensor;
 
 // ============================================================================
 //  State
@@ -86,15 +86,15 @@ unsigned long lastEnergyPrint = 0;
 // ============================================================================
 
 void gateOpenCmd() {
-  gateServo1.write(GATE_OPEN_DEG);
-  gateServo2.write(GATE_OPEN_DEG);
+  Mixer_shredderGateLeftServoMotor.write(GATE_OPEN_DEG);
+  Mixer_shredderGateRightServoMotor.write(GATE_OPEN_DEG);
   gateOpen = true;
   Serial.println(F("[GATE] OPEN"));
 }
 
 void gateCloseCmd() {
-  gateServo1.write(GATE_CLOSE_DEG);
-  gateServo2.write(GATE_CLOSE_DEG);
+  Mixer_shredderGateLeftServoMotor.write(GATE_CLOSE_DEG);
+  Mixer_shredderGateRightServoMotor.write(GATE_CLOSE_DEG);
   gateOpen = false;
   Serial.println(F("[GATE] CLOSED"));
 }
@@ -112,20 +112,20 @@ void motorApply() {
   if (motorPwm == 0) {
     // Disable ENA first so output transistors are off before touching
     // direction pins — prevents shoot-through on the L298N/TB6612.
-    analogWrite(MOTOR_ENA_PIN, 0);
-    digitalWrite(MOTOR_IN1_PIN, LOW);
-    digitalWrite(MOTOR_IN2_PIN, LOW);
+    analogWrite(Mixer_motorController_ENA, 0);
+    digitalWrite(Mixer_motorController_IN1, LOW);
+    digitalWrite(Mixer_motorController_IN2, LOW);
     return;
   }
   // Set direction while ENA is still off, then enable.
   if (motorFwd) {
-    digitalWrite(MOTOR_IN1_PIN, HIGH);
-    digitalWrite(MOTOR_IN2_PIN, LOW);
+    digitalWrite(Mixer_motorController_IN1, HIGH);
+    digitalWrite(Mixer_motorController_IN2, LOW);
   } else {
-    digitalWrite(MOTOR_IN1_PIN, LOW);
-    digitalWrite(MOTOR_IN2_PIN, HIGH);
+    digitalWrite(Mixer_motorController_IN1, LOW);
+    digitalWrite(Mixer_motorController_IN2, HIGH);
   }
-  analogWrite(MOTOR_ENA_PIN, motorPwm);
+  analogWrite(Mixer_motorController_ENA, motorPwm);
 }
 
 void motorStop() {
@@ -138,11 +138,11 @@ void motorStop() {
 // to isolate whether the H-bridge responds at all.
 void motorTest() {
   Serial.println(F("[MOTOR_TEST] Setting IN1=HIGH IN2=LOW ENA=HIGH (full on FWD)"));
-  digitalWrite(MOTOR_IN1_PIN, HIGH);
-  digitalWrite(MOTOR_IN2_PIN, LOW);
-  digitalWrite(MOTOR_ENA_PIN, HIGH);
+  digitalWrite(Mixer_motorController_IN1, HIGH);
+  digitalWrite(Mixer_motorController_IN2, LOW);
+  digitalWrite(Mixer_motorController_ENA, HIGH);
   delay(2000);
-  digitalWrite(MOTOR_ENA_PIN, LOW);
+  digitalWrite(Mixer_motorController_ENA, LOW);
   Serial.println(F("[MOTOR_TEST] Done. ENA back LOW."));
 }
 
@@ -162,11 +162,11 @@ void printEnergy() {
     Serial.println(F("[ENERGY] unavailable"));
     return;
   }
-  float busV     = ina219.getBusVoltage_V();
-  float shuntMv  = ina219.getShuntVoltage_mV();
+  float busV     = Mixer_screwMotorCurrentSensor.getBusVoltage_V();
+  float shuntMv  = Mixer_screwMotorCurrentSensor.getShuntVoltage_mV();
   float loadV    = busV + (shuntMv / 1000.0f);
-  float currentA = ina219.getCurrent_mA() / 1000.0f;
-  float powerW   = ina219.getPower_mW()   / 1000.0f;
+  float currentA = Mixer_screwMotorCurrentSensor.getCurrent_mA() / 1000.0f;
+  float powerW   = Mixer_screwMotorCurrentSensor.getPower_mW()   / 1000.0f;
 
   Serial.print(F("[ENERGY] pwm="));
   Serial.print(motorPwm);
@@ -282,20 +282,20 @@ void setup() {
   Serial.begin(9600);
 
   // Gate servos - start closed
-  gateServo1.attach(GATE_SERVO1_PIN);
-  gateServo2.attach(GATE_SERVO2_PIN);
-  gateServo1.write(GATE_CLOSE_DEG);
-  gateServo2.write(GATE_CLOSE_DEG);
+  Mixer_shredderGateLeftServoMotor.attach(Mixer_shredderGateLeftServoMotor_pin);
+  Mixer_shredderGateRightServoMotor.attach(Mixer_shredderGateRightServoMotor_pin);
+  Mixer_shredderGateLeftServoMotor.write(GATE_CLOSE_DEG);
+  Mixer_shredderGateRightServoMotor.write(GATE_CLOSE_DEG);
 
   // Motor driver - start stopped
-  pinMode(MOTOR_ENA_PIN, OUTPUT);
-  pinMode(MOTOR_IN1_PIN, OUTPUT);
-  pinMode(MOTOR_IN2_PIN, OUTPUT);
+  pinMode(Mixer_motorController_ENA, OUTPUT);
+  pinMode(Mixer_motorController_IN1, OUTPUT);
+  pinMode(Mixer_motorController_IN2, OUTPUT);
   motorStop();
 
   // INA219
   Wire.begin();
-  inaOk = ina219.begin();
+  inaOk = Mixer_screwMotorCurrentSensor.begin();
   if (!inaOk) {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
   }

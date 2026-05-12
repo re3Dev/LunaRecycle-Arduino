@@ -1,11 +1,11 @@
 #include <Servo.h>
 
-Servo roboclaw;
+Servo Mixer_linearMotorController;
 
-const int RC_PIN = 9;
+const int Mixer_linearMotorController_pin = 9;
 
-const int MIN_LIMIT_PIN = 3;
-const int MAX_LIMIT_PIN = 2;
+const int Mixer_blastGateLeftMinLimit = 3;
+const int Mixer_blastGateLeftMaxLimit = 2;
 
 const int STOP_US    = 1500;
 const int EXTEND_US  = 2000;
@@ -17,23 +17,23 @@ const unsigned long PAUSE_AT_END_MS = 1000;
 bool autoBackAndForth = false;
 
 bool minHit() {
-  return digitalRead(MIN_LIMIT_PIN) == LOW;  // pressed = LOW
+  return digitalRead(Mixer_blastGateLeftMinLimit) == LOW;  // pressed = LOW
 }
 
 bool maxHit() {
-  return digitalRead(MAX_LIMIT_PIN) == LOW;  // pressed = LOW
+  return digitalRead(Mixer_blastGateLeftMaxLimit) == LOW;  // pressed = LOW
 }
 
 void stopActuator() {
-  roboclaw.writeMicroseconds(STOP_US);
+  Mixer_linearMotorController.writeMicroseconds(STOP_US);
 }
 
 void extendActuator() {
-  roboclaw.writeMicroseconds(EXTEND_US);
+  Mixer_linearMotorController.writeMicroseconds(EXTEND_US);
 }
 
 void retractActuator() {
-  roboclaw.writeMicroseconds(RETRACT_US);
+  Mixer_linearMotorController.writeMicroseconds(RETRACT_US);
 }
 
 bool checkSerialStop() {
@@ -122,10 +122,10 @@ void goBackAndForthOnce() {
 void setup() {
   Serial.begin(9600);
 
-  pinMode(MIN_LIMIT_PIN, INPUT_PULLUP);
-  pinMode(MAX_LIMIT_PIN, INPUT_PULLUP);
+  pinMode(Mixer_blastGateLeftMinLimit, INPUT_PULLUP);
+  pinMode(Mixer_blastGateLeftMaxLimit, INPUT_PULLUP);
 
-  roboclaw.attach(RC_PIN);
+  Mixer_linearMotorController.attach(Mixer_linearMotorController_pin);
 
   stopActuator();
   delay(3000);

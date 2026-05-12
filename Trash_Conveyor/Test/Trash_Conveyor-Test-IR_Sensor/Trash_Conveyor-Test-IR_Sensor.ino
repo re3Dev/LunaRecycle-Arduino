@@ -9,7 +9,7 @@
   Open Serial Monitor at 9600 baud.
 */
 
-const int irSensorPin = 53;
+const int TC_leftFilmSensor = 53;
 
 // Most 3-pin IR obstacle sensors pull OUT LOW when triggered.
 const bool triggeredState = LOW;
@@ -18,14 +18,14 @@ int lastSensorState = HIGH;
 
 void setup() {
   Serial.begin(9600);
-  pinMode(irSensorPin, INPUT);
+  pinMode(TC_leftFilmSensor, INPUT);
 
   Serial.println("IR sensor test ready.");
   Serial.println("Move an object in front of the sensor.");
 }
 
 void loop() {
-  int sensorState = digitalRead(irSensorPin);
+  int sensorState = digitalRead(TC_leftFilmSensor);
 
   if (sensorState != lastSensorState) {
     lastSensorState = sensorState;

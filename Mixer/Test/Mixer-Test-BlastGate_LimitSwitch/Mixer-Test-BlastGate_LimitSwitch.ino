@@ -1,22 +1,22 @@
-const int MIN_LIMIT_PIN = 2;
-const int MAX_LIMIT_PIN = 3;
+const int Mixer_blastGateLeftMinLimit = 2;
+const int Mixer_blastGateLeftMaxLimit = 3;
 
 bool lastMin = false;
 bool lastMax = false;
 
 bool minHit() {
-  return digitalRead(MIN_LIMIT_PIN) == LOW;  // pressed = LOW
+  return digitalRead(Mixer_blastGateLeftMinLimit) == LOW;  // pressed = LOW
 }
 
 bool maxHit() {
-  return digitalRead(MAX_LIMIT_PIN) == LOW;  // pressed = LOW
+  return digitalRead(Mixer_blastGateLeftMaxLimit) == LOW;  // pressed = LOW
 }
 
 void setup() {
   Serial.begin(9600);
 
-  pinMode(MIN_LIMIT_PIN, INPUT_PULLUP);
-  pinMode(MAX_LIMIT_PIN, INPUT_PULLUP);
+  pinMode(Mixer_blastGateLeftMinLimit, INPUT_PULLUP);
+  pinMode(Mixer_blastGateLeftMaxLimit, INPUT_PULLUP);
 
   Serial.println("Limit switch test ready");
   Serial.println("Press MIN or MAX switch.");

@@ -1,0 +1,55 @@
+,,,,,,,,,,,
+SubSystem,Component Type,Component Name (use for variables?),Qty,Need / Description,Item Link,Voltage,Power Draw,Connects To,Interface Type,Req. IO Channels,
+FPU,MicroController,FPU_Mega,1,Arduino Mega 2540,,,,RPi 5,USB,,
+Trash Conveyor,Stepper Motor,TC_stepperMotor,1,Stepper motor to translate vacuum picker mechanism,,24,,TC_stepperMotorController,4-wire,,
+Trash Conveyor,Stepper Motor Controller,TC_stepperMotorController,1,Stepper motor controller,,,,FPU Mega,digital,3,"step, dir, enable"
+Trash Conveyor,Hobby Servo Motor,TC_servoMotor,1,To move vacuum cups up and down,,5,,FPU Mega,3-wire servo,1,servo pos
+Trash Conveyor,Vacuum Pump,TC_vacuumPump,1,DC pump for vacuum picker mechanism,,24,,TC_vacuumPumpRelay,2-wire,,
+Trash Conveyor,Relay,TC_vacuumPumpRelay,1,"For the DC vacuum pump (ON/OFF only -  no direction, no speed)",,5,,FPU Mega,digital,1,
+Trash Conveyor,Vacuum Sensor,TC_vacuumSensor,1,To detect when the suction cups are in contact with the film (could be binary sensor),,24,,FPU Mega,analog,1,analog (could be digital)
+Trash Conveyor,Limit Switch,TC_stepperHomeLimit,1,Homing switch for the vacuum picker translation,,5,,FPU Mega,digital,1,
+Trash Conveyor,IR Sensor,TC_leftFilmSensor,1,For detecting PE film bags,,5,,FPU Mega,digital,1,
+Trash Conveyor,IR Sensor,TC_rightFilmSensor,1,For detecting PA/PE film bags,,5,,FPU Mega,digital,1,
+Trash Conveyor,Webcam,TC_webcam,1,Nocturne USB Webcam,https://www.lukeslabonline.com/products/usb-camera-1080p?,,,RPi 5,USB,,
+Shredder,Motor,Shredder_motor,1,Motor (160VDC?),,160,,Shredder_motorController,2-wire,,
+Shredder,DC Motor Controller,Shredder_motorController,1,Board that came with the shredder - only use On/Off and Direction,NASA LunaRecycle Ph II Notes,120VAC,,FPU Mega,digital,2,on/off; direction
+Shredder,Motor Temperature Monitoring,,1,??? - OPTIONAL - ???,,,,,,,
+Mixer,Hobby Servo Motor,Mixer_shredderGateLeftServoMotor,1,Shredder left gate control,,5,,FPU Mega,3-wire servo,1,servo pos
+Mixer,Hobby Servo Motor,Mixer_shredderGateRightServoMotor,1,Shredder right gate control,,5,,FPU Mega,3-wire servo,1,servo pos
+Mixer,DC Motor,Mixer_screwMotor,1,DC motor to turn shaftless auger,https://www.omc-stepperonline.com/brushed-24v-60w-1-29nm-182-68oz-in-360rpm-w-5-1-spur-gearbox-dc-gear-motor-f5d60-24gn-18s-5gn5k,24,,Mixer_motorController,2-wire,,
+Mixer,DC Motor Controller,Mixer_motorController,1,Speed and direction   ,https://www.amazon.com/dp/B0B5TWRP9R?,5,,FPU Mega,digital,3,"PWM, IN1, IN2"
+Mixer,DC Current Sensor,Mixer_screwMotorCurrentSensor,1,Monitors mixing motor current,https://www.amazon.com/dp/B07VL8NY32?,5,,FPU Mega,I2C,2,"SCL, SDA"
+Mixer,Hall-Effect Sensor,Mixer_screwRotationSensor,1,Monitors mixing screw speed,https://www.adafruit.com/product/158?,5,,FPU Mega,digital,1,
+Mixer,Linear Motor,Mixer_blastGateLeftServoMotor,1,Opens left 'blast gate',https://www.robotshop.com/products/actuonix-p16-linear-actuator-200mm-641-12v-w-limit-switches?,12,,Mixer_linearMotorController,3-wire servo,,
+Mixer,Linear Motor,Mixer_blastGateRightServoMotor,1,Opens right 'blast gate',https://www.robotshop.com/products/actuonix-p16-linear-actuator-200mm-641-12v-w-limit-switches?,12,,Mixer_linearMotorController,3-wire servo,,
+Mixer,Linear Motor controller,Mixer_linearMotorController,1,Motor controller (dual) for the linear motors,https://www.robotshop.com/products/roboclaw-2x7a-6-34vdc-regenerative-motor-controller?,5,,FPU Mega,digital,2,servo pos (??)
+Mixer,Limit Switch,Mixer_blastGateLeftMinLimit,1,Ensure left blast gate open/close sufficiently,,5,,FPU Mega,digital,1,
+Mixer,Limit Switch,Mixer_blastGateLeftMaxLimit,1,Ensure left blast gate open/close sufficiently,,5,,FPU Mega,digital,1,
+Mixer,Limit Switch,Mixer_blastGateRightMinLimit,1,Ensure right blast gate open/close sufficiently,,5,,FPU Mega,digital,1,
+Mixer,Limit Switch,Mixer_blastGateRightMaxLimit,1,Ensure right blast gate open/close sufficiently,,5,,FPU Mega,digital,1,
+Mixer,Feedstock Detection,,1,How to know when the mixing/drying chamber is full or depleted?,,,,,,,
+Mixer,Webcam,Mixer_webcam,1,Nocturne USB webcam; Viewing mixing chamber from above,https://www.lukeslabonline.com/products/usb-camera-1080p?,,,RPi 5,USB,,
+Mixer,DC Motor,Mixer_agitatorMotor,1,Bottom agitator,,24,,Mixer_motorController,,,
+Mixer,DC Motor Controller,Mixer_motorController,1,Speed and direction   ,,,,FPU Mega,digital,3,"PWM, IN3, IN4"
+ConAir Dryer,Dryer Control,,1,ModBus connection,,,,RPi 5,USB or network?,,
+ConAir Dryer,SSR Power Control,Dryer_SSR,1,Remote swiching of AC power for desiccant dryer,https://www.amazon.com/dp/B07WGVB4SC?,,,FPU Mega,digital,1,
+Feedstock Conveyor,BLDC Blower Motor,FC_blowerMotor,1,BLDC motor blower - More efficient alternative to the Shop Vac,,48,,FC_BLDCmotorController,,,
+Feedstock Conveyor,BLDC Motor Driver,FC_BLDCmotorController,1,BLDC motor controller,,,,FPU Mega,"digital, I2C",2,"digital forward signal, and I2C for the digipot to provide 0-5VDC throttle control"
+Feedstock Conveyor,Vacuum Sensor(s),,2,Monitor vacuum pressure along the lenght of the feedstock conveyance tubing?,,,,,,,
+Feedstock Conveyor,Feedstock Detection,,1,Monitor for presence of feedstock at the FGF printer/crammer,,,,GBX Archimajor,,,
+GBX,MicroController,GBX_Archimajor,1,Standard electronic controls for GigabotX printer,,,,RPi 5,USB,,
+GBX,Part Cooling,,1,Use GBX part cooling system developed by Domenic?,,,,GBX Archimajor,,,
+GBX,Webcam,GBX_webcam,1,,,,,RPi 5,USB,,
+Fume Extractor,SSR Power Control,FE_SSR,1,Remote switching of AC power for fume extractor,https://www.amazon.com/dp/B07WGVB4SC?,,,FPU Mega,digital,1,
+Environmental Monitoring,Temp/Humidity Sensor,FPU_environmentalSensor,1,Monitor environmental temperature and %RH within the FPU enclosure,https://www.adafruit.com/product/5989,5,,FPU Mega,I2C,2,"SCL, SDA"
+Environmental Monitoring,Temp/Humidity Sensor,GBX_environmentalSensor,1,Monitor environmental temperature and %RH within the GBX enclosure,https://www.adafruit.com/product/5989,5,,FPU Mega,I2C,2,"SCL, SDA"
+Environmental Monitoring,Temp/Humidity Sensor,Dryer_regenExhaustEnvironmentalSensor,1,Monitor temperature and %RH of the dryer's regen exhaust,https://www.adafruit.com/product/5989,5,,FPU Mega,I2C,2,"SCL, SDA"
+Power Monitoring,AC Current Sensor,FPU_24VsupplyACCurrent,1,Monitor AC supply current to the 24VDC power supply,https://www.electromaker.io/shop/product/gravity-analog-ac-current-sensor,5,,FPU Mega,analog,1,analog
+Power Monitoring,AC Current Sensor,FC_48VsupplyACCurrent,1,Monitor AC supply current to the 48VDC power supply (for the FC_blowerMotor),https://www.electromaker.io/shop/product/gravity-analog-ac-current-sensor,5,,FPU Mega,analog,1,analog
+Power Monitoring,AC Current Sensor,Shredder_motorControllerACCurrent,1,Monitor AC supply current to the 160VDC power supply (for the Shredder_motor),https://www.electromaker.io/shop/product/gravity-analog-ac-current-sensor,5,,FPU Mega,analog,1,analog
+Power Monitoring,AC Current Sensor,GBX_ACCurrent,1,Monitor AC supply current to the GBX,https://www.electromaker.io/shop/product/gravity-analog-ac-current-sensor,5,,FPU Mega,analog,1,analog
+Power Monitoring,AC Current Sensor,Dryer_ACCurrent,1,Monitor AC supply current to the ConAir dryer unit,https://www.electromaker.io/shop/product/gravity-analog-ac-current-sensor,5,,FPU Mega,analog,1,analog
+Power Monitoring,AC Current Sensor,FE_ACCurrent,1,Monitor AC supply current to the fume extractor,https://www.electromaker.io/shop/product/gravity-analog-ac-current-sensor,5,,FPU Mega,analog,1,analog
+Safety Systems,System Status Light,statusStackLight,1,"Display green, yellow, red depending on system status",,,,RPi 5,,,
+Safety Systems,FPU Emergency Stop,FPU_emergencyStop,1,Emergency stop for the FPU (not an AC power switch) - need to define the behavior,,5,,FPU Mega,digital,1,
+Safety Systems,GBX Emergency Stop,GBX_emergencyStop,1,Emergency stop for the GBX (not an AC power switch) - same as z-axis limit switch?,,,,GBX Archimajor,,,

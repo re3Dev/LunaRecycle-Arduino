@@ -633,8 +633,8 @@
       transform-origin: 50% 50%;
       animation-play-state: paused;
     }
-    .shred-gear-left  { animation: shred-cw  1.5s linear infinite; animation-play-state: paused; }
-    .shred-gear-right { animation: shred-ccw 1.5s linear infinite; animation-play-state: paused; }
+    .shred-gear-left  { animation: shred-cw  4.5s linear infinite; animation-play-state: paused; }
+    .shred-gear-right { animation: shred-ccw 4.5s linear infinite; animation-play-state: paused; }
     .pline-node.active  .shred-gear,
     .pline-node.sim-b0  .shred-gear, .pline-node.sim-b1 .shred-gear,
     .pline-node.sim-b2  .shred-gear, .pline-node.sim-b3 .shred-gear
@@ -1643,8 +1643,6 @@
       }
 
       const occupied = id => (nodeColors[id] || []).length > 0;
-      // If any batch is anywhere in the pipeline, conveyor/gate/shredder/dryer all run together
-      const conveyorActive = SIM.batches.length > 0;
 
       // Apply nodes
       for (const s of SIM_STAGES){
@@ -1658,14 +1656,6 @@
         if (!dots){ dots = document.createElement("div"); dots.className = "batch-dots"; el.appendChild(dots); }
         dots.innerHTML = colors.map(c => `<span class="batch-dot ${SIM_COLORS[c]}"></span>`).join("");
       }
-      // Force upstream group active while any batch is in the pipeline
-      if (conveyorActive){
-        ["pnode-gate","pnode-shredder","pnode-dryer"].forEach(id => {
-          const el = document.getElementById(id);
-          if (el && !["sim-b0","sim-b1","sim-b2","sim-b3"].some(c => el.classList.contains(c)))
-            el.classList.add("active");
-        });
-      }
 
       // Apply connectors
       for (const s of SIM_STAGES){
@@ -1675,20 +1665,13 @@
         el.classList.toggle("flowing", connSet.has(s.id));
         el.classList.toggle("active",  connSet.has(s.id));
       }
-      // Keep the upstream arrows flowing while conveyor is running
-      if (conveyorActive){
-        ["parrow-1","parrow-2","parrow-3"].forEach(id => {
-          const el = document.getElementById(id);
-          if (el){ el.classList.add("flowing","active"); }
-        });
-      }
 
       // ── Sample state labels ──────────────────────────────────
       // Conveyor
-      setChip("conveyorChip", "RUNNING", "good");
+      setChip("conveyorChip", occupied("pnode-conveyor") ? "RUNNING" : "IDLE", occupied("pnode-conveyor") ? "good" : "");
 
-      // Gate — open whenever conveyor is running (gate/shredder/dryer run together)
-      const gateActive = conveyorActive || occupied("pnode-gate") || occupied("pnode-shredder")
+      // Gate — open when batch is at gate, shredder, or downstream
+      const gateActive = occupied("pnode-gate") || occupied("pnode-shredder")
                       || connSet.has("parrow-2") || connSet.has("parrow-3");
       setChip("gateChip", gateActive ? "OPEN" : "CLOSED", gateActive ? "good" : "");
       const gateDotEl = document.getElementById("gateDot");
@@ -1697,8 +1680,8 @@
       const gateVizEl = document.getElementById("gateViz");
       if (gateVizEl) gateVizEl.classList.toggle("open", gateActive);
 
-      // Dryer — on whenever conveyor is running
-      const dryerOccupied = conveyorActive || occupied("pnode-dryer");
+      // Dryer
+      const dryerOccupied = occupied("pnode-dryer");
       setChip("dryerFlowChip", dryerOccupied ? "DRYING" : "IDLE", dryerOccupied ? "good" : "");
       set("dryerFlowTemp", SIM_STATE.dryerTemp.toFixed(1) + "\u00b0C");
 
@@ -1734,7 +1717,7 @@
       const simStabBar = document.getElementById("stability_bar");
       if (simStabBar){ simStabBar.style.width = simStab + "%"; simStabBar.className = simStab > 70 ? "" : "warn"; }
       set("dryer_mode_state",  "1");
-      set("dryer_run_state",   conveyorActive ? "100" : "0");
+      set("dryer_run_state",   dryerOccupied ? "100" : "0");
       set("dryer_state_guess", dryerOccupied ? "ON" : "OFF");
       set("dryer_regen_temp",   (SIM_STATE.dryerTemp + 30 + (Math.random() - 0.5) * 1.5).toFixed(1));
       set("dryer_regen_outlet", (SIM_STATE.dryerTemp - 8).toFixed(1));

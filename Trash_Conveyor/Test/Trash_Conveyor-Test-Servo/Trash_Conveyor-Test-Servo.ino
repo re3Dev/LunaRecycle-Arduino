@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) re:3D, Inc. - All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited
+ * Proprietary and confidential
+ */
+
 #include <Servo.h>
 
 const int TC_servoMotor_pin = 9;

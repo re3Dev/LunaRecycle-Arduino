@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) re:3D, Inc. - All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited
+ * Proprietary and confidential
+ */
+
 // Hall-effect sensor pin
 const int Mixer_screwRotationSensor = 2;
 

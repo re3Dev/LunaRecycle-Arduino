@@ -1,3 +1,9 @@
+"""
+Copyright (C) re:3D, Inc. - All Rights Reserved
+Unauthorized copying of this file, via any medium is strictly prohibited
+Proprietary and confidential
+"""
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 import threading

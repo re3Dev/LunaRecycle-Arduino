@@ -1,3 +1,9 @@
+/*
+ * Copyright (C) re:3D, Inc. - All Rights Reserved
+ * Unauthorized copying of this file, via any medium is strictly prohibited
+ * Proprietary and confidential
+ */
+
 const int Mixer_blastGateLeftMinLimit = 2;
 const int Mixer_blastGateLeftMaxLimit = 3;
 

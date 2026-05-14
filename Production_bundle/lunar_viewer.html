@@ -826,11 +826,6 @@
       <div class="si-unit">°C process</div>
     </div>
     <div class="summary-item">
-      <div class="si-label">Dew Point</div>
-      <div class="si-value" id="sv_dew_point">—</div>
-      <div class="si-unit">°C actual</div>
-    </div>
-    <div class="summary-item">
       <div class="si-label">Dryer State</div>
       <div class="si-chip" id="sv_dryer_state">—</div>
     </div>
@@ -1648,6 +1643,8 @@
       }
 
       const occupied = id => (nodeColors[id] || []).length > 0;
+      // If any batch is anywhere in the pipeline, conveyor/gate/shredder/dryer all run together
+      const conveyorActive = SIM.batches.length > 0;
 
       // Apply nodes
       for (const s of SIM_STAGES){
@@ -1661,6 +1658,14 @@
         if (!dots){ dots = document.createElement("div"); dots.className = "batch-dots"; el.appendChild(dots); }
         dots.innerHTML = colors.map(c => `<span class="batch-dot ${SIM_COLORS[c]}"></span>`).join("");
       }
+      // Force upstream group active while any batch is in the pipeline
+      if (conveyorActive){
+        ["pnode-gate","pnode-shredder","pnode-dryer"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el && !["sim-b0","sim-b1","sim-b2","sim-b3"].some(c => el.classList.contains(c)))
+            el.classList.add("active");
+        });
+      }
 
       // Apply connectors
       for (const s of SIM_STAGES){
@@ -1670,13 +1675,20 @@
         el.classList.toggle("flowing", connSet.has(s.id));
         el.classList.toggle("active",  connSet.has(s.id));
       }
+      // Keep the upstream arrows flowing while conveyor is running
+      if (conveyorActive){
+        ["parrow-1","parrow-2","parrow-3"].forEach(id => {
+          const el = document.getElementById(id);
+          if (el){ el.classList.add("flowing","active"); }
+        });
+      }
 
       // ── Sample state labels ──────────────────────────────────
       // Conveyor
       setChip("conveyorChip", "RUNNING", "good");
 
-      // Gate — open when batch is at gate, shredder, or downstream
-      const gateActive = occupied("pnode-gate") || occupied("pnode-shredder")
+      // Gate — open whenever conveyor is running (gate/shredder/dryer run together)
+      const gateActive = conveyorActive || occupied("pnode-gate") || occupied("pnode-shredder")
                       || connSet.has("parrow-2") || connSet.has("parrow-3");
       setChip("gateChip", gateActive ? "OPEN" : "CLOSED", gateActive ? "good" : "");
       const gateDotEl = document.getElementById("gateDot");
@@ -1685,8 +1697,8 @@
       const gateVizEl = document.getElementById("gateViz");
       if (gateVizEl) gateVizEl.classList.toggle("open", gateActive);
 
-      // Dryer — always warm in sim
-      const dryerOccupied = occupied("pnode-dryer");
+      // Dryer — on whenever conveyor is running
+      const dryerOccupied = conveyorActive || occupied("pnode-dryer");
       setChip("dryerFlowChip", dryerOccupied ? "DRYING" : "IDLE", dryerOccupied ? "good" : "");
       set("dryerFlowTemp", SIM_STATE.dryerTemp.toFixed(1) + "\u00b0C");
 
@@ -1708,6 +1720,66 @@
       const printActive = occupied("pnode-printer");
       setChip("printerFlowChip", printActive ? "PRINTING" : "STANDBY", printActive ? "good" : "");
       set("printerFlowProgress", printActive ? SIM_STATE.printerPct + "%" : "—");
+
+      // ── Header ──────────────────────────────────────────────
+      const hdDot = document.getElementById("connDot");
+      if (hdDot) hdDot.className = "dot good live-pulse";
+      set("connState", "SIM");
+      set("lastUpdated", new Date().toLocaleTimeString());
+
+      // ── Dryer card ───────────────────────────────────────────
+      set("dryer_process_temp_big", SIM_STATE.dryerTemp.toFixed(1));
+      set("dryer_sp_inline",        "175");
+      const simStab = clamp(100 - Math.abs(SIM_STATE.dryerTemp - 175) * 5, 0, 100);
+      const simStabBar = document.getElementById("stability_bar");
+      if (simStabBar){ simStabBar.style.width = simStab + "%"; simStabBar.className = simStab > 70 ? "" : "warn"; }
+      set("dryer_mode_state",  "1");
+      set("dryer_run_state",   conveyorActive ? "100" : "0");
+      set("dryer_state_guess", dryerOccupied ? "ON" : "OFF");
+      set("dryer_regen_temp",   (SIM_STATE.dryerTemp + 30 + (Math.random() - 0.5) * 1.5).toFixed(1));
+      set("dryer_regen_outlet", (SIM_STATE.dryerTemp - 8).toFixed(1));
+      set("dryer_blower_inlet", "22.0");
+      set("dryer_aux_temp",     "38.5");
+      set("dryer_status_word",  "256 (0x0100)");
+      set("dryer_output_word",  "3 (0x0003)");
+      set("dryer_process_sp_ft", "175");
+      const simApiDot = document.getElementById("dryerApiDot");
+      if (simApiDot) simApiDot.className = "dot good";
+      set("dryerApiState", "CONNECTED");
+      setChip("dryerStateChip", dryerOccupied ? "ON" : "IDLE", dryerOccupied ? "good" : "");
+
+      // ── Arduino card ─────────────────────────────────────────
+      const simArduDot = document.getElementById("arduinoDot");
+      if (simArduDot) simArduDot.className = "dot good";
+      set("arduinoConnState", "CONNECTED");
+      const simDoorViz = document.getElementById("doorViz");
+      if (simDoorViz) simDoorViz.classList.toggle("open", doorsActive);
+      set("doorVizLabel", doorsActive ? "OPEN" : "CLOSED");
+      set("doorA_min", doorsActive ? "480" : "0");
+      set("doorA_max", doorsActive ? "1024" : "480");
+      set("doorB_min", doorsActive ? "480" : "0");
+      set("doorB_max", doorsActive ? "1024" : "480");
+      set("motorDir", "FWD");
+
+      // ── Printer card ─────────────────────────────────────────
+      setChip("printerChip", printActive ? "PRINTING" : "STANDBY", printActive ? "good" : "warn");
+      set("printer_state",    printActive ? "PRINTING" : "STANDBY");
+      set("printer_progress", printActive ? SIM_STATE.printerPct + "%" : "—");
+      const simPrintBar = document.getElementById("printer_progress_bar");
+      if (simPrintBar) simPrintBar.style.width = (printActive ? SIM_STATE.printerPct : 0) + "%";
+      set("printer_nozzle", "235.0");
+      set("printer_zone2",  "235.0");
+      set("printer_zone3",  "235.0");
+      set("printer_bed",    "60.0");
+
+      // ── Summary bar ──────────────────────────────────────────
+      set("sv_dryer_temp", SIM_STATE.dryerTemp.toFixed(1));
+      setSiChip("sv_dryer_state", dryerOccupied ? "ON" : "IDLE",              dryerOccupied ? "good" : "");
+      setSiChip("sv_doors",       doorsActive   ? "OPEN" : "CLOSED",           doorsActive   ? "good" : "");
+      setSiChip("sv_gate",        gateActive    ? "OPEN" : "CLOSED",           gateActive    ? "good" : "");
+      setSiChip("sv_motor",       vacActive ? `PWM ${SIM_STATE.motorPwm}` : "STOPPED", vacActive ? "good" : "");
+      setSiChip("sv_arduino",     "CONNECTED", "good");
+      setSiChip("sv_printer",     printActive ? "PRINTING" : "STANDBY",        printActive   ? "good" : "warn");
     }
 
     function renderSummary(){
@@ -1751,7 +1823,7 @@
     // ── Poll loop ─────────────────────────────────────────────
     async function poll(){
       await Promise.allSettled([pollDryer(), pollArduino(), pollPrinter()]);
-      render();
+      if (!SIM.active) render();
     }
 
     async function init(){

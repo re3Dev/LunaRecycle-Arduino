@@ -1,0 +1,1251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>LunaRecycle · Machine Model</title>
+  <style>
+    /* ── Design tokens ─────────────────────────────────────────── */
+    :root {
+      --bg0:#0b0f14; --bg1:#0f1620;
+      --border:rgba(255,255,255,.10); --border2:rgba(255,255,255,.08);
+      --text:#e8eef8; --muted:rgba(232,238,248,.72); --muted2:rgba(232,238,248,.55);
+      --good:#31d0aa; --warn:#ffcf5a; --bad:#ff5c7a; --info:#7aa7ff;
+      --sans:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+      --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{min-height:100%;background:var(--bg0)}
+    body{
+      font-family:var(--sans);color:var(--text);
+      background:
+        radial-gradient(1400px 700px at 10% -8%,rgba(122,167,255,.09),transparent 60%),
+        radial-gradient(1000px 600px at 95% 5%,rgba(49,208,170,.07),transparent 55%),
+        linear-gradient(180deg,var(--bg0),var(--bg1) 50%,var(--bg0));
+      overflow-x:auto;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────── */
+    header{
+      display:flex;align-items:center;justify-content:space-between;gap:8px;
+      padding:8px 20px;
+      position:sticky;top:0;z-index:30;
+      background:linear-gradient(180deg,rgba(11,15,20,.97),rgba(11,15,20,.80));
+      backdrop-filter:blur(12px);
+      border-bottom:1px solid var(--border2);
+    }
+    .brand{display:flex;align-items:center;gap:10px}
+    .logo{
+      width:32px;height:32px;border-radius:9px;
+      background:linear-gradient(135deg,rgba(122,167,255,.88),rgba(49,208,170,.80));
+      display:grid;place-items:center;font-size:16px;user-select:none;flex:0 0 auto;
+    }
+    .brand-text h1{font-size:13px;font-weight:760;letter-spacing:.15px}
+    .brand-text .sub{font-size:10px;color:var(--muted2);margin-top:1px}
+    .topbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+    .pill{
+      display:inline-flex;align-items:center;gap:5px;
+      padding:4px 10px;border-radius:999px;
+      border:1px solid var(--border);background:rgba(255,255,255,.04);
+      font-size:10px;color:var(--muted);white-space:nowrap;user-select:none;
+    }
+    .pill strong{color:var(--text);font-weight:700}
+    .dot{width:7px;height:7px;border-radius:999px;background:var(--muted2);flex:0 0 auto}
+    .dot.good{background:var(--good)}
+    .dot.warn{background:var(--warn)}
+    .dot.bad{background:var(--bad)}
+    @keyframes pulse-ring{
+      0%{box-shadow:0 0 0 0 rgba(49,208,170,.50)}
+      70%{box-shadow:0 0 0 8px rgba(49,208,170,0)}
+      100%{box-shadow:0 0 0 0 rgba(49,208,170,0)}
+    }
+    .dot.live-pulse{animation:pulse-ring 2s ease infinite}
+    .sim-badge{
+      display:inline-flex;align-items:center;gap:5px;
+      padding:4px 10px;border-radius:999px;
+      background:rgba(255,143,208,.07);border:1px solid rgba(255,143,208,.25);
+      font-size:10px;font-weight:800;letter-spacing:.3px;
+      color:rgba(255,200,240,.75);cursor:pointer;user-select:none;
+      transition:background .2s,border-color .2s;
+    }
+    .sim-badge:hover{background:rgba(255,143,208,.16)}
+    .sim-badge.on{background:rgba(255,143,208,.20);border-color:rgba(255,143,208,.60);color:rgba(255,220,248,.95)}
+    .sim-badge .sim-dot{width:6px;height:6px;border-radius:50%;background:rgba(255,143,208,.40);flex:0 0 auto}
+    .sim-badge.on .sim-dot{background:#ff8fd0;animation:pulse-ring 1.2s ease infinite}
+
+    /* ── statechip ───────────────────────────────────────────────── */
+    .chip{
+      font-size:9px;font-weight:800;letter-spacing:.3px;
+      padding:2px 8px;border-radius:999px;
+      border:1px solid rgba(255,255,255,.10);background:rgba(255,255,255,.05);
+      color:var(--muted);white-space:nowrap;text-align:center;display:block;
+    }
+    .chip.good{border-color:rgba(49,208,170,.35);background:rgba(49,208,170,.10);color:rgba(220,255,247,.90)}
+    .chip.warn{border-color:rgba(255,207,90,.35);background:rgba(255,207,90,.10);color:rgba(255,244,210,.90)}
+    .chip.bad {border-color:rgba(255,92,122,.35);background:rgba(255,92,122,.10);color:rgba(255,220,228,.90)}
+    .chip.info{border-color:rgba(122,167,255,.35);background:rgba(122,167,255,.10);color:rgba(208,222,255,.90)}
+
+    /* ── Meter ───────────────────────────────────────────────────── */
+    .meter{height:3px;border-radius:999px;background:rgba(255,255,255,.09);overflow:hidden}
+    .meter>span{
+      display:block;height:100%;border-radius:999px;
+      background:linear-gradient(90deg,rgba(122,167,255,.85),rgba(49,208,170,.80));
+      transition:width .40s ease;
+    }
+
+    /* ── Model layout ─────────────────────────────────────────────── */
+    .model-outer{
+      padding:24px 20px 36px;
+      display:flex;flex-direction:column;align-items:flex-start;gap:10px;
+      min-width:970px;
+    }
+    .model-section-title{
+      font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;
+      color:var(--muted2);padding-left:4px;
+    }
+    .model-container{
+      position:relative;
+      width:930px;height:480px;
+    }
+
+    /* grid: 4 cols × 2 rows, 180×200 panels, 70px col-gap, 80px row-gap */
+    .model-grid{
+      display:grid;
+      grid-template-columns:repeat(4,180px);
+      grid-template-rows:repeat(2,200px);
+      gap:80px 70px;
+      width:930px;height:480px;
+    }
+
+    /* ── Panel ───────────────────────────────────────────────────── */
+    .sys-panel{
+      display:flex;flex-direction:column;align-items:center;
+      gap:5px;padding:10px 8px 9px;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.07);
+      background:linear-gradient(160deg,rgba(255,255,255,.035),rgba(255,255,255,.018));
+      box-shadow:0 4px 18px rgba(0,0,0,.38);
+      position:relative;overflow:hidden;
+      transition:border-color .35s,background .35s,box-shadow .35s;
+    }
+    .sys-panel::before{
+      content:'';position:absolute;top:0;left:0;right:0;height:1px;
+      background:linear-gradient(90deg,transparent,rgba(255,255,255,.10),transparent);
+    }
+    .sys-panel.active{
+      border-color:rgba(49,208,170,.35);
+      background:rgba(49,208,170,.04);
+      box-shadow:0 0 0 1px rgba(49,208,170,.14),0 4px 22px rgba(0,0,0,.42);
+    }
+    .sys-panel.warn-state{
+      border-color:rgba(255,207,90,.30);
+      background:rgba(255,207,90,.03);
+    }
+    .panel-hdr{
+      display:flex;align-items:flex-start;justify-content:space-between;
+      width:100%;gap:4px;
+    }
+    .panel-name{
+      font-size:8px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+      color:var(--muted2);line-height:1.3;
+    }
+    .pdot{
+      width:6px;height:6px;border-radius:50%;
+      background:rgba(232,238,248,.18);flex:0 0 auto;margin-top:1px;
+      transition:background .3s,box-shadow .3s;
+    }
+    .pdot.good{background:var(--good);box-shadow:0 0 6px rgba(49,208,170,.65)}
+    .pdot.warn{background:var(--warn);box-shadow:0 0 6px rgba(255,207,90,.65)}
+    .pdot.bad {background:var(--bad);box-shadow:0 0 6px rgba(255,92,122,.65)}
+    .panel-anim{
+      flex:1;display:flex;align-items:center;justify-content:center;
+      min-height:0;width:100%;
+    }
+    .panel-data{width:100%;display:flex;flex-direction:column;gap:3px}
+    .kv-row{display:flex;justify-content:space-between;align-items:baseline;gap:4px}
+    .kv-k{font-size:8px;color:var(--muted2);white-space:nowrap}
+    .kv-v{font-size:10px;font-weight:700;font-family:var(--mono);text-align:right;white-space:nowrap}
+    .kv-unit{font-size:8px;color:var(--muted2);font-weight:600}
+    .kv-big{font-size:20px;font-weight:800;line-height:1;text-align:center}
+
+    /* Grid positions */
+    #pnl-conveyor{grid-column:1;grid-row:1}
+    #pnl-gate    {grid-column:2;grid-row:1}
+    #pnl-shredder{grid-column:3;grid-row:1}
+    #pnl-mixer   {grid-column:4;grid-row:1}
+    #pnl-printer {grid-column:1;grid-row:2}
+    #pnl-vacuum  {grid-column:2;grid-row:2}
+    #pnl-doors   {grid-column:3;grid-row:2}
+    #pnl-energy  {grid-column:4;grid-row:2}
+
+    /* ── Pipe overlay ────────────────────────────────────────────── */
+    .pipe-svg{
+      position:absolute;top:0;left:0;
+      width:930px;height:480px;
+      pointer-events:none;
+    }
+    .pipe-base{
+      stroke:rgba(255,255,255,.09);stroke-width:2.5;fill:none;
+      stroke-linecap:round;stroke-linejoin:round;
+    }
+    .pipe-flow{
+      stroke:rgba(49,208,170,.50);stroke-width:2.5;fill:none;
+      stroke-linecap:round;stroke-linejoin:round;
+      stroke-dasharray:5 13;
+      animation:pipe-scroll .65s linear infinite;
+      animation-play-state:paused;
+      opacity:0;transition:opacity .4s;
+    }
+    .pipe-flow.active{animation-play-state:running;opacity:1}
+    .pipe-flow.rev{animation-direction:reverse}
+    @keyframes pipe-scroll{from{stroke-dashoffset:0}to{stroke-dashoffset:-18}}
+    .pipe-label{
+      font-size:8px;fill:rgba(232,238,248,.38);
+      font-family:ui-sans-serif,system-ui,sans-serif;
+    }
+
+    /* ── Batch dots ──────────────────────────────────────────────── */
+    .bdots{display:flex;gap:3px;flex-wrap:wrap;justify-content:center;min-height:9px}
+    .bdot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
+    .bc0{background:#31d0aa;box-shadow:0 0 6px rgba(49,208,170,.75)}
+    .bc1{background:#7aa7ff;box-shadow:0 0 6px rgba(122,167,255,.75)}
+    .bc2{background:#ffcf5a;box-shadow:0 0 6px rgba(255,207,90,.75)}
+    .bc3{background:#ff8fd0;box-shadow:0 0 6px rgba(255,143,208,.75)}
+
+    /* ── SIM batch panel highlights ─────────────────────────────── */
+    .sys-panel.sb0{border-color:rgba(49,208,170,.50);background:rgba(49,208,170,.07)}
+    .sys-panel.sb1{border-color:rgba(122,167,255,.50);background:rgba(122,167,255,.07)}
+    .sys-panel.sb2{border-color:rgba(255,207,90,.45);background:rgba(255,207,90,.07)}
+    .sys-panel.sb3{border-color:rgba(255,143,208,.45);background:rgba(255,143,208,.07)}
+
+    /* ══════════════════════════════════════════════════════════════
+       COMPONENT ANIMATIONS
+       ══════════════════════════════════════════════════════════════ */
+
+    /* ── 1. Pick & Place / Conveyor (140 × 54px) ────────────────── */
+    .pp-wrap{
+      width:140px;height:54px;position:relative;
+      opacity:.22;transition:opacity .35s;
+    }
+    .sys-panel.active .pp-wrap,
+    .sys-panel.sb0 .pp-wrap,.sys-panel.sb1 .pp-wrap,
+    .sys-panel.sb2 .pp-wrap,.sys-panel.sb3 .pp-wrap{opacity:1}
+
+    .pp-rail{
+      position:absolute;top:8px;left:6px;right:6px;height:1.5px;
+      background:rgba(232,238,248,.20);border-radius:1px;
+    }
+    .pp-endstop{
+      position:absolute;top:5px;width:1.5px;height:7px;
+      background:rgba(232,238,248,.28);border-radius:1px;
+    }
+    .pp-endstop.l{left:6px} .pp-endstop.r{right:6px}
+    .pp-car{
+      position:absolute;top:3px;left:8px;width:16px;height:10px;
+      background:rgba(110,148,200,.42);border-radius:1px;
+      border:.8px solid rgba(155,192,235,.42);
+      animation:pp-travel 3.2s ease-in-out infinite;
+      animation-play-state:paused;
+    }
+    .pp-rod{
+      position:absolute;top:100%;left:50%;transform:translateX(-50%);
+      width:1.5px;height:0;background:rgba(232,238,248,.55);
+      animation:pp-rod 3.2s ease-in-out infinite;
+      animation-play-state:paused;
+    }
+    .pp-grip{
+      position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);
+      width:12px;height:2px;background:rgba(160,195,235,.60);
+    }
+    .pp-item{
+      position:absolute;bottom:-10px;left:50%;transform:translateX(-50%);
+      width:7px;height:5px;border-radius:1px;
+      background:rgba(150,182,222,.80);opacity:0;
+      animation:pp-item 3.2s ease-in-out infinite;
+      animation-play-state:paused;
+    }
+    .pp-tray{
+      position:absolute;bottom:5px;width:14px;height:8px;
+      background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:2px;
+    }
+    .pp-tray.l{left:8px} .pp-tray.r{right:8px}
+
+    .sys-panel.active .pp-car,.sys-panel.active .pp-rod,.sys-panel.active .pp-item,
+    .sys-panel.sb0 .pp-car,.sys-panel.sb0 .pp-rod,.sys-panel.sb0 .pp-item,
+    .sys-panel.sb1 .pp-car,.sys-panel.sb1 .pp-rod,.sys-panel.sb1 .pp-item,
+    .sys-panel.sb2 .pp-car,.sys-panel.sb2 .pp-rod,.sys-panel.sb2 .pp-item,
+    .sys-panel.sb3 .pp-car,.sys-panel.sb3 .pp-rod,.sys-panel.sb3 .pp-item
+    {animation-play-state:running}
+
+    @keyframes pp-travel{
+      0%,18%{transform:translateX(0)}
+      48%,68%{transform:translateX(108px)}
+      100%{transform:translateX(0)}
+    }
+    @keyframes pp-rod{
+      0%{height:0}4%{height:18px}16%{height:18px}20%{height:0}
+      47%{height:0}51%{height:18px}63%{height:18px}67%{height:0}
+      100%{height:0}
+    }
+    @keyframes pp-item{
+      0%,16%{opacity:0;transform:translateX(-50%) scale(.5)}
+      21%{opacity:1;transform:translateX(-50%) scale(1)}
+      52%{opacity:1}55%{opacity:0}
+      100%{opacity:0}
+    }
+
+    /* ── 2. Gate (140 × 50px) ────────────────────────────────────── */
+    .gate-wrap{
+      width:140px;height:50px;position:relative;
+      display:flex;align-items:center;justify-content:center;gap:2px;
+      opacity:.22;transition:opacity .35s;
+    }
+    .sys-panel.active .gate-wrap,
+    .sys-panel.sb0 .gate-wrap,.sys-panel.sb1 .gate-wrap,
+    .sys-panel.sb2 .gate-wrap,.sys-panel.sb3 .gate-wrap{opacity:1}
+    .gate-leaf{
+      width:45%;height:6px;
+      background:rgba(232,238,248,.40);border-radius:2px;
+      transition:transform .55s cubic-bezier(.4,0,.2,1),background .35s;
+      flex:0 0 auto;
+    }
+    .gate-leaf.l{transform-origin:100% 50%}
+    .gate-leaf.r{transform-origin:0% 50%}
+    .gate-wrap.open .gate-leaf.l{transform:rotate(-60deg);background:rgba(49,208,170,.70)}
+    .gate-wrap.open .gate-leaf.r{transform:rotate(60deg);background:rgba(49,208,170,.70)}
+    .gate-center-ring{
+      width:8px;height:8px;border-radius:50%;
+      border:1.5px solid rgba(232,238,248,.28);
+      background:rgba(255,255,255,.05);
+      flex:0 0 auto;transition:border-color .35s;
+    }
+    .gate-wrap.open .gate-center-ring{border-color:rgba(49,208,170,.55)}
+
+    /* ── 3. Shredder SVG (130 × 90px rendered) ───────────────────── */
+    .shred-wrap{opacity:.22;transition:opacity .35s}
+    .shred-wrap svg{display:block;width:130px;height:90px}
+    .sys-panel.active .shred-wrap,
+    .sys-panel.sb0 .shred-wrap,.sys-panel.sb1 .shred-wrap,
+    .sys-panel.sb2 .shred-wrap,.sys-panel.sb3 .shred-wrap{opacity:1}
+
+    .shred-gear{transform-box:fill-box;transform-origin:50% 50%}
+    .shred-gear-l{animation:shred-cw 1.6s linear infinite;animation-play-state:paused}
+    .shred-gear-r{animation:shred-ccw 1.6s linear infinite;animation-play-state:paused}
+    .sys-panel.active .shred-gear-l,.sys-panel.active .shred-gear-r,
+    .sys-panel.sb0 .shred-gear-l,.sys-panel.sb0 .shred-gear-r,
+    .sys-panel.sb1 .shred-gear-l,.sys-panel.sb1 .shred-gear-r,
+    .sys-panel.sb2 .shred-gear-l,.sys-panel.sb2 .shred-gear-r,
+    .sys-panel.sb3 .shred-gear-l,.sys-panel.sb3 .shred-gear-r
+    {animation-play-state:running}
+    .shred-debris{
+      transform-box:fill-box;transform-origin:50% 0%;
+      animation:shred-fall 1.3s linear infinite;animation-play-state:paused;
+    }
+    .sys-panel.active .shred-debris,
+    .sys-panel.sb0 .shred-debris,.sys-panel.sb1 .shred-debris,
+    .sys-panel.sb2 .shred-debris,.sys-panel.sb3 .shred-debris{animation-play-state:running}
+    @keyframes shred-cw {to{transform:rotate( 360deg)}}
+    @keyframes shred-ccw{to{transform:rotate(-360deg)}}
+    @keyframes shred-fall{
+      0%  {opacity:0;transform:translateY(0)}
+      15% {opacity:.9;transform:translateY(5px)}
+      80% {opacity:.7;transform:translateY(18px)}
+      100%{opacity:0;transform:translateY(24px)}
+    }
+
+    /* ── 4. Screw / Mixer (44 × 130px, tile) ─────────────────────── */
+    .screw-wrap{
+      width:44px;height:130px;border-radius:4px;
+      border:1.2px solid rgba(232,238,248,.20);
+      background:rgba(0,0,0,.26);overflow:hidden;position:relative;
+      opacity:.22;transition:opacity .35s;
+    }
+    .sys-panel.active .screw-wrap,
+    .sys-panel.sb0 .screw-wrap,.sys-panel.sb1 .screw-wrap,
+    .sys-panel.sb2 .screw-wrap,.sys-panel.sb3 .screw-wrap{opacity:1}
+    .screw-tile{
+      position:absolute;inset:0;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 44 14'%3E%3Cline x1='22' y1='0' x2='22' y2='14' stroke='%23e8eef8' stroke-width='1.4' opacity='.42'/%3E%3Cpath fill='none' stroke='%237aa7ff' stroke-width='2.6' stroke-linecap='round' opacity='.32' d='M 22,0 C 39,0 39,7 22,7'/%3E%3Cpath fill='none' stroke='%237aa7ff' stroke-width='2.6' stroke-linecap='round' opacity='.88' d='M 22,7 C 5,7 5,14 22,14'/%3E%3C/svg%3E");
+      background-size:44px 14px;
+      background-repeat:repeat-y;
+      background-position:0 0;
+      -webkit-mask-image:linear-gradient(to bottom,transparent 0%,black 18%,black 82%,transparent 100%);
+              mask-image:linear-gradient(to bottom,transparent 0%,black 18%,black 82%,transparent 100%);
+      animation:screw-scroll .85s linear infinite;
+      animation-play-state:paused;
+    }
+    .sys-panel.active .screw-tile,
+    .sys-panel.sb0 .screw-tile,.sys-panel.sb1 .screw-tile,
+    .sys-panel.sb2 .screw-tile,.sys-panel.sb3 .screw-tile{animation-play-state:running}
+    @keyframes screw-scroll{
+      from{background-position:0 0}
+      to  {background-position:0 14px}
+    }
+
+    /* ── 5. Printer SVG (130 × 90px) ─────────────────────────────── */
+    .printer-wrap{opacity:.22;transition:opacity .35s}
+    .printer-wrap svg{display:block;width:130px;height:90px}
+    .sys-panel.active .printer-wrap,
+    .sys-panel.sb0 .printer-wrap,.sys-panel.sb1 .printer-wrap,
+    .sys-panel.sb2 .printer-wrap,.sys-panel.sb3 .printer-wrap{opacity:1}
+    /* nozzle carriage – uses SVG user units (viewBox 0 0 130 90), travels 86px */
+    .pnozzle-grp{
+      animation:pnozzle-sweep 2.6s linear infinite;
+      animation-play-state:paused;
+    }
+    .sys-panel.active .pnozzle-grp,
+    .sys-panel.sb0 .pnozzle-grp,.sys-panel.sb1 .pnozzle-grp,
+    .sys-panel.sb2 .pnozzle-grp,.sys-panel.sb3 .pnozzle-grp{animation-play-state:running}
+    @keyframes pnozzle-sweep{
+      0%  {transform:translateX(0)}
+      45% {transform:translateX(88px)}
+      50% {transform:translateX(88px)}
+      95% {transform:translateX(0)}
+      100%{transform:translateX(0)}
+    }
+    .pbead{
+      animation:pbead-grow 2.6s linear infinite;
+      animation-play-state:paused;
+      transform-origin:8px 60px;/* left edge x=8, bead y=60 */
+    }
+    .sys-panel.active .pbead,
+    .sys-panel.sb0 .pbead,.sys-panel.sb1 .pbead,
+    .sys-panel.sb2 .pbead,.sys-panel.sb3 .pbead{animation-play-state:running}
+    @keyframes pbead-grow{
+      0%  {transform:scaleX(0);opacity:.88}
+      45% {transform:scaleX(1);opacity:.88}
+      55% {transform:scaleX(1);opacity:.42}
+      100%{transform:scaleX(1);opacity:.42}
+    }
+
+    /* ── 6. Vacuum tube (28 × 130px) ─────────────────────────────── */
+    .vac-wrap{
+      width:28px;height:130px;position:relative;
+      opacity:.22;transition:opacity .35s;
+    }
+    .sys-panel.active .vac-wrap,
+    .sys-panel.sb0 .vac-wrap,.sys-panel.sb1 .vac-wrap,
+    .sys-panel.sb2 .vac-wrap,.sys-panel.sb3 .vac-wrap{opacity:1}
+    .vac-tube{
+      position:absolute;top:0;bottom:0;left:50%;transform:translateX(-50%);
+      width:14px;
+      border-left:2px solid rgba(232,238,248,.28);
+      border-right:2px solid rgba(232,238,248,.28);
+      background:rgba(0,0,0,.22);
+    }
+    .vac-inlet{
+      position:absolute;bottom:0;left:50%;transform:translateX(-50%);
+      width:22px;height:6px;
+      border:2px solid rgba(232,238,248,.20);border-bottom:none;
+      border-radius:3px 3px 0 0;
+    }
+    .vac-arrowhead{
+      position:absolute;top:-6px;left:50%;transform:translateX(-50%);
+      width:0;height:0;
+      border-left:5px solid transparent;border-right:5px solid transparent;
+      border-bottom:7px solid rgba(49,208,170,.55);
+    }
+    .vac-pellet{
+      position:absolute;left:50%;transform:translateX(-50%);
+      width:6px;height:4px;border-radius:1px;
+      background:rgba(152,183,224,.78);
+      bottom:8px;opacity:0;
+      animation:vac-rise 1.5s linear infinite;
+      animation-play-state:paused;
+    }
+    .vac-pellet:nth-child(4){animation-delay:.50s}
+    .vac-pellet:nth-child(5){animation-delay:1.00s}
+    .sys-panel.active .vac-pellet,
+    .sys-panel.sb0 .vac-pellet,.sys-panel.sb1 .vac-pellet,
+    .sys-panel.sb2 .vac-pellet,.sys-panel.sb3 .vac-pellet{animation-play-state:running}
+    @keyframes vac-rise{
+      0%  {bottom:6px;opacity:0;transform:translateX(-50%) scale(.5)}
+      8%  {opacity:1;transform:translateX(-50%) scale(1)}
+      84% {opacity:1}
+      100%{bottom:calc(100% - 8px);opacity:0;transform:translateX(-50%) scale(.7)}
+    }
+
+    /* ── 7. Blast Doors (140 × 48px) ─────────────────────────────── */
+    .doors-wrap{
+      width:140px;height:48px;
+      display:flex;align-items:center;justify-content:center;gap:0;
+      opacity:.22;transition:opacity .35s;
+    }
+    .sys-panel.active .doors-wrap,
+    .sys-panel.sb0 .doors-wrap,.sys-panel.sb1 .doors-wrap,
+    .sys-panel.sb2 .doors-wrap,.sys-panel.sb3 .doors-wrap{opacity:1}
+    .door-leaf{
+      width:43%;height:20px;border-radius:2px;
+      background:rgba(232,238,248,.35);
+      transition:transform .55s cubic-bezier(.4,0,.2,1),background .35s;
+      flex:0 0 auto;
+    }
+    .door-leaf.l{border-radius:2px 0 0 2px}
+    .door-leaf.r{border-radius:0 2px 2px 0}
+    .doors-wrap.open .door-leaf.l{transform:translateX(-56%);background:rgba(49,208,170,.60)}
+    .doors-wrap.open .door-leaf.r{transform:translateX(56%);background:rgba(49,208,170,.60)}
+
+    /* ── 8. Energy bar rows ──────────────────────────────────────── */
+    .ebar-row{
+      display:flex;align-items:center;gap:5px;width:100%;
+    }
+    .ebar-row .ebar-lbl{font-size:8px;color:var(--muted2);width:10px;flex:0 0 auto}
+    .ebar-row .ebar-bar{
+      flex:1;height:3px;border-radius:999px;
+      background:rgba(255,255,255,.08);overflow:hidden;
+    }
+    .ebar-row .ebar-bar>span{
+      display:block;height:100%;border-radius:999px;
+      background:linear-gradient(90deg,rgba(122,167,255,.85),rgba(49,208,170,.80));
+      transition:width .40s ease;
+    }
+    .ebar-row .ebar-val{
+      font-size:9px;font-weight:700;font-family:var(--mono);
+      width:36px;text-align:right;flex:0 0 auto;
+    }
+
+    /* ── Process flow labels ──────────────────────────────────────── */
+    .flow-row{
+      display:flex;align-items:center;gap:6px;
+      padding-left:4px;
+    }
+    .flow-arrow{font-size:9px;color:var(--muted2)}
+    .flow-label{
+      font-size:9px;color:var(--muted2);font-weight:600;letter-spacing:.2px;
+    }
+
+    /* ── Scrollbar ───────────────────────────────────────────────── */
+    ::-webkit-scrollbar{width:6px;height:6px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:999px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="logo" aria-hidden="true">♻</div>
+      <div class="brand-text">
+        <h1>LunaRecycle · Machine Model</h1>
+        <div class="sub">Live spatial view — all subsystems</div>
+      </div>
+    </div>
+    <div class="topbar">
+      <button class="sim-badge" id="simToggle" onclick="toggleSim()">
+        <span class="sim-dot"></span>SIMULATION
+      </button>
+      <div class="pill">
+        <span class="dot" id="connDot"></span>
+        API&nbsp;<strong id="connState">CONNECTING</strong>
+      </div>
+      <div class="pill"><span class="dot good live-pulse"></span>Refresh&nbsp;<strong>2 s</strong></div>
+      <div class="pill">Updated&nbsp;<strong id="lastUpdated">—</strong></div>
+    </div>
+  </header>
+
+  <div class="model-outer">
+    <div class="flow-row">
+      <span class="flow-label">Material path:</span>
+      <span class="flow-arrow">Conveyor</span>
+      <span class="flow-arrow">→</span><span class="flow-label">Gate</span>
+      <span class="flow-arrow">→</span><span class="flow-label">Shredder</span>
+      <span class="flow-arrow">→</span><span class="flow-label">Mixer / Dryer</span>
+      <span class="flow-arrow">↓→</span><span class="flow-label">Blast Doors</span>
+      <span class="flow-arrow">→</span><span class="flow-label">Vacuum</span>
+      <span class="flow-arrow">→</span><span class="flow-label">Printer</span>
+    </div>
+
+    <div class="model-container">
+
+      <!-- ── Pipe overlay ──────────────────────────────────────────── -->
+      <svg class="pipe-svg" viewBox="0 0 930 480" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="ah" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+            <polygon points="0,0 8,3 0,6" fill="rgba(255,255,255,.22)"/>
+          </marker>
+        </defs>
+        <!-- Row 1 labels -->
+        <text x="215" y="88" class="pipe-label" text-anchor="middle">shredded stock</text>
+        <text x="465" y="88" class="pipe-label" text-anchor="middle">pieces</text>
+        <text x="715" y="88" class="pipe-label" text-anchor="middle">raw material</text>
+        <!-- Col 4→3 label -->
+        <text x="720" y="233" class="pipe-label" text-anchor="middle">dried pellets</text>
+        <!-- Row 2 labels -->
+        <text x="466" y="368" class="pipe-label" text-anchor="middle">pellets</text>
+        <text x="215" y="368" class="pipe-label" text-anchor="middle">to hopper</text>
+
+        <!-- ── Base pipes (always visible, dim) ─────────────────── -->
+        <!-- 1. Conveyor → Gate -->
+        <path class="pipe-base" d="M 180 100 L 250 100" marker-end="url(#ah)"/>
+        <!-- 2. Gate → Shredder -->
+        <path class="pipe-base" d="M 430 100 L 500 100" marker-end="url(#ah)"/>
+        <!-- 3. Shredder → Mixer -->
+        <path class="pipe-base" d="M 680 100 L 750 100" marker-end="url(#ah)"/>
+        <!-- 4. Mixer → Blast Doors (L-path down then left) -->
+        <path class="pipe-base" d="M 840 200 L 840 240 L 590 240 L 590 280" marker-end="url(#ah)"/>
+        <!-- 5. Blast Doors → Vacuum (flow left) -->
+        <path class="pipe-base" d="M 500 380 L 430 380" marker-end="url(#ah)"/>
+        <!-- 6. Vacuum → Printer (flow left) -->
+        <path class="pipe-base" d="M 250 380 L 180 380" marker-end="url(#ah)"/>
+
+        <!-- ── Animated flow overlays ────────────────────────────── -->
+        <path id="pf1" class="pipe-flow" d="M 180 100 L 250 100"/>
+        <path id="pf2" class="pipe-flow" d="M 430 100 L 500 100"/>
+        <path id="pf3" class="pipe-flow" d="M 680 100 L 750 100"/>
+        <path id="pf4" class="pipe-flow" d="M 840 200 L 840 240 L 590 240 L 590 280"/>
+        <path id="pf5" class="pipe-flow rev" d="M 500 380 L 430 380"/>
+        <path id="pf6" class="pipe-flow rev" d="M 250 380 L 180 380"/>
+      </svg>
+
+      <!-- ── 4 × 2 Panel grid ──────────────────────────────────────── -->
+      <div class="model-grid">
+
+        <!-- ① TRASH CONVEYOR ────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-conveyor">
+          <div class="panel-hdr">
+            <div class="panel-name">Trash<br>Conveyor</div>
+            <span class="pdot" id="pd-conveyor"></span>
+          </div>
+          <div class="panel-anim">
+            <div class="pp-wrap">
+              <div class="pp-rail"></div>
+              <div class="pp-endstop l"></div>
+              <div class="pp-endstop r"></div>
+              <div class="pp-car">
+                <div class="pp-rod">
+                  <div class="pp-grip"></div>
+                  <div class="pp-item"></div>
+                </div>
+              </div>
+              <div class="pp-tray l"></div>
+              <div class="pp-tray r"></div>
+            </div>
+          </div>
+          <div class="panel-data">
+            <span class="chip" id="chip-conveyor">—</span>
+          </div>
+          <div class="bdots" id="bd-conveyor"></div>
+        </div>
+
+        <!-- ② SHREDDER GATE ──────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-gate">
+          <div class="panel-hdr">
+            <div class="panel-name">Shredder<br>Gate</div>
+            <span class="pdot" id="pd-gate"></span>
+          </div>
+          <div class="panel-anim">
+            <div class="gate-wrap" id="gateViz">
+              <div class="gate-leaf l"></div>
+              <div class="gate-center-ring"></div>
+              <div class="gate-leaf r"></div>
+            </div>
+          </div>
+          <div class="panel-data">
+            <span class="chip" id="chip-gate">—</span>
+          </div>
+          <div class="bdots" id="bd-gate"></div>
+        </div>
+
+        <!-- ③ SHREDDER ───────────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-shredder">
+          <div class="panel-hdr">
+            <div class="panel-name">Shredder</div>
+            <span class="pdot" id="pd-shredder"></span>
+          </div>
+          <div class="panel-anim">
+            <div class="shred-wrap">
+              <!-- viewBox 0 0 70 50, rendered 130×90 — rotation animations scale-invariant -->
+              <svg viewBox="0 0 70 50" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <g class="shred-gear shred-gear-l">
+                  <circle cx="18" cy="22" r="11" fill="rgba(90,130,195,.28)" stroke="rgba(175,205,240,.55)" stroke-width="1.5"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(  0 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate( 45 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate( 90 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(135 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(180 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(225 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(270 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(315 18 22)"/>
+                </g>
+                <g class="shred-gear shred-gear-r">
+                  <circle cx="52" cy="22" r="11" fill="rgba(90,130,195,.28)" stroke="rgba(175,205,240,.55)" stroke-width="1.5"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate( 22.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate( 67.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(112.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(157.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(202.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(247.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(292.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx=".8" fill="rgba(208,225,252,.88)" transform="rotate(337.5 52 22)"/>
+                </g>
+                <!-- nip line -->
+                <line x1="35" y1="11" x2="35" y2="33" stroke="rgba(255,92,122,.25)" stroke-width="1.5" stroke-linecap="round"/>
+                <!-- debris dots -->
+                <circle class="shred-debris" cx="35" cy="34" r="1.3" fill="rgba(178,205,238,.65)" style="animation-delay:0s"/>
+                <circle class="shred-debris" cx="33" cy="34" r="1.1" fill="rgba(178,205,238,.55)" style="animation-delay:.43s"/>
+                <circle class="shred-debris" cx="37" cy="34" r="1.3" fill="rgba(178,205,238,.65)" style="animation-delay:.86s"/>
+              </svg>
+            </div>
+          </div>
+          <div class="panel-data">
+            <span class="chip" id="chip-shredder">—</span>
+          </div>
+          <div class="bdots" id="bd-shredder"></div>
+        </div>
+
+        <!-- ④ MIXER / DRYER ──────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-mixer">
+          <div class="panel-hdr">
+            <div class="panel-name">Mixer /<br>Dryer</div>
+            <span class="pdot" id="pd-mixer"></span>
+          </div>
+          <div class="panel-anim">
+            <div class="screw-wrap"><div class="screw-tile"></div></div>
+          </div>
+          <div class="panel-data">
+            <span class="chip" id="chip-mixer">—</span>
+            <div class="kv-row">
+              <span class="kv-k">Process</span>
+              <span class="kv-v"><span id="m-proc-t">—</span>&thinsp;<span class="kv-unit">°C</span></span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-k">Dew pt</span>
+              <span class="kv-v"><span id="m-dp">—</span>&thinsp;<span class="kv-unit">°C</span></span>
+            </div>
+            <div class="meter"><span id="m-dryer-bar" style="width:0%"></span></div>
+          </div>
+          <div class="bdots" id="bd-mixer"></div>
+        </div>
+
+        <!-- ⑤ PRINTER ────────────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-printer">
+          <div class="panel-hdr">
+            <div class="panel-name">3D Printer</div>
+            <span class="pdot" id="pd-printer"></span>
+          </div>
+          <div class="panel-anim">
+            <div class="printer-wrap">
+              <!-- Printer SVG — viewBox 0 0 130 90 native large scale -->
+              <svg viewBox="0 0 130 90" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <!-- Build plate -->
+                <rect x="8" y="83" width="114" height="3" rx="1"
+                      fill="rgba(232,238,248,.15)" stroke="rgba(232,238,248,.25)" stroke-width=".8"/>
+                <!-- Printed layers (4 complete) -->
+                <rect x="8" y="78" width="114" height="4" fill="rgba(122,167,255,.14)"/>
+                <rect x="8" y="73" width="114" height="4" fill="rgba(122,167,255,.22)"/>
+                <rect x="8" y="68" width="114" height="4" fill="rgba(122,167,255,.31)"/>
+                <rect x="8" y="63" width="114" height="4" fill="rgba(122,167,255,.42)"/>
+                <!-- Active bead growing from left -->
+                <rect class="pbead" x="8" y="58" width="114" height="4"
+                      fill="rgba(182,212,248,.84)"/>
+                <!-- Gantry rail -->
+                <line x1="4" y1="24" x2="126" y2="24"
+                      stroke="rgba(232,238,248,.25)" stroke-width="2"/>
+                <rect x="4"   y="19" width="3" height="10" fill="rgba(232,238,248,.20)"/>
+                <rect x="123" y="19" width="3" height="10" fill="rgba(232,238,248,.20)"/>
+                <!-- Nozzle carriage group (translates 0 → 88 SVG units) -->
+                <g class="pnozzle-grp">
+                  <!-- bearing block -->
+                  <rect x="8" y="19" width="20" height="10" rx="1"
+                        fill="rgba(112,152,202,.35)" stroke="rgba(152,192,232,.42)" stroke-width="1"/>
+                  <!-- upper hotend body -->
+                  <rect x="14" y="29" width="8" height="12" rx=".5"
+                        fill="rgba(112,152,202,.40)" stroke="rgba(152,192,232,.35)" stroke-width=".8"/>
+                  <!-- heat break -->
+                  <rect x="16.5" y="41" width="3" height="8"
+                        fill="rgba(95,135,185,.50)"/>
+                  <!-- heater block -->
+                  <rect x="13" y="49" width="10" height="6" rx=".5"
+                        fill="rgba(112,152,202,.42)" stroke="rgba(152,192,232,.32)" stroke-width=".8"/>
+                  <!-- nozzle taper -->
+                  <polygon points="13,55 23,55 18,63" fill="rgba(168,198,232,.62)"/>
+                </g>
+              </svg>
+            </div>
+          </div>
+          <div class="panel-data">
+            <span class="chip" id="chip-printer">—</span>
+            <div class="kv-row">
+              <span class="kv-k">Nozzle</span>
+              <span class="kv-v"><span id="m-nozzle">—</span>&thinsp;<span class="kv-unit">°C</span></span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-k">Bed</span>
+              <span class="kv-v"><span id="m-bed">—</span>&thinsp;<span class="kv-unit">°C</span></span>
+            </div>
+            <div class="meter"><span id="m-print-bar" style="width:0%"></span></div>
+          </div>
+          <div class="bdots" id="bd-printer"></div>
+        </div>
+
+        <!-- ⑥ VACUUM FEED ─────────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-vacuum">
+          <div class="panel-hdr">
+            <div class="panel-name">Vacuum<br>Feed</div>
+            <span class="pdot" id="pd-vacuum"></span>
+          </div>
+          <div class="panel-anim">
+            <div class="vac-wrap">
+              <div class="vac-tube"></div>
+              <div class="vac-inlet"></div>
+              <div class="vac-arrowhead"></div>
+              <div class="vac-pellet"></div>
+              <div class="vac-pellet"></div>
+              <div class="vac-pellet"></div>
+            </div>
+          </div>
+          <div class="panel-data">
+            <span class="chip" id="chip-vacuum">—</span>
+            <div class="kv-row">
+              <span class="kv-k">PWM</span>
+              <span class="kv-v"><span id="m-pwm">—</span></span>
+            </div>
+            <div class="meter"><span id="m-pwm-bar" style="width:0%"></span></div>
+            <div class="kv-row">
+              <span class="kv-k">Dir</span>
+              <span class="kv-v" id="m-dir">—</span>
+            </div>
+          </div>
+          <div class="bdots" id="bd-vacuum"></div>
+        </div>
+
+        <!-- ⑦ BLAST DOORS ────────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-doors">
+          <div class="panel-hdr">
+            <div class="panel-name">Blast<br>Doors</div>
+            <span class="pdot" id="pd-doors"></span>
+          </div>
+          <div class="panel-anim">
+            <div class="doors-wrap" id="doorsViz">
+              <div class="door-leaf l"></div>
+              <div class="door-leaf r"></div>
+            </div>
+          </div>
+          <div class="panel-data">
+            <span class="chip" id="chip-doors">—</span>
+            <div class="kv-row" style="margin-top:2px">
+              <span class="kv-k">Door A</span>
+              <span class="kv-v"><span id="m-da">—</span></span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-k">Door B</span>
+              <span class="kv-v"><span id="m-db">—</span></span>
+            </div>
+          </div>
+          <div class="bdots" id="bd-doors"></div>
+        </div>
+
+        <!-- ⑧ MOTOR POWER ─────────────────────────────────────────── -->
+        <div class="sys-panel" id="pnl-energy">
+          <div class="panel-hdr">
+            <div class="panel-name">Motor<br>Power</div>
+            <span class="pdot" id="pd-energy"></span>
+          </div>
+          <div class="panel-anim" style="flex-direction:column;gap:6px">
+            <div style="text-align:center">
+              <div class="kv-big" id="m-watts">—</div>
+              <div class="kv-unit">Watts</div>
+            </div>
+          </div>
+          <div class="panel-data">
+            <div class="ebar-row">
+              <span class="ebar-lbl">V</span>
+              <div class="ebar-bar"><span id="eb-v" style="width:0%"></span></div>
+              <span class="ebar-val" id="m-volt">—</span>
+            </div>
+            <div class="ebar-row">
+              <span class="ebar-lbl">I</span>
+              <div class="ebar-bar"><span id="eb-i" style="width:0%"></span></div>
+              <span class="ebar-val" id="m-amp">—</span>
+            </div>
+            <div class="ebar-row">
+              <span class="ebar-lbl">P</span>
+              <div class="ebar-bar"><span id="eb-p" style="width:0%"></span></div>
+              <span class="ebar-val" id="m-pow">—</span>
+            </div>
+          </div>
+          <div class="bdots" id="bd-energy"></div>
+        </div>
+
+      </div><!-- /model-grid -->
+    </div><!-- /model-container -->
+  </div><!-- /model-outer -->
+
+  <script>
+  "use strict";
+  /* ── Config ──────────────────────────────────────────────────── */
+  const API       = "http://127.0.0.1:5055/api";
+  const DRYER_API = "http://127.0.0.1:5055/api/dryer";
+  const POLL_MS   = 2000;
+  const PRINTER_URL = ""; // optional Moonraker base URL
+
+  /* ── State ───────────────────────────────────────────────────── */
+  const V = {
+    apiOk:    false,
+    ardu:     false,
+    dryer:    false,
+    gate:     "—",
+    door:     "—",
+    doorA:    "—",
+    doorB:    "—",
+    pwm:      0,
+    dir:      "—",
+    energy:   {V:null,I:null,P:null},
+    dry:      {},
+    printer:  {state:"—",progress:null,nozzle:null,bed:null},
+  };
+
+  /* ── Helpers ─────────────────────────────────────────────────── */
+  const $  = id => document.getElementById(id);
+  const tx = (id,v) => { const e=$( id); if(e) e.textContent=v; };
+  const cl = (v,a,b) => Math.min(b,Math.max(a,v));
+
+  function chipCls(s){
+    if(!s||s==="—") return "";
+    const u = String(s).toUpperCase();
+    if(["CONNECTED","OPEN","RUNNING","ON","ONLINE","PRINTING","DRYING","ACTIVE"].some(w=>u.includes(w))) return "good";
+    if(["WARN","MOVING","OPENING","CLOSING","STANDBY","IDLE","TRYING"].some(w=>u.includes(w))) return "warn";
+    if(["ERROR","FAULT","BAD","FAIL","OFFLINE","ESTOP"].some(w=>u.includes(w))) return "bad";
+    return "";
+  }
+
+  function setChip(id,txt,cls){
+    const e=$(id); if(!e) return;
+    e.textContent = txt;
+    e.className   = "chip" + (cls ? " "+cls : "");
+  }
+
+  function setDot(id,cls){
+    const e=$(id); if(!e) return;
+    e.className = "pdot" + (cls ? " "+cls : "");
+  }
+
+  function setPanel(id,active,warn){
+    const e=$(id); if(!e) return;
+    e.classList.toggle("active",     !!active && !warn);
+    e.classList.toggle("warn-state", !!warn);
+  }
+
+  function setPipe(id,on){
+    const e=$(id); if(!e) return;
+    e.classList.toggle("active",on);
+  }
+
+  /* ── API polling ─────────────────────────────────────────────── */
+  async function fetchJ(url){
+    const r = await fetch(url,{signal:AbortSignal.timeout(4000)});
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  }
+
+  async function pollDryer(){
+    try{
+      const res = await fetchJ(`${DRYER_API}/status`);
+      V.apiOk = true;
+      const d  = res.data || {};
+      V.dryer  = !!d.connected;
+      V.dry    = d;
+    }catch(_){ V.dryer = false; }
+  }
+
+  async function pollArduino(){
+    try{
+      const res = await fetchJ(`${API}/arduino/status`);
+      V.ardu = !!res.connected;
+      const d = res.data || {};
+      V.gate  = d.gate       || "—";
+      V.door  = d.door_state || "—";
+      V.doorA = d.door_A_min !== undefined ? `${d.door_A_min}–${d.door_A_max}` : "—";
+      V.doorB = d.door_B_min !== undefined ? `${d.door_B_min}–${d.door_B_max}` : "—";
+      V.pwm   = d.motor_pwm  !== undefined ? d.motor_pwm : V.pwm;
+      V.dir   = d.motor_dir  || V.dir;
+      const e = d.energy || {};
+      if(e.V !== undefined) V.energy = {V:e.V, I:e.I, P:e.P};
+      V.apiOk = true;
+    }catch(_){ V.ardu = false; }
+  }
+
+  async function pollPrinter(){
+    if(!PRINTER_URL) return;
+    try{
+      const res = await fetchJ(
+        `${PRINTER_URL}/printer/objects/query?print_stats&extruder&heater_bed&virtual_sdcard`
+      );
+      const s   = (res.result&&res.result.status)||{};
+      const ps  = s.print_stats   ||{};
+      const ext = s.extruder      ||{};
+      const bed = s.heater_bed    ||{};
+      const vsd = s.virtual_sdcard||{};
+      V.printer.state    = ps.state         ? ps.state.toUpperCase()     : "—";
+      V.printer.progress = vsd.progress!=null? Math.round(vsd.progress*100) : null;
+      V.printer.nozzle   = ext.temperature!=null? ext.temperature.toFixed(1) : null;
+      V.printer.bed      = bed.temperature!=null? bed.temperature.toFixed(1) : null;
+    }catch(_){}
+  }
+
+  /* ── Live render ─────────────────────────────────────────────── */
+  function render(){
+    if(SIM.on){ renderSim(); return; }
+
+    tx("lastUpdated", new Date().toLocaleTimeString());
+
+    /* connection pill */
+    const connected = V.apiOk || V.ardu;
+    $("connDot").className   = "dot" + (connected ? " good live-pulse" : " warn");
+    tx("connState", connected ? "ONLINE" : "TRYING");
+
+    /* parse states */
+    const gateOpen  = String(V.gate).toUpperCase().includes("OPEN");
+    const gateMove  = ["OPENING","CLOSING"].includes(String(V.gate).toUpperCase());
+    const doorsOpen = String(V.door).toUpperCase().includes("OPEN");
+    const doorsMove = ["OPENING","CLOSING"].includes(String(V.door).toUpperCase());
+    const motorRun  = (V.pwm||0) > 0;
+    const dryerOn   = V.dryer;
+    const printing  = V.printer.state === "PRINTING";
+
+    /* gate visual */
+    $("gateViz").classList.toggle("open", gateOpen);
+    /* doors visual */
+    $("doorsViz").classList.toggle("open", doorsOpen);
+
+    /* panel active states */
+    setPanel("pnl-conveyor", V.ardu);
+    setPanel("pnl-gate",     !gateMove && gateOpen, gateMove);
+    setPanel("pnl-shredder", gateOpen);
+    setPanel("pnl-mixer",    dryerOn);
+    setPanel("pnl-doors",    !doorsMove && doorsOpen, doorsMove);
+    setPanel("pnl-vacuum",   motorRun);
+    setPanel("pnl-printer",  printing);
+    setPanel("pnl-energy",   motorRun || V.energy.P != null);
+
+    /* LED dots */
+    setDot("pd-conveyor", V.ardu  ? "good" : "bad");
+    setDot("pd-gate",     gateOpen?"good":gateMove?"warn":"");
+    setDot("pd-shredder", gateOpen?"good":"");
+    setDot("pd-mixer",    dryerOn ?"good":"");
+    setDot("pd-doors",    doorsOpen?"good":doorsMove?"warn":"");
+    setDot("pd-vacuum",   motorRun?"good":"");
+    setDot("pd-printer",  printing?"good":(V.printer.state!=="—"?"warn":""));
+    setDot("pd-energy",   V.energy.P!=null?"good":"");
+
+    /* status chips */
+    setChip("chip-conveyor", V.ardu?"RUNNING":"OFFLINE",   V.ardu?"good":"bad");
+    setChip("chip-gate",     V.gate||"—",                  chipCls(V.gate));
+    setChip("chip-shredder", gateOpen?"ACTIVE":"IDLE",      gateOpen?"good":"");
+    setChip("chip-mixer",    V.dry.dryer_state_guess||"—", chipCls(V.dry.dryer_state_guess));
+    setChip("chip-doors",    V.door||"—",                  chipCls(V.door));
+    setChip("chip-vacuum",   motorRun?"RUNNING":"STOPPED",  motorRun?"good":"");
+    setChip("chip-printer",  V.printer.state||"—",         chipCls(V.printer.state));
+
+    /* dryer telemetry */
+    const d = V.dry;
+    tx("m-proc-t", d.process_temp!=null ? (d.process_temp/10).toFixed(1) : "—");
+    tx("m-dp",     d.actual_dewpoint!=null ? (d.actual_dewpoint/10).toFixed(1) : "—");
+    const pSp = d.process_setpoint;
+    const pT  = d.process_temp!=null ? d.process_temp/10 : null;
+    const stab = pT!=null&&pSp!=null ? cl(100-Math.abs(pT-pSp)*5,0,100) : 0;
+    $("m-dryer-bar").style.width = stab + "%";
+
+    /* printer telemetry */
+    tx("m-nozzle", V.printer.nozzle||"—");
+    tx("m-bed",    V.printer.bed||"—");
+    $("m-print-bar").style.width = (V.printer.progress!=null?V.printer.progress:0)+"%";
+
+    /* vacuum / motor */
+    tx("m-pwm", V.pwm||0);
+    $("m-pwm-bar").style.width = cl((V.pwm||0)/255*100,0,100)+"%";
+    tx("m-dir", V.dir||"—");
+
+    /* doors telemetry */
+    tx("m-da", V.doorA);
+    tx("m-db", V.doorB);
+
+    /* energy */
+    const en = V.energy;
+    const wp = en.P!=null ? en.P.toFixed(1) : "—";
+    tx("m-watts", wp);
+    tx("m-volt",  en.V!=null ? en.V.toFixed(2)+"V" : "—");
+    tx("m-amp",   en.I!=null ? en.I.toFixed(3)+"A" : "—");
+    tx("m-pow",   wp!=="—"   ? wp+"W"               : "—");
+    $("eb-v").style.width = en.V!=null ? cl(en.V/15*100,0,100)+"%" : "0%";
+    $("eb-i").style.width = en.I!=null ? cl(en.I/5*100,0,100)+"%"  : "0%";
+    $("eb-p").style.width = en.P!=null ? cl(en.P/50*100,0,100)+"%" : "0%";
+
+    /* pipe flows */
+    setPipe("pf1", V.ardu);
+    setPipe("pf2", gateOpen);
+    setPipe("pf3", gateOpen && dryerOn);
+    setPipe("pf4", dryerOn);
+    setPipe("pf5", doorsOpen && motorRun);
+    setPipe("pf6", motorRun);
+  }
+
+  /* ── Simulation ──────────────────────────────────────────────── */
+  const STAGES = [
+    {id:"pnl-conveyor", pipe:"pf1", dwell:3 },
+    {id:"pnl-gate",     pipe:"pf2", dwell:2 },
+    {id:"pnl-shredder", pipe:"pf3", dwell:4 },
+    {id:"pnl-mixer",    pipe:"pf4", dwell:8 },
+    {id:"pnl-doors",    pipe:"pf5", dwell:2 },
+    {id:"pnl-vacuum",   pipe:"pf6", dwell:3 },
+    {id:"pnl-printer",  pipe:null,  dwell:12},
+  ];
+  const BCOLS = ["bc0","bc1","bc2","bc3"];
+  const SBCLS = ["sb0","sb1","sb2","sb3"];
+
+  const SIM = {
+    on:false, batches:[], nextId:0, iid:null,
+    vars:{ dT:172.4, pct:34, pwm:180, tick:0 }
+  };
+
+  function toggleSim(){
+    SIM.on = !SIM.on;
+    $("simToggle").classList.toggle("on", SIM.on);
+    if(SIM.on){
+      SIM.batches=[]; SIM.nextId=0;
+      spawnBatch();
+      SIM.iid = setInterval(simTick, 650);
+    } else {
+      if(SIM.iid){ clearInterval(SIM.iid); SIM.iid=null; }
+      SIM.batches=[];
+      STAGES.forEach(s=>{
+        const e=$(s.id); if(!e) return;
+        e.classList.remove("active","warn-state",...SBCLS);
+        const bd = e.querySelector(".bdots"); if(bd) bd.innerHTML="";
+        if(s.pipe) setPipe(s.pipe,false);
+      });
+      SIM.vars = {dT:172.4,pct:34,pwm:180,tick:0};
+      render();
+    }
+  }
+
+  function spawnBatch(){
+    SIM.batches.push({id:SIM.nextId, si:0, t:0, ci:SIM.nextId%4});
+    SIM.nextId++;
+  }
+
+  function simTick(){
+    let doSpawn = false;
+    SIM.batches = SIM.batches.filter(b=>{
+      b.t++;
+      if(b.t >= STAGES[b.si].dwell){
+        b.si++; b.t=0;
+        if(b.si === 3) doSpawn = true; // trigger spawn at shredder exit
+      }
+      return b.si < STAGES.length;
+    });
+    if(doSpawn && !SIM.batches.some(b=>b.si===0&&b.t<2)) spawnBatch();
+    renderSim();
+  }
+
+  function renderSim(){
+    const sv = SIM.vars;
+    sv.tick++;
+    if(sv.tick%3===0){
+      sv.dT  = Math.max(155, Math.min(195, sv.dT + (Math.random()-.48)*.9));
+      sv.pct = Math.min(99,  sv.pct + (Math.random()<.65?1:0));
+      sv.pwm = Math.max(120, Math.min(235, sv.pwm + Math.round((Math.random()-.5)*8)));
+    }
+
+    tx("lastUpdated", new Date().toLocaleTimeString());
+    $("connDot").className = "dot good live-pulse";
+    tx("connState","ONLINE");
+
+    /* build panel→colors map */
+    const colors = {}; // panelId → colorIdx[]
+    for(const b of SIM.batches){
+      const id = STAGES[b.si].id;
+      if(!colors[id]) colors[id] = [];
+      colors[id].push(b.ci);
+    }
+    const occ = id => colors[id]&&colors[id].length>0;
+
+    /* apply panel states */
+    STAGES.forEach((s,i)=>{
+      const e = $(s.id); if(!e) return;
+      const cs = colors[s.id]||[];
+      e.classList.remove("active","warn-state",...SBCLS);
+      if(cs.length) e.classList.add(SBCLS[cs[cs.length-1]]);
+
+      /* batch dots */
+      const bd = e.querySelector(".bdots");
+      if(bd) bd.innerHTML = cs.map(c=>`<span class="bdot ${BCOLS[c]}"></span>`).join("");
+
+      /* pipe after this stage */
+      if(s.pipe){
+        const nextOcc = STAGES[i+1] && occ(STAGES[i+1].id);
+        setPipe(s.pipe, occ(s.id) || nextOcc);
+      }
+    });
+
+    /* gate */
+    const gateActive = occ("pnl-gate")||occ("pnl-shredder");
+    $("gateViz").classList.toggle("open", gateActive);
+    setChip("chip-gate", gateActive?"OPEN":"CLOSED", gateActive?"good":"");
+
+    /* doors */
+    const doorsActive = occ("pnl-doors")||occ("pnl-vacuum");
+    $("doorsViz").classList.toggle("open", doorsActive);
+    setChip("chip-doors", doorsActive?"OPEN":"CLOSED", doorsActive?"good":"");
+
+    /* other chips */
+    setChip("chip-conveyor", "RUNNING",                             "good");
+    setChip("chip-shredder", gateActive?"ACTIVE":"IDLE",            gateActive?"good":"");
+    setChip("chip-mixer",    occ("pnl-mixer")?"DRYING":"STANDBY",   occ("pnl-mixer")?"good":"warn");
+    setChip("chip-vacuum",   occ("pnl-vacuum")?"RUNNING":"STOPPED", occ("pnl-vacuum")?"good":"");
+    setChip("chip-printer",  occ("pnl-printer")?"PRINTING":"STANDBY",occ("pnl-printer")?"good":"warn");
+
+    /* dryer numbers */
+    tx("m-proc-t", sv.dT.toFixed(1));
+    tx("m-dp",     (sv.dT*.28 - 24).toFixed(1));
+    const stab = cl(100 - Math.abs(sv.dT-175)*5, 0, 100);
+    $("m-dryer-bar").style.width = stab+"%";
+
+    /* printer */
+    tx("m-nozzle","235.0"); tx("m-bed","60.0");
+    $("m-print-bar").style.width = sv.pct+"%";
+
+    /* vacuum / motor */
+    const vacOn = occ("pnl-vacuum");
+    tx("m-pwm",    vacOn ? sv.pwm : 0);
+    $("m-pwm-bar").style.width = vacOn ? cl(sv.pwm/255*100,0,100)+"%" : "0%";
+    tx("m-dir", "FWD");
+
+    /* doors telemetry sim */
+    tx("m-da", doorsActive?"480–1024":"0–480");
+    tx("m-db", doorsActive?"480–1024":"0–480");
+
+    /* energy sim */
+    const effPwm = vacOn ? sv.pwm : 0;
+    const pw = (effPwm/255)*46;
+    const vv = 12.0 + (Math.random()-.5)*.18;
+    const ii = pw/(vv||12);
+    tx("m-watts", pw.toFixed(1));
+    tx("m-volt",  vv.toFixed(2)+"V");
+    tx("m-amp",   ii.toFixed(3)+"A");
+    tx("m-pow",   pw.toFixed(1)+"W");
+    $("eb-v").style.width = cl(vv/15*100,0,100)+"%";
+    $("eb-i").style.width = cl(ii/5*100,0,100)+"%";
+    $("eb-p").style.width = cl(pw/50*100,0,100)+"%";
+
+    /* LED dots from chip activity */
+    setDot("pd-conveyor","good");
+    setDot("pd-gate",    gateActive?"good":"");
+    setDot("pd-shredder",gateActive?"good":"");
+    setDot("pd-mixer",   occ("pnl-mixer")?"good":"");
+    setDot("pd-doors",   doorsActive?"good":"");
+    setDot("pd-vacuum",  vacOn?"good":"");
+    setDot("pd-printer", occ("pnl-printer")?"good":"warn");
+    setDot("pd-energy",  vacOn?"good":"");
+  }
+
+  /* ── Main poll loop ──────────────────────────────────────────── */
+  async function poll(){
+    await Promise.allSettled([pollDryer(), pollArduino(), pollPrinter()]);
+    if(!SIM.on) render();
+  }
+
+  poll();
+  setInterval(poll, POLL_MS);
+  </script>
+</body>
+</html>

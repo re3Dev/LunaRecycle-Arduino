@@ -414,7 +414,9 @@
     .pipeline{ display:flex; align-items:stretch; overflow-x:auto; padding-bottom:2px; gap:4px; }
     .pline-node{
       flex: 1 1 0; min-width: 84px;
-      display:flex; flex-direction:column; align-items:center; gap:4px;
+      display:grid;
+      grid-template-rows: 56px auto auto auto auto;
+      justify-items:center; align-content:start; gap:4px;
       padding: 8px 6px 8px;
       border-radius: 8px;
       border: 1px solid rgba(255,255,255,.07);
@@ -615,104 +617,43 @@
     .gear-icon{ display:inline-block; font-size:15px; line-height:1; opacity:.60; }
     .pline-node.active .gear-icon{ animation: gear-spin 2s linear infinite; opacity:.90; }
 
-    /* -- 2-pole shredder visualizer ----------------------------------------- */
+    /* -- 2-roller shredder visualizer --------------------------------------- */
     .shred-viz{
-      width:58px; height:44px; position:relative;
+      display:block; width:70px; height:50px; overflow:visible;
       margin:0 auto 2px;
       opacity:.25; transition:opacity .3s;
     }
     .pline-node.active .shred-viz,
     .pline-node.sim-b0 .shred-viz, .pline-node.sim-b1 .shred-viz,
     .pline-node.sim-b2 .shred-viz, .pline-node.sim-b3 .shred-viz { opacity:1; }
-    /* Two circular rollers */
-    .shred-roller{
-      position:absolute; top:4px;
-      width:24px; height:24px; border-radius:50%;
-      border:2px solid rgba(232,238,248,.35);
-      overflow:hidden;
-    }
-    .shred-roller.left { left:3px; }
-    .shred-roller.right{ right:3px; }
-    /* Striped fill scrolls to simulate rotation */
-    .shred-roller::before{
-      content:'';
-      position:absolute; inset:-4px;
-      background: repeating-linear-gradient(
-        45deg,
-        rgba(232,238,248,.40) 0px, rgba(232,238,248,.40) 3px,
-        rgba(122,167,255,.25) 3px, rgba(122,167,255,.25) 8px
-      );
+    /* Gear groups rotate around their geometric centre */
+    .shred-gear{
+      transform-box: fill-box;
+      transform-origin: 50% 50%;
       animation-play-state: paused;
     }
-    .shred-roller.left::before { animation: roller-cw  0.7s linear infinite paused; }
-    .shred-roller.right::before{ animation: roller-ccw 0.7s linear infinite paused; }
-    .pline-node.active  .shred-roller::before,
-    .pline-node.sim-b0  .shred-roller::before, .pline-node.sim-b1 .shred-roller::before,
-    .pline-node.sim-b2  .shred-roller::before, .pline-node.sim-b3 .shred-roller::before
+    .shred-gear-left  { animation: shred-cw  1.5s linear infinite; animation-play-state: paused; }
+    .shred-gear-right { animation: shred-ccw 1.5s linear infinite; animation-play-state: paused; }
+    .pline-node.active  .shred-gear,
+    .pline-node.sim-b0  .shred-gear, .pline-node.sim-b1 .shred-gear,
+    .pline-node.sim-b2  .shred-gear, .pline-node.sim-b3 .shred-gear
     { animation-play-state: running; }
-    /* Tooth ring — radial spikes around the roller circumference */
-    .shred-roller::after{
-      content:'';
-      position:absolute; inset:-1px;
-      border-radius:50%;
-      /* 8-point star via repeating conic gradient */
-      background: conic-gradient(
-        from 0deg,
-        transparent  0deg,  transparent  16deg,
-        rgba(232,238,248,.70) 16deg, rgba(232,238,248,.70) 29deg,
-        transparent 29deg,  transparent 45deg,
-        rgba(232,238,248,.70) 45deg, rgba(232,238,248,.70) 58deg,
-        transparent 58deg,  transparent 90deg,
-        rgba(232,238,248,.70) 90deg, rgba(232,238,248,.70) 103deg,
-        transparent 103deg, transparent 135deg,
-        rgba(232,238,248,.70) 135deg, rgba(232,238,248,.70) 148deg,
-        transparent 148deg, transparent 180deg,
-        rgba(232,238,248,.70) 180deg, rgba(232,238,248,.70) 193deg,
-        transparent 193deg, transparent 225deg,
-        rgba(232,238,248,.70) 225deg, rgba(232,238,248,.70) 238deg,
-        transparent 238deg, transparent 270deg,
-        rgba(232,238,248,.70) 270deg, rgba(232,238,248,.70) 283deg,
-        transparent 283deg, transparent 315deg,
-        rgba(232,238,248,.70) 315deg, rgba(232,238,248,.70) 328deg,
-        transparent 328deg, transparent 360deg
-      );
-      -webkit-mask: radial-gradient(circle, transparent 38%, black 38% 50%, transparent 50%);
-              mask: radial-gradient(circle, transparent 38%, black 38% 50%, transparent 50%);
-      animation-play-state: paused;
+    /* Debris dots fall from the nip */
+    .shred-debris-dot{
+      transform-box: fill-box; transform-origin: 50% 50%;
+      animation: shred-fall 1.2s linear infinite; animation-play-state: paused;
     }
-    .shred-roller.left::after { animation: roller-cw  0.7s linear infinite paused; }
-    .shred-roller.right::after{ animation: roller-ccw 0.7s linear infinite paused; }
-    .pline-node.active  .shred-roller::after,
-    .pline-node.sim-b0  .shred-roller::after, .pline-node.sim-b1 .shred-roller::after,
-    .pline-node.sim-b2  .shred-roller::after, .pline-node.sim-b3 .shred-roller::after
+    .pline-node.active  .shred-debris-dot,
+    .pline-node.sim-b0  .shred-debris-dot, .pline-node.sim-b1 .shred-debris-dot,
+    .pline-node.sim-b2  .shred-debris-dot, .pline-node.sim-b3 .shred-debris-dot
     { animation-play-state: running; }
-    /* Nip point gap line */
-    .shred-nip{
-      position:absolute; top:4px; left:50%; transform:translateX(-50%);
-      width:2px; height:24px;
-      background: linear-gradient(180deg,
-        rgba(255,255,255,.06), rgba(255,92,122,.20) 40%, rgba(255,255,255,.06));
-    }
-    /* Debris falls from the nip */
-    .shred-debris{
-      position:absolute; top:18px; left:50%; transform:translateX(-50%);
-      width:3px; height:3px; border-radius:50%;
-      background:var(--warn); opacity:0;
-      animation: shred-fall 1.2s linear infinite paused;
-    }
-    .shred-debris:nth-child(3){ animation-delay:.40s; }
-    .shred-debris:nth-child(4){ animation-delay:.80s; }
-    .pline-node.active .shred-debris,
-    .pline-node.sim-b0 .shred-debris, .pline-node.sim-b1 .shred-debris,
-    .pline-node.sim-b2 .shred-debris, .pline-node.sim-b3 .shred-debris
-    { animation-play-state: running; }
-    @keyframes roller-cw { from{ background-position:0 0; } to{ background-position:11px 11px; } }
-    @keyframes roller-ccw{ from{ background-position:0 0; } to{ background-position:-11px 11px; } }
+    @keyframes shred-cw  { to { transform: rotate( 360deg); } }
+    @keyframes shred-ccw { to { transform: rotate(-360deg); } }
     @keyframes shred-fall{
-      0%  { opacity:0; transform:translateX(-50%) translateY(0)   scale(.6); }
-      20% { opacity:1; transform:translateX(-50%) translateY(2px)  scale(1);  }
-      80% { opacity:.8; transform:translateX(-50%) translateY(16px) scale(.8); }
-      100%{ opacity:0; transform:translateX(-50%) translateY(20px) scale(.4); }
+      0%  { opacity:0;  transform:translateY(0);    }
+      20% { opacity:1;  transform:translateY(3px);  }
+      80% { opacity:.8; transform:translateY(12px); }
+      100%{ opacity:0;  transform:translateY(16px); }
     }
 
     /* -- Vacuum tube visualizer ---------------------------------------------- */
@@ -772,64 +713,80 @@
     }
 
     /* -- Corkscrew mixer visualizer ----------------------------------------- */
+    /* -- Mixer/Dryer corkscrew visualizer ---------------------------------- */
     .screw-viz{
-      width:28px; height:52px; position:relative;
-      margin:0 auto 2px; overflow:hidden;
+      width:30px; height:52px;
+      margin:0 auto 2px;
       border-radius:4px;
-      border:1px solid rgba(232,238,248,.12);
-      background:rgba(0,0,0,.18);
+      border:1.2px solid rgba(232,238,248,.22);
+      background:rgba(0,0,0,.25);
+      overflow:hidden; position:relative;
       opacity:.25; transition:opacity .3s;
     }
     .pline-node.active    .screw-viz,
     .pline-node.sim-b0    .screw-viz, .pline-node.sim-b1 .screw-viz,
     .pline-node.sim-b2    .screw-viz, .pline-node.sim-b3 .screw-viz { opacity:1; }
-    /* Shaft — vertical line through centre */
-    .screw-shaft{
-      position:absolute; left:50%; top:4px; bottom:4px; width:2px;
-      transform:translateX(-50%);
-      background:rgba(232,238,248,.45); border-radius:1px;
-    }
-    /* Helix — repeating diagonal stripes that scroll downward */
-    .screw-helix{
+    /* Inner tile: SVG background repeating every 14px (one pitch) */
+    .screw-helix-anim{
       position:absolute; inset:0;
-      background: repeating-linear-gradient(
-        20deg,
-        transparent           0px,
-        transparent           4px,
-        rgba(122,167,255,.55) 4px,
-        rgba(122,167,255,.55) 7px,
-        transparent           7px,
-        transparent           18px
-      );
-      animation: screw-scroll 0.9s linear infinite paused;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 14'%3E%3Cline x1='15' y1='0' x2='15' y2='14' stroke='%23e8eef8' stroke-width='1.5' opacity='.45'/%3E%3Cpath fill='none' stroke='%237aa7ff' stroke-width='2.8' stroke-linecap='round' opacity='.35' d='M 15,0 C 26,0 26,7 15,7'/%3E%3Cpath fill='none' stroke='%237aa7ff' stroke-width='2.8' stroke-linecap='round' opacity='.90' d='M 15,7 C 4,7 4,14 15,14'/%3E%3C/svg%3E");
+      background-size: 30px 14px;
+      background-repeat: repeat-y;
+      background-position: 0 0;
+      -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 22%, black 78%, transparent 100%);
+              mask-image: linear-gradient(to bottom, transparent 0%, black 22%, black 78%, transparent 100%);
+      animation: screw-scroll 0.9s linear infinite;
+      animation-play-state: paused;
     }
-    .pline-node.active .screw-helix,
-    .pline-node.sim-b0 .screw-helix, .pline-node.sim-b1 .screw-helix,
-    .pline-node.sim-b2 .screw-helix, .pline-node.sim-b3 .screw-helix
-    { animation-play-state: running; }
-    /* Particles conveyed downward by the screw */
-    .screw-particle{
-      position:absolute; left:50%; width:4px; height:4px;
-      border-radius:50%; background:var(--warn);
-      transform:translateX(-50%);
-      animation: screw-push 1.8s linear infinite paused;
-      opacity:0;
-    }
-    .screw-particle:nth-child(3){ animation-delay:.60s; }
-    .screw-particle:nth-child(4){ animation-delay:1.20s; }
-    .pline-node.active .screw-particle,
-    .pline-node.sim-b0 .screw-particle, .pline-node.sim-b1 .screw-particle,
-    .pline-node.sim-b2 .screw-particle, .pline-node.sim-b3 .screw-particle
+    .pline-node.active .screw-helix-anim,
+    .pline-node.sim-b0 .screw-helix-anim, .pline-node.sim-b1 .screw-helix-anim,
+    .pline-node.sim-b2 .screw-helix-anim, .pline-node.sim-b3 .screw-helix-anim
     { animation-play-state: running; }
     @keyframes screw-scroll{
-      from{ background-position: 0 0; }
-      to  { background-position: 0 22px; }
+      from{ background-position: 0 0px;  }
+      to  { background-position: 0 14px; }
     }
-    @keyframes screw-push{
-      0%  { top:4px;  opacity:0; }
-      8%  { opacity:1; }
-      88% { opacity:1; }
-      100%{ top:calc(100% - 8px); opacity:0; }
+    /* -- Printer visualizer ------------------------------------------------- */
+    .printer-viz{
+      display:block; width:52px; height:52px;
+      margin:0 auto 2px;
+      opacity:.25; transition:opacity .3s;
+    }
+    .pline-node.active .printer-viz,
+    .pline-node.sim-b0 .printer-viz, .pline-node.sim-b1 .printer-viz,
+    .pline-node.sim-b2 .printer-viz, .pline-node.sim-b3 .printer-viz { opacity:1; }
+    /* Nozzle sweeps left→right repeatedly */
+    .printer-nozzle-grp{
+      animation: nozzle-sweep 2.4s linear infinite;
+      animation-play-state: paused;
+    }
+    .pline-node.active .printer-nozzle-grp,
+    .pline-node.sim-b0 .printer-nozzle-grp, .pline-node.sim-b1 .printer-nozzle-grp,
+    .pline-node.sim-b2 .printer-nozzle-grp, .pline-node.sim-b3 .printer-nozzle-grp
+    { animation-play-state: running; }
+    @keyframes nozzle-sweep{
+      0%   { transform: translateX(0px);  }
+      45%  { transform: translateX(28px); }
+      50%  { transform: translateX(28px); }
+      95%  { transform: translateX(0px);  }
+      100% { transform: translateX(0px);  }
+    }
+    /* Extruded bead follows nozzle */
+    .printer-bead{
+      animation: bead-grow 2.4s linear infinite;
+      animation-play-state: paused;
+      transform-origin: left center;
+    }
+    .pline-node.active .printer-bead,
+    .pline-node.sim-b0 .printer-bead, .pline-node.sim-b1 .printer-bead,
+    .pline-node.sim-b2 .printer-bead, .pline-node.sim-b3 .printer-bead
+    { animation-play-state: running; }
+    @keyframes bead-grow{
+      0%   { transform: scaleX(0);    opacity:1; }
+      45%  { transform: scaleX(1);    opacity:1; }
+      50%  { transform: scaleX(1);    opacity:.5; }
+      55%  { transform: scaleX(1);    opacity:.3; }
+      100% { transform: scaleX(1);    opacity:.3; }
     }
   </style>
 </head>
@@ -1039,27 +996,45 @@
             <div class="pline-connector" id="parrow-2"></div>
             <!-- 3. Shredder -->
             <div class="pline-node" id="pnode-shredder">
-              <div class="shred-viz">
-                <div class="shred-roller left"></div>
-                <div class="shred-roller right"></div>
-                <div class="shred-nip"></div>
-                <div class="shred-debris"></div>
-                <div class="shred-debris"></div>
-                <div class="shred-debris"></div>
-              </div>
+              <svg class="shred-viz" viewBox="0 0 70 50" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <!-- Left roller — rotates clockwise -->
+                <g class="shred-gear shred-gear-left">
+                  <circle cx="18" cy="22" r="11" fill="rgba(100,140,200,0.28)" stroke="rgba(180,205,240,0.55)" stroke-width="1.5"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(0   18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(45  18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(90  18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(135 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(180 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(225 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(270 18 22)"/>
+                  <rect x="16.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(315 18 22)"/>
+                </g>
+                <!-- Right roller — rotates counter-clockwise, offset 22.5° for visual interleave -->
+                <g class="shred-gear shred-gear-right">
+                  <circle cx="52" cy="22" r="11" fill="rgba(100,140,200,0.28)" stroke="rgba(180,205,240,0.55)" stroke-width="1.5"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(22.5  52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(67.5  52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(112.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(157.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(202.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(247.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(292.5 52 22)"/>
+                  <rect x="50.5" y="6"  width="3" height="5" rx="0.8" fill="rgba(210,225,250,0.85)" transform="rotate(337.5 52 22)"/>
+                </g>
+                <!-- Nip gap glow -->
+                <line x1="35" y1="12" x2="35" y2="32" stroke="rgba(255,92,122,0.28)" stroke-width="1.5" stroke-linecap="round"/>
+                <!-- Debris dots -->
+                <circle class="shred-debris-dot" cx="35" cy="34" r="1.5" fill="#ffcf5a" opacity="0" style="animation-delay:0s"/>
+                <circle class="shred-debris-dot" cx="35" cy="34" r="1.5" fill="#ffcf5a" opacity="0" style="animation-delay:.4s"/>
+                <circle class="shred-debris-dot" cx="35" cy="34" r="1.5" fill="#ffcf5a" opacity="0" style="animation-delay:.8s"/>
+              </svg>
               <div class="pline-label">Shredder</div>
               <div class="pline-sub">via gate</div>
             </div>
             <div class="pline-connector" id="parrow-3"></div>
             <!-- 4. Mixer / Dryer -->
             <div class="pline-node" id="pnode-dryer">
-              <div class="screw-viz">
-                <div class="screw-helix"></div>
-                <div class="screw-shaft"></div>
-                <div class="screw-particle"></div>
-                <div class="screw-particle"></div>
-                <div class="screw-particle"></div>
-              </div>
+              <div class="screw-viz"><div class="screw-helix-anim"></div></div>
               <div class="pline-label">Mixer /<br>Dryer</div>
               <span class="statechip" id="dryerFlowChip">&mdash;</span>
               <div class="pline-sub" id="dryerFlowTemp">&mdash;</div>
@@ -1093,7 +1068,34 @@
             <div class="pline-connector" id="parrow-6"></div>
             <!-- 7. Printer -->
             <div class="pline-node" id="pnode-printer">
-              <div class="pline-icon">&#x2399;</div>
+              <svg class="printer-viz" viewBox="0 0 52 52" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <!-- Build plate -->
+                <rect x="4" y="46" width="44" height="3" rx="1.5"
+                      fill="rgba(232,238,248,.25)" stroke="rgba(232,238,248,.30)" stroke-width=".8"/>
+                <!-- Printed layers (static, stacked up from plate) -->
+                <rect x="8"  y="43" width="36" height="3" rx="1" fill="rgba(49,208,170,.30)"/>
+                <rect x="8"  y="40" width="36" height="3" rx="1" fill="rgba(49,208,170,.40)"/>
+                <rect x="8"  y="37" width="36" height="3" rx="1" fill="rgba(49,208,170,.55)"/>
+                <!-- Active layer bead — grows left to right under the nozzle -->
+                <rect class="printer-bead" x="8" y="34" width="36" height="3" rx="1"
+                      fill="rgba(122,167,255,.90)"/>
+                <!-- Gantry rail -->
+                <rect x="2" y="12" width="48" height="3" rx="1.5"
+                      fill="rgba(232,238,248,.20)" stroke="rgba(232,238,248,.25)" stroke-width=".8"/>
+                <!-- Nozzle carriage — sweeps along rail -->
+                <g class="printer-nozzle-grp">
+                  <!-- Carriage block -->
+                  <rect x="6" y="10" width="10" height="7" rx="2"
+                        fill="rgba(122,167,255,.55)" stroke="rgba(122,167,255,.80)" stroke-width="1"/>
+                  <!-- Hotend body -->
+                  <rect x="9" y="17" width="4" height="8" rx="1"
+                        fill="rgba(232,238,248,.45)"/>
+                  <!-- Nozzle tip -->
+                  <polygon points="9,25 13,25 11.5,30" fill="rgba(255,207,90,.90)"/>
+                  <!-- Filament drip dot -->
+                  <circle cx="11" cy="31" r="1.5" fill="rgba(255,207,90,.95)"/>
+                </g>
+              </svg>
               <div class="pline-label">Printer</div>
               <span class="statechip" id="printerFlowChip">&mdash;</span>
               <div class="pline-sub" id="printerFlowProgress">&mdash;</div>

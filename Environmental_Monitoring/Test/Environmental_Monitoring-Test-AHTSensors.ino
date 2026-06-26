@@ -1,3 +1,10 @@
+/*
+ * Test code for connecting multiple I2C temperature & humidity sensors with the same address to an Arduino
+ * using an I2C multiplexer chip.
+ * Part of the LunaRecycle Challenge Project; re:3D Inc
+ * June 2026
+*/
+
 #include <Wire.h>
 #include <Adafruit_AHTX0.h>
 

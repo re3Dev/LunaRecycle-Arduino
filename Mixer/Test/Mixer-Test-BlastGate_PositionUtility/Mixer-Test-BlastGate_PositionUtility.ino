@@ -33,13 +33,14 @@
 
 #include <Servo.h>
 
-// ── Pin assignments (per pinmap_mega2560.md) ────────────────────────────────
-// RoboClaw RC channels: D8 = left gate (ch1), D9 = right gate (ch2).
-// NOTE: if your bench wiring follows the older single-actuator test sketch
-// (actuator on D9, limits on D2/D3), change these to match your setup.
-const int GATE_PIN[2]      = { 8, 9 };     // [LEFT, RIGHT] RC pulse output
-const int GATE_MIN_PIN[2]  = { 37, 39 };   // [LEFT, RIGHT] MIN limit switch
-const int GATE_MAX_PIN[2]  = { 38, 40 };   // [LEFT, RIGHT] MAX limit switch
+// ── Pin assignments ─────────────────────────────────────────────────────────
+// Mapping corrected for actual bench wiring: LEFT/RIGHT channels and MIN/MAX
+// limit switches are swapped relative to pinmap_mega2560.md.
+//   LEFT  gate  -> RC D9, limits MIN=D40 MAX=D39
+//   RIGHT gate  -> RC D8, limits MIN=D38 MAX=D37
+const int GATE_PIN[2]      = { 9, 8 };     // [LEFT, RIGHT] RC pulse output
+const int GATE_MIN_PIN[2]  = { 40, 38 };   // [LEFT, RIGHT] MIN limit switch
+const int GATE_MAX_PIN[2]  = { 39, 37 };   // [LEFT, RIGHT] MAX limit switch
 const char* GATE_NAME[2]   = { "LEFT", "RIGHT" };
 
 const int LEFT  = 0;

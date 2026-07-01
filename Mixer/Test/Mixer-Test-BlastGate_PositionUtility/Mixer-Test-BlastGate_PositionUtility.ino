@@ -63,6 +63,10 @@ unsigned long strokeMs[2]  = { DEFAULT_STROKE_MS, DEFAULT_STROKE_MS };
 long          positionMs[2] = { 0, 0 };         // estimated ms of travel from MIN
 bool          calibrated[2] = { false, false };
 
+// Edge-tracking for limit-switch press/release reporting.
+bool          prevMin[2] = { false, false };
+bool          prevMax[2] = { false, false };
+
 String cmdBuffer;
 
 // ── Low-level helpers ───────────────────────────────────────────────────────
@@ -87,6 +91,28 @@ bool abortRequested() {
   return false;
 }
 
+// Watch all four limit switches and report press / release transitions.
+// Called both at idle and inside every move loop, so presses are caught
+// at any time.
+void monitorLimits() {
+  for (int g = 0; g < 2; g++) {
+    bool m = minHit(g);
+    if (m != prevMin[g]) {
+      Serial.print(F("["));
+      Serial.print(GATE_NAME[g]);
+      Serial.println(m ? F("] MIN limit PRESSED") : F("] MIN limit released"));
+      prevMin[g] = m;
+    }
+    bool x = maxHit(g);
+    if (x != prevMax[g]) {
+      Serial.print(F("["));
+      Serial.print(GATE_NAME[g]);
+      Serial.println(x ? F("] MAX limit PRESSED") : F("] MAX limit released"));
+      prevMax[g] = x;
+    }
+  }
+}
+
 // ── Homing / calibration ────────────────────────────────────────────────────
 bool gateHome(int g) {
   Serial.print(F("["));
@@ -95,6 +121,7 @@ bool gateHome(int g) {
 
   unsigned long start = millis();
   while (!minHit(g)) {
+    monitorLimits();
     if (abortRequested()) { gateStop(g); Serial.println(F("  aborted")); return false; }
     gateRetract(g);
     if (millis() - start > MOVE_TIMEOUT_MS) {
@@ -119,6 +146,7 @@ bool gateCalibrate(int g) {
 
   unsigned long start = millis();
   while (!maxHit(g)) {
+    monitorLimits();
     if (abortRequested()) { gateStop(g); Serial.println(F("  aborted")); return false; }
     gateExtend(g);
     if (millis() - start > MOVE_TIMEOUT_MS) {
@@ -177,6 +205,7 @@ void gateMoveToPercent(int g, float pct) {
   unsigned long start = millis();
   bool hitLimit = false;
   while (millis() - start < moveTime) {
+    monitorLimits();
     if (abortRequested()) { Serial.println(F("  aborted")); break; }
     if (extending) {
       if (maxHit(g)) { hitLimit = true; break; }
@@ -216,6 +245,7 @@ void gateJog(int g, bool extend, unsigned long ms) {
 
   unsigned long start = millis();
   while (millis() - start < ms) {
+    monitorLimits();
     if (abortRequested()) { Serial.println(F("  aborted")); break; }
     if (extend) {
       if (maxHit(g)) { Serial.println(F("  MAX limit")); break; }
@@ -379,4 +409,5 @@ void setup() {
 
 void loop() {
   readSerial();
+  monitorLimits();
 }

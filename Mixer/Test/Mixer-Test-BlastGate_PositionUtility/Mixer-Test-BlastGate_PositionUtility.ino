@@ -25,6 +25,7 @@
  *   pos  <L|R> <0-100>      Move a gate to a % of its stroke
  *   ext  <L|R> <ms>         Jog extend  (toward MAX) for <ms> milliseconds
  *   ret  <L|R> <ms>         Jog retract (toward MIN) for <ms> milliseconds
+ *   speed <1-100>           Set motion speed as a % of full speed
  *   stop                    Stop both actuators immediately
  *   status                  Print calibration + estimated position
  *   help                    Reprint this command list
@@ -48,8 +49,13 @@ const int RIGHT = 1;
 
 // ── RC pulse widths ─────────────────────────────────────────────────────────
 const int STOP_US    = 1500;
-const int EXTEND_US  = 1000;   // drive toward MAX (fully extended)
-const int RETRACT_US = 2000;   // drive toward MIN (shortest stroke)
+const int EXTEND_US  = 1000;   // drive toward MAX (fully extended) at full speed
+const int RETRACT_US = 2000;   // drive toward MIN (shortest stroke) at full speed
+
+// Motion speed as a percentage of full speed (1-100). Scales how far the RC
+// pulse sits from the 1500 us neutral: 100% uses the full extremes above,
+// lower values move the pulse closer to neutral for slower travel.
+int speedPct = 100;
 
 // ── Motion tunables ─────────────────────────────────────────────────────────
 const unsigned long MOVE_TIMEOUT_MS   = 8000;   // guard for any single move
@@ -74,8 +80,14 @@ bool minHit(int g) { return digitalRead(GATE_MIN_PIN[g]) == LOW; }  // pressed =
 bool maxHit(int g) { return digitalRead(GATE_MAX_PIN[g]) == LOW; }
 
 void gateStop(int g)    { servos[g].writeMicroseconds(STOP_US); }
-void gateExtend(int g)  { servos[g].writeMicroseconds(EXTEND_US); }
-void gateRetract(int g) { servos[g].writeMicroseconds(RETRACT_US); }
+void gateExtend(int g)  {
+  int us = STOP_US + (int)((long)(EXTEND_US - STOP_US) * speedPct / 100);
+  servos[g].writeMicroseconds(us);
+}
+void gateRetract(int g) {
+  int us = STOP_US + (int)((long)(RETRACT_US - STOP_US) * speedPct / 100);
+  servos[g].writeMicroseconds(us);
+}
 
 void stopAll() {
   gateStop(LEFT);
@@ -318,6 +330,7 @@ void printHelp() {
   Serial.println(F("  pos  <L|R> <0-100>   Move gate to a % of stroke"));
   Serial.println(F("  ext  <L|R> <ms>      Jog extend for <ms>"));
   Serial.println(F("  ret  <L|R> <ms>      Jog retract for <ms>"));
+  Serial.println(F("  speed <1-100>        Set motion speed (% of full)"));
   Serial.println(F("  stop                 Stop both actuators"));
   Serial.println(F("  status               Show positions"));
   Serial.println(F("  help                 This list"));
@@ -366,6 +379,16 @@ void handleCommand(const String& line) {
   if (verb == "status") { printStatus(); return; }
   if (verb == "help")   { printHelp();   return; }
 
+  if (verb == "speed") {
+    if (a1.length() == 0) { Serial.println(F("Usage: speed <1-100>")); return; }
+    int v = a1.toInt();
+    if (v < 1 || v > 100) { Serial.println(F("Speed must be 1-100")); return; }
+    speedPct = v;
+    Serial.print(F("Speed set to "));
+    Serial.print(speedPct);
+    Serial.println(F("%"));
+    return;
+  }
   if (verb == "home" || verb == "homemax" || verb == "cal") {
     String g = a1; g.toUpperCase();
     bool doL = (g == "ALL" || parseGate(a1) == LEFT);

@@ -1121,8 +1121,10 @@
   <script>
     "use strict";
 
-    const API_BASE     = "http://127.0.0.1:5055/api/dryer";
-    const ARDUINO_BASE = "http://127.0.0.1:5055/api";
+    // Relative to the serving origin so the viewer works both on the Pi
+    // (http://127.0.0.1:5055) and from other LAN devices (http://<pi-ip>:5055).
+    const API_BASE     = "/api/dryer";
+    const ARDUINO_BASE = "/api";
     const POLL_MS      = 2000; // poll interval
 
     // ── Camera & Printer — configure these ────────────────────
@@ -1216,7 +1218,8 @@
     function log(msg, kind = "info"){
       const time = new Date().toLocaleTimeString([], { hour:"2-digit", minute:"2-digit", second:"2-digit" });
       const el = document.getElementById("log");
-      el.textContent = `[${time}] ${msg}\n` + el.textContent;
+      if (el) el.textContent = `[${time}] ${msg}\n` + el.textContent;
+      console.log(`[${kind.toUpperCase()}] ${msg}`);
     }
 
     // ── Camera management ─────────────────────────────────────
@@ -1295,6 +1298,7 @@
     async function pollArduino(){
       try {
         const res = await fetchJson(`${ARDUINO_BASE}/arduino/status`);
+        V.apiReachable = true;
         V.arduinoConnected = !!res.connected;
         const d = res.data || {};
         V.doorState  = d.door_state  || "—";

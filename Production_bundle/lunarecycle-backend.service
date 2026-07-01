@@ -1,0 +1,19 @@
+[Unit]
+Description=LunaRecycle backend (Flask API + dashboard bridge to Arduino/dryer)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/lunarecycle
+EnvironmentFile=/opt/lunarecycle/lunarecycle.env
+ExecStart=/opt/lunarecycle/venv/bin/python /opt/lunarecycle/lunarecycle_backend.py
+Restart=on-failure
+RestartSec=5
+
+# Serial access without running as root: the pi user must be in the
+# 'dialout' group (setup_pi.sh handles this).
+
+[Install]
+WantedBy=multi-user.target

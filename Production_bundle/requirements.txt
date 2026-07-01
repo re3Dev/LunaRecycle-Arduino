@@ -1,0 +1,4 @@
+flask
+flask-cors
+pyserial
+pymodbus>=3.7

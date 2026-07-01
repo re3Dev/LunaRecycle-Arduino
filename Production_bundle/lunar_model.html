@@ -878,8 +878,10 @@
   <script>
   "use strict";
   /* ── Config ──────────────────────────────────────────────────── */
-  const API       = "http://127.0.0.1:5055/api";
-  const DRYER_API = "http://127.0.0.1:5055/api/dryer";
+  // Relative to the serving origin so the model works both on the Pi
+  // (http://127.0.0.1:5055) and from other LAN devices (http://<pi-ip>:5055).
+  const API       = "/api";
+  const DRYER_API = "/api/dryer";
   const POLL_MS   = 2000;
   const PRINTER_URL = ""; // optional Moonraker base URL
 

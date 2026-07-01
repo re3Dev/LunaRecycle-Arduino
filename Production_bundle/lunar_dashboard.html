@@ -855,8 +855,10 @@
   <div class="toasts" id="toasts" aria-live="polite" aria-relevant="additions"></div>
 
   <script>
-    const API_BASE      = "http://127.0.0.1:5055/api/dryer";
-    const ARDUINO_BASE  = "http://127.0.0.1:5055/api";
+    // Relative to the serving origin so the dashboard works both on the Pi
+    // (http://127.0.0.1:5055) and from other LAN devices (http://<pi-ip>:5055).
+    const API_BASE      = "/api/dryer";
+    const ARDUINO_BASE  = "/api";
 
     const S = {
       sim: true,
@@ -1810,7 +1812,7 @@
           applyRules();
           log("E-STOP engaged. Motion/heater disabled; door closing.", "bad");
           // Send ESTOP to backend (covers Arduino + dryer)
-          try{ await fetch("http://127.0.0.1:5055/api/estop", { method: "POST" }); }catch(_){}
+          try{ await fetch("/api/estop", { method: "POST" }); }catch(_){}
         }else{
           log("E-STOP released. Controls re-enabled.", "warn", "Verify conditions before restart.");
         }

@@ -2,15 +2,15 @@
 LunaRecycle Backend
 Copyright (C) re:3D, Inc. — All Rights Reserved
 
-Runs a Flask REST API on http://127.0.0.1:5055 that bridges:
+Runs a Flask REST API (default http://0.0.0.0:5055) that bridges:
   - Arduino over serial  (Shredder Gate, DC Motor, INA219 energy monitor)
   - Conair Dryer over Modbus RTU
 
 Usage:
-    pip install flask flask-cors pyserial pymodbus
+    pip install -r requirements.txt
     python lunarecycle_backend.py
 
-Configuration is via the constants section below.
+Configuration is via the constants / environment variables in the section below.
 All endpoints return JSON:  { "ok": true, ... }  or  { "ok": false, "error": "..." }
 """
 
@@ -30,17 +30,28 @@ from pymodbus.client import ModbusSerialClient
 #  Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-ARDUINO_PORT     = "COM4"
-ARDUINO_BAUDRATE = 9600
+# All settings can be overridden with environment variables (see the systemd
+# unit / .env file for the Raspberry Pi deployment). Defaults target a Pi:
+#   Arduino Mega  -> /dev/ttyACM0   (native USB CDC)
+#   Conair dryer  -> /dev/ttyUSB0   (USB-to-RS485 adapter)
+# On Windows override with e.g. LUNA_ARDUINO_PORT=COM4.
+
+ARDUINO_PORT     = os.environ.get("LUNA_ARDUINO_PORT", "/dev/ttyACM0")
+ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "9600"))
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
 
-DRYER_PORT     = "COM11"
-DRYER_BAUDRATE = 57600
-DRYER_DEVICE_ID = 1
-DRYER_PARITY   = "N"
-DRYER_STOPBITS = 1
-DRYER_BYTESIZE = 8
-DRYER_TIMEOUT  = 0.5     # seconds
+DRYER_PORT      = os.environ.get("LUNA_DRYER_PORT", "/dev/ttyUSB0")
+DRYER_BAUDRATE  = int(os.environ.get("LUNA_DRYER_BAUD", "57600"))
+DRYER_DEVICE_ID = int(os.environ.get("LUNA_DRYER_ID", "1"))
+DRYER_PARITY    = os.environ.get("LUNA_DRYER_PARITY", "N")
+DRYER_STOPBITS  = int(os.environ.get("LUNA_DRYER_STOPBITS", "1"))
+DRYER_BYTESIZE  = int(os.environ.get("LUNA_DRYER_BYTESIZE", "8"))
+DRYER_TIMEOUT   = 0.5    # seconds
+
+# Server bind. 0.0.0.0 makes the dashboard reachable from other devices on the
+# LAN (e.g. http://<pi-ip>:5055). Set LUNA_HOST=127.0.0.1 to restrict to the Pi.
+SERVER_HOST = os.environ.get("LUNA_HOST", "0.0.0.0")
+SERVER_PORT = int(os.environ.get("LUNA_PORT", "5055"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Flask app
@@ -56,6 +67,16 @@ _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
 def serve_dashboard():
     """Serve the dashboard HTML so it runs on http://127.0.0.1:5055 (same-origin)."""
     return send_from_directory(_BUNDLE_DIR, "lunar_dashboard.html")
+
+@app.route("/viewer")
+def serve_viewer():
+    """Serve the read-only viewer so it runs on http://127.0.0.1:5055/viewer (same-origin)."""
+    return send_from_directory(_BUNDLE_DIR, "lunar_viewer.html")
+
+@app.route("/model")
+def serve_model():
+    """Serve the spatial model so it runs on http://127.0.0.1:5055/model (same-origin)."""
+    return send_from_directory(_BUNDLE_DIR, "lunar_model.html")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Arduino serial bridge
@@ -586,7 +607,7 @@ def api_estop():
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("LunaRecycle backend starting on http://127.0.0.1:5055")
+    print(f"LunaRecycle backend starting on http://{SERVER_HOST}:{SERVER_PORT}")
     print(f"  Arduino: {ARDUINO_PORT} @ {ARDUINO_BAUDRATE} baud  (Gate servos, DC motor, INA219)")
     print(f"  Dryer  : {DRYER_PORT}   @ {DRYER_BAUDRATE} baud, ID {DRYER_DEVICE_ID}")
-    app.run(host="127.0.0.1", port=5055, debug=False, threaded=True)
+    app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, threaded=True)

@@ -125,7 +125,15 @@ class ArduinoBridge:
         self._ser.write((cmd + "\n").encode("ascii"))
         self._ser.flush()
 
+        is_status = cmd.strip().upper() == "STATUS"
+        # Tags that mark a genuine command reply. [ENERGY] is async telemetry the
+        # firmware streams every 500 ms; for non-STATUS commands it must be skipped
+        # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies
+        # with a [TC] line, not [ENERGY]).
+        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SYSTEM]")
+
         lines: list[str] = []
+        seen_status = False
         deadline = time.monotonic() + ARDUINO_TIMEOUT
         while time.monotonic() < deadline:
             if self._ser.in_waiting:
@@ -134,12 +142,26 @@ class ArduinoBridge:
                     line = raw.decode("ascii", errors="replace").strip()
                 except Exception:
                     line = raw.decode("latin-1", errors="replace").strip()
-                if line:
-                    lines.append(line)
-                    # Stop collecting once we see a terminal message
-                    if any(line.startswith(tag) for tag in
-                           ("[STATUS]", "[GATE]", "[MOTOR]", "[ENERGY]", "[SYSTEM]")):
+                if not line:
+                    continue
+
+                if is_status:
+                    # STATUS prints a "[STATUS] ..." line immediately followed by
+                    # the "[ENERGY] ..." line; collect both, ignore stray telemetry.
+                    if line.startswith("[STATUS]"):
+                        lines.append(line)
+                        seen_status = True
+                    elif line.startswith("[ENERGY]") and seen_status:
+                        lines.append(line)
                         break
+                    continue
+
+                # Non-STATUS command: ignore async energy telemetry entirely.
+                if line.startswith("[ENERGY]"):
+                    continue
+                lines.append(line)
+                if line.startswith(reply_tags):
+                    break
             else:
                 time.sleep(0.01)
 

@@ -136,7 +136,7 @@ class ArduinoBridge:
         # firmware streams every 500 ms; for non-STATUS commands it must be skipped
         # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies
         # with a [TC] line, not [ENERGY]).
-        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[BLASTGATE_DONE]", "[SYSTEM]")
+        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[VACUUM]", "[BLASTGATE_DONE]", "[SYSTEM]")
 
         lines: list[str] = []
         seen_status = False
@@ -717,7 +717,42 @@ def api_agitator_status():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-# ──────────────────────────────────────────────────────────────────#  Routes — Mixer blast gates (RoboClaw linear actuators)
+# ──────────────────────────────────────────────────────────────────
+#  Routes — Mixer vacuum motor (DS3502 digipot speed control)
+# ──────────────────────────────────────────────────────────────────
+
+@app.route("/api/vacuum/set", methods=["POST"])
+def api_vacuum_set():
+    try:
+        percent = int(request.json["percent"])
+        if percent < 0 or percent > 100:
+            raise ValueError("percent must be 0-100")
+        lines = arduino.send(f"VACUUM_SET {percent}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/vacuum/stop", methods=["POST"])
+def api_vacuum_stop():
+    try:
+        lines = arduino.send("VACUUM_STOP")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/vacuum/status", methods=["POST"])
+def api_vacuum_status():
+    try:
+        lines = arduino.send("VACUUM_STATUS")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────
+#  Routes — Mixer blast gates (RoboClaw linear actuators)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _blastgate_gate_arg(default: str = "ALL") -> str:

@@ -893,6 +893,36 @@
           </div>
         </section>
 
+        <!-- ── Mixer vacuum motor ──────────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">🌀</div>
+              <div style="min-width:0">
+                <h2>Vacuum Motor</h2>
+                <div class="hint">DS3502 digipot · variable speed</div>
+              </div>
+            </div>
+            <span class="statechip" id="vacuumChip">—</span>
+          </div>
+          <div class="bd">
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Speed %</label>
+              <input type="number" id="vacuumPct" min="0" max="100" value="50"
+                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+            </div>
+            <div class="row" style="flex-wrap:wrap; gap:6px;">
+              <button class="btn mini primary" id="btnVacuumSet">Set</button>
+              <button class="btn mini danger"  id="btnVacuumStop">Stop</button>
+            </div>
+            <div class="split" style="margin-top:10px;">
+              <div class="kv">
+                <div class="k">Speed</div><div class="v"><span id="vacuumPctText">—</span> %</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- ── Mixer blast gates ───────────────────────────────────────── -->
         <section class="card">
           <div class="hd">
@@ -1029,6 +1059,7 @@
       shredderDir: "—",
       agitatorPct: "—",
       agitatorDir: "—",
+      vacuumPct: "—",
       bgLeft: "—",
       bgRight: "—",
 
@@ -1193,6 +1224,7 @@
         S.shredderDir = d.shredder_dir || "—";
         S.agitatorPct = d.agitator_pct !== undefined ? d.agitator_pct : "—";
         S.agitatorDir = d.agitator_dir || "—";
+        S.vacuumPct  = d.vacuum_pct  !== undefined ? d.vacuum_pct : "—";
         S.bgLeft     = d.bg_left     !== undefined ? d.bg_left  : "—";
         S.bgRight    = d.bg_right    !== undefined ? d.bg_right : "—";
         const statusEl = $("#arduinoStatusText");
@@ -1270,6 +1302,16 @@
         agc.textContent = running ? `${S.agitatorPct}% ${S.agitatorDir}` : (S.agitatorPct === "—" ? "—" : "STOPPED");
         agc.className = "statechip" + (running ? " good" : "");
       }
+      // Vacuum motor (DS3502 digipot)
+      const vpt = $("#vacuumPctText");
+      if(vpt){ vpt.textContent = S.vacuumPct; }
+      const vgc = $("#vacuumChip");
+      if(vgc){
+        const vp = parseFloat(S.vacuumPct);
+        const vrunning = !isNaN(vp) && vp > 0;
+        vgc.textContent = vrunning ? `${S.vacuumPct}%` : (S.vacuumPct === "—" ? "—" : "STOPPED");
+        vgc.className = "statechip" + (vrunning ? " good" : "");
+      }
       // Blast gates (linear actuators)
       const blt = $("#bgLeftText");
       if(blt){ blt.textContent = S.bgLeft; }
@@ -1346,6 +1388,18 @@
         log(`Agitator: ${msg}`, "info");
         await arduinoRefreshStatus();
       }catch(err){ log(`Agitator cmd failed: ${err.message}`, "bad"); }
+    }
+
+    async function vacuumCmd(endpoint, body, label){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const opts = { method: "POST" };
+        if(body){ opts.body = JSON.stringify(body); }
+        const res = await apiArduino(endpoint, opts);
+        const msg = (res.response || []).join(" | ") || label;
+        log(`Vacuum: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`Vacuum cmd failed: ${err.message}`, "bad"); }
     }
 
     async function motorSet(){
@@ -2074,6 +2128,14 @@
         agitatorCmd("/agitator/set", { percent, dir }, `SET ${percent}% ${dir}`);
       });
       on("btnAgitatorStop", "click", ()=>agitatorCmd("/agitator/stop", null, "STOP"));
+
+      // Mixer vacuum motor (DS3502 digipot, variable speed 0–100%)
+      on("btnVacuumSet", "click", ()=>{
+        const percent = parseInt($("#vacuumPct").value, 10);
+        if(isNaN(percent) || percent < 0 || percent > 100){ log("Vacuum speed must be 0–100%.", "bad"); return; }
+        vacuumCmd("/vacuum/set", { percent }, `SET ${percent}%`);
+      });
+      on("btnVacuumStop", "click", ()=>vacuumCmd("/vacuum/stop", null, "STOP"));
 
       // Mixer blast gates
       on("btnBgHome",    "click", ()=>blastGateCmd("/blastgate/home",    { gate: $("#blastGateSel").value }, "HOME"));

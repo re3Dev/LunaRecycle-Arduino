@@ -37,6 +37,10 @@
  *   AGITATOR_STOP                   Stop the agitator
  *   AGITATOR_STATUS                 Print agitator power / direction
  *
+ *   VACUUM_SET <0-100>              Run vacuum motor (DS3502 wiper 0-127)
+ *   VACUUM_STOP                     Stop the vacuum motor
+ *   VACUUM_STATUS                   Print vacuum motor speed
+ *
  *   BLASTGATE_HOME <L|R|ALL>     Retract gate to MIN (0%)
  *   BLASTGATE_HOMEMAX <L|R|ALL>  Extend gate to MAX (100%)
  *   BLASTGATE_CAL <L|R|ALL>      Home then time a full stroke (calibrate)
@@ -61,7 +65,9 @@
  *
  *   Mixer agitator (2nd H-bridge channel):
  *     ENB / IN3 / IN4  ->  D3 / D12 / D13   (power capped at 50%)
- *     DS3502 digipot   ->  I2C (sets the motor speed reference)
+ *
+ *   Mixer vacuum motor:
+ *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
  *
  *   Mixer blast gates (RoboClaw RC pulse):
  *     LEFT  actuator  ->  D9,  limits MIN=D37 MAX=D38
@@ -153,8 +159,10 @@ const bool ShredderDirFwdIsHigh    = true;   // true: HIGH = forward
 // Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
 // this are clamped so the agitator never exceeds this duty.
 const int AGITATOR_MAX_PERCENT = 50;
-// DS3502 digital-pot wiper full-scale (7-bit, 0..127 = 0..100% speed reference).
-const uint8_t AGITATOR_WIPER_FULL = 127;
+
+// Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
+// 0..100% speed reference).
+const uint8_t VACUUM_WIPER_FULL = 127;
 
 // ── Mixer blast gate (RoboClaw) tunables ───────────────────────────────────
 // RC pulse widths: 1500 us neutral; the extremes give full speed. speedPct
@@ -221,7 +229,7 @@ const unsigned long TC_shredderPauseMs = 1000;
 Servo Mixer_shredderGateLeftServoMotor;
 Servo Mixer_shredderGateRightServoMotor;
 Adafruit_INA219 Mixer_screwMotorCurrentSensor;
-Adafruit_DS3502 Mixer_agitatorDigipot = Adafruit_DS3502();
+Adafruit_DS3502 Mixer_vacuumMotorDigipot = Adafruit_DS3502();
 
 AccelStepper TC_stepper(AccelStepper::DRIVER,
                         TC_stepperMotorController_step,
@@ -271,7 +279,10 @@ bool shredderFwd       = true;
 // Mixer agitator state.
 int  agitatorPercent   = 0;      // 0..AGITATOR_MAX_PERCENT
 bool agitatorFwd       = true;   // true = FWD, false = REV
-bool agitatorDigipotOk = false;  // DS3502 present on I2C
+
+// Mixer vacuum motor state (DS3502 digipot).
+int  vacuumPercent   = 0;        // 0..100
+bool vacuumDigipotOk = false;    // DS3502 present on I2C
 
 // Mixer blast gate estimated position state (indexed [LEFT, RIGHT]).
 unsigned long blastGateStrokeMs[2]   = { BG_DEFAULT_STROKE_MS, BG_DEFAULT_STROKE_MS };
@@ -775,12 +786,10 @@ void shredderSetDirection(bool fwd) {
 void agitatorApply() {
   int percent = constrain(agitatorPercent, 0, AGITATOR_MAX_PERCENT);
   if (percent == 0) {
-    // Disable ENB first, then clear direction pins (avoids shoot-through),
-    // and zero the DS3502 speed reference so the driver is fully off.
+    // Disable ENB first, then clear direction pins (avoids shoot-through).
     analogWrite(Mixer_agitatorMotor_ENB, 0);
     digitalWrite(Mixer_agitatorMotor_IN3, LOW);
     digitalWrite(Mixer_agitatorMotor_IN4, LOW);
-    if (agitatorDigipotOk) Mixer_agitatorDigipot.setWiper(0);
     return;
   }
   if (agitatorFwd) {
@@ -789,12 +798,6 @@ void agitatorApply() {
   } else {
     digitalWrite(Mixer_agitatorMotor_IN3, LOW);
     digitalWrite(Mixer_agitatorMotor_IN4, HIGH);
-  }
-  // The DS3502 digipot supplies the motor speed reference - the driver will
-  // not turn without it. Scale it (and the ENB PWM) to the requested percent.
-  if (agitatorDigipotOk) {
-    uint8_t wiper = (uint8_t)((long)percent * AGITATOR_WIPER_FULL / 100);
-    Mixer_agitatorDigipot.setWiper(wiper);
   }
   int pwm = (int)((long)percent * 255 / 100);   // percent of full duty
   analogWrite(Mixer_agitatorMotor_ENB, pwm);
@@ -816,6 +819,32 @@ void agitatorStatus() {
   Serial.print(agitatorPercent);
   Serial.print(F(" dir="));
   Serial.println(agitatorFwd ? F("FWD") : F("REV"));
+}
+
+// ============================================================================
+//  Mixer Vacuum Motor - DS3502 digital-pot speed control (I2C)
+// ============================================================================
+
+void vacuumApply() {
+  if (!vacuumDigipotOk) return;
+  int percent = constrain(vacuumPercent, 0, 100);
+  uint8_t wiper = (uint8_t)((long)percent * VACUUM_WIPER_FULL / 100);
+  Mixer_vacuumMotorDigipot.setWiper(wiper);
+}
+
+void vacuumSet(int percent) {
+  vacuumPercent = constrain(percent, 0, 100);
+  vacuumApply();
+}
+
+void vacuumStop() {
+  vacuumPercent = 0;
+  vacuumApply();
+}
+
+void vacuumStatus() {
+  Serial.print(F("[VACUUM] percent="));
+  Serial.println(vacuumPercent);
 }
 
 // ============================================================================
@@ -1176,7 +1205,9 @@ void printAllStatus() {
   Serial.print(F(" agitator_pct="));
   Serial.print(agitatorPercent);
   Serial.print(F(" agitator_dir="));
-  Serial.println(agitatorFwd ? F("FWD") : F("REV"));
+  Serial.print(agitatorFwd ? F("FWD") : F("REV"));
+  Serial.print(F(" vacuum_pct="));
+  Serial.println(vacuumPercent);
   printEnergy();
 }
 
@@ -1302,6 +1333,27 @@ void handleCommand(const String& cmd) {
   } else if (cmd == "AGITATOR_STATUS") {
     agitatorStatus();
 
+  } else if (cmd.startsWith("VACUUM_SET ")) {
+    // VACUUM_SET <0-100>
+    int pct = cmd.substring(11).toInt();
+    if (pct < 0 || pct > 100) {
+      Serial.println(F("[VACUUM] ERROR: percent must be 0-100"));
+      return;
+    }
+    if (!vacuumDigipotOk) {
+      Serial.println(F("[VACUUM] ERROR: DS3502 not found"));
+      return;
+    }
+    vacuumSet(pct);
+    vacuumStatus();
+
+  } else if (cmd == "VACUUM_STOP") {
+    vacuumStop();
+    Serial.println(F("[VACUUM] STOPPED"));
+
+  } else if (cmd == "VACUUM_STATUS") {
+    vacuumStatus();
+
   } else if (cmd.startsWith("BLASTGATE_")) {
     handleBlastGateCommand(cmd);
     Serial.println(F("[BLASTGATE_DONE]"));   // unique terminal marker for the host
@@ -1336,6 +1388,7 @@ void handleCommand(const String& cmd) {
     gateCloseCmd();
     shredderOff();
     agitatorStop();
+    vacuumStop();
     bgStopAll();
     tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
     tcState = TC_WAIT_HOME;
@@ -1389,11 +1442,12 @@ void setup() {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
   }
 
-  // DS3502 digital pot - agitator speed reference (shares the I2C bus)
-  agitatorDigipotOk = Mixer_agitatorDigipot.begin();
-  if (!agitatorDigipotOk) {
-    Serial.println(F("[SYSTEM] WARNING: DS3502 not found - agitator will not run"));
+  // DS3502 digital pot - vacuum motor speed control (shares the I2C bus)
+  vacuumDigipotOk = Mixer_vacuumMotorDigipot.begin();
+  if (!vacuumDigipotOk) {
+    Serial.println(F("[SYSTEM] WARNING: DS3502 not found - vacuum motor disabled"));
   }
+  vacuumStop();
 
   // Shredder motor controller - off, forward at boot
   pinMode(Shredder_motorController_onOff, OUTPUT);

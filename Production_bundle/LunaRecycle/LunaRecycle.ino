@@ -64,12 +64,12 @@
 //  Pin assignments
 // ============================================================================
 
-const int Mixer_shredderGateLeftServoMotor_pin = 9;
-const int Mixer_shredderGateRightServoMotor_pin = 10;
+const int Mixer_shredderGateLeftServoMotor_pin = 6;
+const int Mixer_shredderGateRightServoMotor_pin = 7;
 
-const int Mixer_motorController_ENA   = 3;   // ENA on module (Timer 2 PWM)
-const int Mixer_motorController_IN1   = 7;   // IN1 on module
-const int Mixer_motorController_IN2   = 8;   // IN2 on module
+const int Mixer_motorController_ENA   = 10;   // ENA on module (Timer 2 PWM)
+const int Mixer_motorController_IN1   = 27;   // IN1 on module
+const int Mixer_motorController_IN2   = 28;   // IN2 on module
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
@@ -106,7 +106,7 @@ const int TC_servoDownDeg = 270;
 
 // Vacuum pump relay (D24). This build's pump switch energizes on LOW (verified
 // on hardware); set true only for a board/SSR that energizes on HIGH.
-const bool TC_pumpRelayActiveHigh = false;
+const bool TC_pumpRelayActiveHigh = true;
 
 // Shredder motor controller (D25 = ON/OFF, D26 = direction). Adjust these to
 // match the drive's logic levels.

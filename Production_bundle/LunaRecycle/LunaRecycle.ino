@@ -61,6 +61,7 @@
  *
  *   Mixer agitator (2nd H-bridge channel):
  *     ENB / IN3 / IN4  ->  D3 / D12 / D13   (power capped at 50%)
+ *     DS3502 digipot   ->  I2C (sets the motor speed reference)
  *
  *   Mixer blast gates (RoboClaw RC pulse):
  *     LEFT  actuator  ->  D9,  limits MIN=D37 MAX=D38
@@ -78,6 +79,7 @@
 #include <Servo.h>
 #include <Wire.h>
 #include <Adafruit_INA219.h>
+#include <Adafruit_DS3502.h>
 #include <AccelStepper.h>
 
 // ============================================================================
@@ -151,6 +153,8 @@ const bool ShredderDirFwdIsHigh    = true;   // true: HIGH = forward
 // Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
 // this are clamped so the agitator never exceeds this duty.
 const int AGITATOR_MAX_PERCENT = 50;
+// DS3502 digital-pot wiper full-scale (7-bit, 0..127 = 0..100% speed reference).
+const uint8_t AGITATOR_WIPER_FULL = 127;
 
 // ── Mixer blast gate (RoboClaw) tunables ───────────────────────────────────
 // RC pulse widths: 1500 us neutral; the extremes give full speed. speedPct
@@ -217,6 +221,7 @@ const unsigned long TC_shredderPauseMs = 1000;
 Servo Mixer_shredderGateLeftServoMotor;
 Servo Mixer_shredderGateRightServoMotor;
 Adafruit_INA219 Mixer_screwMotorCurrentSensor;
+Adafruit_DS3502 Mixer_agitatorDigipot = Adafruit_DS3502();
 
 AccelStepper TC_stepper(AccelStepper::DRIVER,
                         TC_stepperMotorController_step,
@@ -266,6 +271,7 @@ bool shredderFwd       = true;
 // Mixer agitator state.
 int  agitatorPercent   = 0;      // 0..AGITATOR_MAX_PERCENT
 bool agitatorFwd       = true;   // true = FWD, false = REV
+bool agitatorDigipotOk = false;  // DS3502 present on I2C
 
 // Mixer blast gate estimated position state (indexed [LEFT, RIGHT]).
 unsigned long blastGateStrokeMs[2]   = { BG_DEFAULT_STROKE_MS, BG_DEFAULT_STROKE_MS };
@@ -769,10 +775,12 @@ void shredderSetDirection(bool fwd) {
 void agitatorApply() {
   int percent = constrain(agitatorPercent, 0, AGITATOR_MAX_PERCENT);
   if (percent == 0) {
-    // Disable ENB first, then clear direction pins (avoids shoot-through).
+    // Disable ENB first, then clear direction pins (avoids shoot-through),
+    // and zero the DS3502 speed reference so the driver is fully off.
     analogWrite(Mixer_agitatorMotor_ENB, 0);
     digitalWrite(Mixer_agitatorMotor_IN3, LOW);
     digitalWrite(Mixer_agitatorMotor_IN4, LOW);
+    if (agitatorDigipotOk) Mixer_agitatorDigipot.setWiper(0);
     return;
   }
   if (agitatorFwd) {
@@ -781,6 +789,12 @@ void agitatorApply() {
   } else {
     digitalWrite(Mixer_agitatorMotor_IN3, LOW);
     digitalWrite(Mixer_agitatorMotor_IN4, HIGH);
+  }
+  // The DS3502 digipot supplies the motor speed reference - the driver will
+  // not turn without it. Scale it (and the ENB PWM) to the requested percent.
+  if (agitatorDigipotOk) {
+    uint8_t wiper = (uint8_t)((long)percent * AGITATOR_WIPER_FULL / 100);
+    Mixer_agitatorDigipot.setWiper(wiper);
   }
   int pwm = (int)((long)percent * 255 / 100);   // percent of full duty
   analogWrite(Mixer_agitatorMotor_ENB, pwm);
@@ -1373,6 +1387,12 @@ void setup() {
   inaOk = Mixer_screwMotorCurrentSensor.begin();
   if (!inaOk) {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
+  }
+
+  // DS3502 digital pot - agitator speed reference (shares the I2C bus)
+  agitatorDigipotOk = Mixer_agitatorDigipot.begin();
+  if (!agitatorDigipotOk) {
+    Serial.println(F("[SYSTEM] WARNING: DS3502 not found - agitator will not run"));
   }
 
   // Shredder motor controller - off, forward at boot

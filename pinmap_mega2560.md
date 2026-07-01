@@ -85,6 +85,7 @@
 | D3   | `Mixer_agitatorMotor_ENB`    | PWM enable — power **capped at 50%**    |
 | D12  | `Mixer_agitatorMotor_IN3`    | Direction A                             |
 | D13  | `Mixer_agitatorMotor_IN4`    | Direction B (shares Mega built-in LED)  |
+| I2C  | `Mixer_agitatorDigipot` (DS3502) | Sets the motor speed reference — motor will NOT run without it |
 
 > **Note:** D3 was previously listed as a reserved `FPU_emergencyStop` interrupt, but that
 > interrupt is not implemented in firmware. D3 is now used for the agitator ENB. If an

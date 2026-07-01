@@ -33,6 +33,10 @@
  *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
  *   SHREDDER_FWD / _REV    Set shredder motor direction
  *
+ *   AGITATOR_SET <0-100> <FWD|REV>  Run bottom agitator (capped at 50% power)
+ *   AGITATOR_STOP                   Stop the agitator
+ *   AGITATOR_STATUS                 Print agitator power / direction
+ *
  *   BLASTGATE_HOME <L|R|ALL>     Retract gate to MIN (0%)
  *   BLASTGATE_HOMEMAX <L|R|ALL>  Extend gate to MAX (100%)
  *   BLASTGATE_CAL <L|R|ALL>      Home then time a full stroke (calibrate)
@@ -54,6 +58,9 @@
  *   Screw motor ENA    ->  D3  (PWM)
  *   Screw motor IN1/2  ->  D7  / D8
  *   INA219             ->  D20 (SDA) / D21 (SCL)   [hardware I2C]
+ *
+ *   Mixer agitator (2nd H-bridge channel):
+ *     ENB / IN3 / IN4  ->  D3 / D12 / D13   (power capped at 50%)
  *
  *   Mixer blast gates (RoboClaw RC pulse):
  *     LEFT  actuator  ->  D9,  limits MIN=D37 MAX=D38
@@ -83,6 +90,11 @@ const int Mixer_shredderGateRightServoMotor_pin = 7;
 const int Mixer_motorController_ENA   = 10;   // ENA on module (Timer 2 PWM)
 const int Mixer_motorController_IN1   = 27;   // IN1 on module
 const int Mixer_motorController_IN2   = 28;   // IN2 on module
+
+// Mixer agitator - second channel of the mixer H-bridge (Interface List).
+const int Mixer_agitatorMotor_ENB = 3;    // ENB enable (PWM)
+const int Mixer_agitatorMotor_IN3 = 12;   // IN3
+const int Mixer_agitatorMotor_IN4 = 13;   // IN4
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
@@ -135,6 +147,10 @@ const bool TC_pumpRelayActiveHigh = true;
 // match the drive's logic levels.
 const bool ShredderOnOffActiveHigh = true;   // true: HIGH runs the motor
 const bool ShredderDirFwdIsHigh    = true;   // true: HIGH = forward
+
+// Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
+// this are clamped so the agitator never exceeds this duty.
+const int AGITATOR_MAX_PERCENT = 50;
 
 // ── Mixer blast gate (RoboClaw) tunables ───────────────────────────────────
 // RC pulse widths: 1500 us neutral; the extremes give full speed. speedPct
@@ -246,6 +262,10 @@ int  tcCurrentServoAngle = TC_servoUpDeg;
 bool tcPumpRunning     = false;
 bool shredderRunning   = false;
 bool shredderFwd       = true;
+
+// Mixer agitator state.
+int  agitatorPercent   = 0;      // 0..AGITATOR_MAX_PERCENT
+bool agitatorFwd       = true;   // true = FWD, false = REV
 
 // Mixer blast gate estimated position state (indexed [LEFT, RIGHT]).
 unsigned long blastGateStrokeMs[2]   = { BG_DEFAULT_STROKE_MS, BG_DEFAULT_STROKE_MS };
@@ -743,6 +763,48 @@ void shredderSetDirection(bool fwd) {
 }
 
 // ============================================================================
+//  Mixer Agitator - second H-bridge channel (power capped at 50%)
+// ============================================================================
+
+void agitatorApply() {
+  int percent = constrain(agitatorPercent, 0, AGITATOR_MAX_PERCENT);
+  if (percent == 0) {
+    // Disable ENB first, then clear direction pins (avoids shoot-through).
+    analogWrite(Mixer_agitatorMotor_ENB, 0);
+    digitalWrite(Mixer_agitatorMotor_IN3, LOW);
+    digitalWrite(Mixer_agitatorMotor_IN4, LOW);
+    return;
+  }
+  if (agitatorFwd) {
+    digitalWrite(Mixer_agitatorMotor_IN3, HIGH);
+    digitalWrite(Mixer_agitatorMotor_IN4, LOW);
+  } else {
+    digitalWrite(Mixer_agitatorMotor_IN3, LOW);
+    digitalWrite(Mixer_agitatorMotor_IN4, HIGH);
+  }
+  int pwm = (int)((long)percent * 255 / 100);   // percent of full duty
+  analogWrite(Mixer_agitatorMotor_ENB, pwm);
+}
+
+void agitatorSet(int percent, bool fwd) {
+  agitatorPercent = constrain(percent, 0, AGITATOR_MAX_PERCENT);
+  agitatorFwd = fwd;
+  agitatorApply();
+}
+
+void agitatorStop() {
+  agitatorPercent = 0;
+  agitatorApply();
+}
+
+void agitatorStatus() {
+  Serial.print(F("[AGITATOR] percent="));
+  Serial.print(agitatorPercent);
+  Serial.print(F(" dir="));
+  Serial.println(agitatorFwd ? F("FWD") : F("REV"));
+}
+
+// ============================================================================
 //  Mixer Blast Gates - RoboClaw linear actuators
 //  Ported from Mixer-Test-BlastGate_PositionUtility. Position is ESTIMATED
 //  from timed motion (no encoders); the MIN / MAX limit switches provide the
@@ -1096,7 +1158,11 @@ void printAllStatus() {
   Serial.print(F(" bg_left="));
   Serial.print(bgPercent(BG_LEFT), 0);
   Serial.print(F(" bg_right="));
-  Serial.println(bgPercent(BG_RIGHT), 0);
+  Serial.print(bgPercent(BG_RIGHT), 0);
+  Serial.print(F(" agitator_pct="));
+  Serial.print(agitatorPercent);
+  Serial.print(F(" agitator_dir="));
+  Serial.println(agitatorFwd ? F("FWD") : F("REV"));
   printEnergy();
 }
 
@@ -1192,6 +1258,36 @@ void handleCommand(const String& cmd) {
     shredderSetDirection(false);
     Serial.println(F("[SHREDDER] Direction REV"));
 
+  } else if (cmd.startsWith("AGITATOR_SET ")) {
+    // AGITATOR_SET <0-100> <FWD|REV>  (power is capped at AGITATOR_MAX_PERCENT)
+    String args = cmd.substring(13);
+    args.trim();
+    int sp = args.indexOf(' ');
+    if (sp < 0) {
+      Serial.println(F("[AGITATOR] ERROR: usage AGITATOR_SET <0-100> <FWD|REV>"));
+      return;
+    }
+    int pct = args.substring(0, sp).toInt();
+    String dir = args.substring(sp + 1);
+    dir.trim();
+    if (pct < 0 || pct > 100) {
+      Serial.println(F("[AGITATOR] ERROR: percent must be 0-100"));
+      return;
+    }
+    if (dir != "FWD" && dir != "REV") {
+      Serial.println(F("[AGITATOR] ERROR: direction must be FWD or REV"));
+      return;
+    }
+    agitatorSet(pct, dir == "FWD");
+    agitatorStatus();
+
+  } else if (cmd == "AGITATOR_STOP") {
+    agitatorStop();
+    Serial.println(F("[AGITATOR] STOPPED"));
+
+  } else if (cmd == "AGITATOR_STATUS") {
+    agitatorStatus();
+
   } else if (cmd.startsWith("BLASTGATE_")) {
     handleBlastGateCommand(cmd);
     Serial.println(F("[BLASTGATE_DONE]"));   // unique terminal marker for the host
@@ -1225,6 +1321,7 @@ void handleCommand(const String& cmd) {
     motorStop();
     gateCloseCmd();
     shredderOff();
+    agitatorStop();
     bgStopAll();
     tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
     tcState = TC_WAIT_HOME;
@@ -1282,6 +1379,12 @@ void setup() {
   pinMode(Shredder_motorController_onOff, OUTPUT);
   pinMode(Shredder_motorController_direction, OUTPUT);
   shredderOff();
+
+  // Mixer agitator (2nd H-bridge channel) - stopped at boot
+  pinMode(Mixer_agitatorMotor_ENB, OUTPUT);
+  pinMode(Mixer_agitatorMotor_IN3, OUTPUT);
+  pinMode(Mixer_agitatorMotor_IN4, OUTPUT);
+  agitatorStop();
 
   // Mixer blast gates - hold RC neutral (1500 us) so the RoboClaw arms;
   // limit switches use internal pull-ups (active LOW).

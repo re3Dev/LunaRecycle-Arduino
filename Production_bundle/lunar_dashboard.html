@@ -855,6 +855,44 @@
           </div>
         </section>
 
+        <!-- ── Mixer agitator ──────────────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">✳</div>
+              <div style="min-width:0">
+                <h2>Agitator</h2>
+                <div class="hint">bottom agitator · power capped at 50%</div>
+              </div>
+            </div>
+            <span class="statechip" id="agitatorChip">—</span>
+          </div>
+          <div class="bd">
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Power %</label>
+              <input type="number" id="agitatorPct" min="0" max="50" value="25"
+                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+              <select id="agitatorDir"
+                style="padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+                <option value="FWD">FWD</option>
+                <option value="REV">REV</option>
+              </select>
+            </div>
+            <div class="row" style="flex-wrap:wrap; gap:6px;">
+              <button class="btn mini primary" id="btnAgitatorSet">Set</button>
+              <button class="btn mini danger"  id="btnAgitatorStop">Stop</button>
+            </div>
+            <div class="split" style="margin-top:10px;">
+              <div class="kv">
+                <div class="k">Power</div><div class="v"><span id="agitatorPctText">—</span> %</div>
+              </div>
+              <div class="kv">
+                <div class="k">Direction</div><div class="v" id="agitatorDirText">—</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- ── Mixer blast gates ───────────────────────────────────────── -->
         <section class="card">
           <div class="hd">
@@ -989,6 +1027,8 @@
       tcPump: "—",
       shredder: "—",
       shredderDir: "—",
+      agitatorPct: "—",
+      agitatorDir: "—",
       bgLeft: "—",
       bgRight: "—",
 
@@ -1151,6 +1191,8 @@
         S.tcPump     = d.tc_pump     || "—";
         S.shredder   = d.shredder    || "—";
         S.shredderDir = d.shredder_dir || "—";
+        S.agitatorPct = d.agitator_pct !== undefined ? d.agitator_pct : "—";
+        S.agitatorDir = d.agitator_dir || "—";
         S.bgLeft     = d.bg_left     !== undefined ? d.bg_left  : "—";
         S.bgRight    = d.bg_right    !== undefined ? d.bg_right : "—";
         const statusEl = $("#arduinoStatusText");
@@ -1216,6 +1258,18 @@
       if(st){ st.textContent = S.shredder; }
       const sdt = $("#shredderDirText");
       if(sdt){ sdt.textContent = S.shredderDir; }
+      // Agitator (2nd H-bridge channel)
+      const apt = $("#agitatorPctText");
+      if(apt){ apt.textContent = S.agitatorPct; }
+      const adt = $("#agitatorDirText");
+      if(adt){ adt.textContent = S.agitatorDir; }
+      const agc = $("#agitatorChip");
+      if(agc){
+        const p = parseFloat(S.agitatorPct);
+        const running = !isNaN(p) && p > 0;
+        agc.textContent = running ? `${S.agitatorPct}% ${S.agitatorDir}` : (S.agitatorPct === "—" ? "—" : "STOPPED");
+        agc.className = "statechip" + (running ? " good" : "");
+      }
       // Blast gates (linear actuators)
       const blt = $("#bgLeftText");
       if(blt){ blt.textContent = S.bgLeft; }
@@ -1280,6 +1334,18 @@
         log(`Blast Gate: ${msg}`, "info");
         await arduinoRefreshStatus();
       }catch(err){ log(`Blast Gate cmd failed: ${err.message}`, "bad"); }
+    }
+
+    async function agitatorCmd(endpoint, body, label){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const opts = { method: "POST" };
+        if(body){ opts.body = JSON.stringify(body); }
+        const res = await apiArduino(endpoint, opts);
+        const msg = (res.response || []).join(" | ") || label;
+        log(`Agitator: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`Agitator cmd failed: ${err.message}`, "bad"); }
     }
 
     async function motorSet(){
@@ -1999,6 +2065,15 @@
       on("btnShredderOff", "click", ()=>shredderCmd("/shredder/off", "SHREDDER OFF"));
       on("btnShredderFwd", "click", ()=>shredderCmd("/shredder/fwd", "SHREDDER FWD"));
       on("btnShredderRev", "click", ()=>shredderCmd("/shredder/rev", "SHREDDER REV"));
+
+      // Mixer agitator (capped at 50% power)
+      on("btnAgitatorSet", "click", ()=>{
+        const percent = parseInt($("#agitatorPct").value, 10);
+        if(isNaN(percent) || percent < 0 || percent > 50){ log("Agitator power must be 0–50%.", "bad"); return; }
+        const dir = $("#agitatorDir").value;
+        agitatorCmd("/agitator/set", { percent, dir }, `SET ${percent}% ${dir}`);
+      });
+      on("btnAgitatorStop", "click", ()=>agitatorCmd("/agitator/stop", null, "STOP"));
 
       // Mixer blast gates
       on("btnBgHome",    "click", ()=>blastGateCmd("/blastgate/home",    { gate: $("#blastGateSel").value }, "HOME"));

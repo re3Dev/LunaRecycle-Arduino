@@ -79,6 +79,17 @@
 | D27  | `Mixer_motorController_IN1` | Direction A        |
 | D28  | `Mixer_motorController_IN2` | Direction B        |
 
+### `Mixer_agitatorMotor` — Bottom Agitator (2nd H-Bridge channel)
+| Pin  | Signal                       | Notes                                   |
+|------|------------------------------|-----------------------------------------|
+| D3   | `Mixer_agitatorMotor_ENB`    | PWM enable — power **capped at 50%**    |
+| D12  | `Mixer_agitatorMotor_IN3`    | Direction A                             |
+| D13  | `Mixer_agitatorMotor_IN4`    | Direction B (shares Mega built-in LED)  |
+
+> **Note:** D3 was previously listed as a reserved `FPU_emergencyStop` interrupt, but that
+> interrupt is not implemented in firmware. D3 is now used for the agitator ENB. If an
+> external e-stop interrupt is added later, relocate it to another INT pin.
+
 ### `Mixer_screwMotorCurrentSensor` — INA219 Current Sensor (I2C)
 | Bus  | Address | Notes |
 |------|---------|-------|

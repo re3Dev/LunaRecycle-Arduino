@@ -557,6 +557,45 @@ def api_motor_status():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Routes — Trash conveyor (pick & place)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/tc/home", methods=["POST"])
+def api_tc_home():
+    try:
+        lines = arduino.send("TC_HOME")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/tc/pick", methods=["POST"])
+def api_tc_pick():
+    try:
+        lines = arduino.send("TC_PICK")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/tc/stop", methods=["POST"])
+def api_tc_stop():
+    try:
+        lines = arduino.send("TC_STOP")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/tc/status", methods=["GET"])
+def api_tc_status():
+    try:
+        lines = arduino.send("TC_STATUS")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Routes — Energy monitor
 # ─────────────────────────────────────────────────────────────────────────────
 

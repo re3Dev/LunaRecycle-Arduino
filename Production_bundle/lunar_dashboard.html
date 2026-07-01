@@ -748,6 +748,38 @@
           </div>
         </section>
 
+        <!-- ── Trash Conveyor (Pick & Place) ───────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">⇅</div>
+              <div style="min-width:0">
+                <h2>Trash Conveyor</h2>
+                <div class="hint">stepper pick &amp; place • bag stack → shredder</div>
+              </div>
+            </div>
+            <span class="statechip" id="tcChip">—</span>
+          </div>
+          <div class="bd">
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+              <button class="btn mini"         id="btnTcHome">Home</button>
+              <button class="btn mini primary" id="btnTcPick">Pick</button>
+              <button class="btn mini danger"  id="btnTcStop">Stop</button>
+              <button class="btn mini"         id="btnTcStatus">Status</button>
+            </div>
+            <div class="split">
+              <div class="kv">
+                <div class="k">Position</div>
+                <div class="v"><span id="tcPosText">—</span> mm</div>
+              </div>
+              <div class="kv">
+                <div class="k">Bag Stack</div>
+                <div class="v" id="tcBagText">—</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- ── Dryer Screw ─────────────────────────────────────────────── -->
         <section class="card">
           <div class="hd">
@@ -877,6 +909,10 @@
       gateState: "CLOSED",
       motorPwm: 0,
       motorDir: "FWD",
+
+      tcState: "—",
+      tcPosMm: "—",
+      tcBag: "—",
 
       convA_on: false,
       convB_on: false,
@@ -1028,8 +1064,9 @@
         S.doorB_min  = d.door_B_min  !== undefined ? d.door_B_min  : "—";
         S.doorB_max  = d.door_B_max  !== undefined ? d.door_B_max  : "—";
         S.gateState  = d.gate        || "—";
-        S.fpuState   = d.fpu_state   || "—";
-        S.fpuTrips   = d.fpu_trips   !== undefined ? d.fpu_trips   : 0;
+        S.tcState    = d.tc_state    || "—";
+        S.tcPosMm    = d.tc_pos_mm   !== undefined ? d.tc_pos_mm : "—";
+        S.tcBag      = d.tc_bag      || "—";
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
@@ -1073,6 +1110,15 @@
       mc.className = "statechip" + (S.motorPwm > 0 ? " good" : "");
       $("#motorPwmText").textContent = S.motorPwm;
       $("#motorDirText").textContent = S.motorDir || "—";
+      // Trash conveyor
+      const tc = $("#tcChip");
+      tc.textContent = S.tcState || "—";
+      tc.className = "statechip" + (
+        S.tcState === "PICKING" || S.tcState === "READY" ? " good" :
+        S.tcState === "HOMING"  || S.tcState === "WAIT_HOME" ? " warn" : ""
+      );
+      $("#tcPosText").textContent = S.tcPosMm;
+      $("#tcBagText").textContent = S.tcBag;
     }
 
     async function doorCmd(endpoint){
@@ -1093,6 +1139,16 @@
         log(`Gate: ${msg}`, "info");
         await arduinoRefreshStatus();
       }catch(err){ log(`Gate cmd failed: ${err.message}`, "bad"); }
+    }
+
+    async function tcCmd(endpoint, label){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const res = await apiArduino(endpoint, { method: "POST" });
+        const msg = (res.response || []).join(" | ") || label;
+        log(`Trash Conveyor: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`Conveyor cmd failed: ${err.message}`, "bad"); }
     }
 
     async function motorSet(){
@@ -1800,6 +1856,12 @@
       on("btnGateOpen",   "click", ()=>gateCmd("/gate/open"));
       on("btnGateClose",  "click", ()=>gateCmd("/gate/close"));
       on("btnGateStatus", "click", ()=>arduinoRefreshStatus());
+
+      // Trash conveyor (pick & place)
+      on("btnTcHome",   "click", ()=>tcCmd("/tc/home", "HOME"));
+      on("btnTcPick",   "click", ()=>tcCmd("/tc/pick", "PICK"));
+      on("btnTcStop",   "click", ()=>tcCmd("/tc/stop", "STOP"));
+      on("btnTcStatus", "click", ()=>arduinoRefreshStatus());
 
       // Dryer Screw motor
       on("btnMotorSet",    "click", ()=>motorSet());

@@ -21,11 +21,12 @@
  *   MOTOR_STATUS           Print current motor speed / direction
  *
  *   TC_HOME                Home the conveyor stepper, then park at Bag 1
- *   TC_PICK                Run the pick-and-place cycle (Bag 1 -> shredder)
+ *   TC_PICK                Run the repeating sequence: Bag 1 x4, then Bag 2 x1
  *   TC_STOP                Stop the pick cycle
  *   TC_UP / TC_DOWN        Raise / lower the picker servo
- *   TC_SERVO <0-180>       Move picker servo to an angle (deg)
+ *   TC_SERVO <0-270>       Move picker servo to an angle (deg)
  *   TC_PUMP_ON / _OFF      Manually switch the vacuum pump relay
+ *   TC_IR_ON / _OFF        Enable / disable the IR bag-stack sensor check
  *   TC_MOVE <-550..-10>    Manual stepper move (mm from home)
  *   TC_STATUS              Print trash-conveyor detail status
  *
@@ -75,6 +76,7 @@ const int TC_servoMotor_pin                = 5;
 const int TC_vacuumPumpRelay               = 24;
 const int TC_stepperHomeLimit              = 34;
 const int TC_leftFilmSensor                = 35;
+const int TC_rightFilmSensor               = 36;
 const int TC_vacuumSensor                  = A0;
 
 // ============================================================================
@@ -87,25 +89,30 @@ const int GATE_CLOSE_DEG = 0;
 const unsigned long ENERGY_PRINT_INTERVAL_MS = 500;
 
 // ── Trash conveyor tunables ────────────────────────────────────────────────
-// Picker servo angles (deg).
+// Picker servo angles (deg) for a 270-degree servo driven by pulse width.
 const int TC_servoMinDeg  = 0;
-const int TC_servoMaxDeg  = 180;
+const int TC_servoMaxDeg  = 270;
+const int TC_servoMinUs   = 500;
+const int TC_servoMaxUs   = 2500;
 const int TC_servoUpDeg   = 0;
-const int TC_servoDownDeg = 180;
+const int TC_servoDownDeg = 270;
 
-// Vacuum pump relay (D24). Most relay boards energize on LOW; set false if
-// your board is active-LOW, true if it energizes on HIGH.
-const bool TC_pumpRelayActiveHigh = false;
+// Vacuum pump relay (D24). The pump board energizes on HIGH; set false if a
+// board is active-LOW (energizes on LOW).
+const bool TC_pumpRelayActiveHigh = true;
 
 // Vacuum pick detection (sensor on A0).
 const float TC_analogReferenceV = 5.0;
 const float TC_vacuumThresholdV = 2.5;
 const bool  TC_vacuumDetectedWhenVoltageHigh = true;
-const int   TC_servoPickStepDeg = 2;
+const int   TC_servoPickStepDeg = 1;
+const unsigned long TC_pumpPrimeMs           = 75;
 const unsigned long TC_servoStepSettleMs     = 6;
 const unsigned long TC_vacuumCheckIntervalMs = 1;
 const unsigned long TC_servoReturnMsPerDeg   = 4;
 const unsigned long TC_servoReturnMinMs      = 150;
+const int TC_vacuumConfirmSamples     = 3;
+const unsigned long TC_vacuumConfirmDelayMs = 1;
 const int TC_vacuumFastConfirmSamples = 2;
 
 // IR bag-stack sensor (left film sensor). Most 3-pin IR sensors read LOW when
@@ -130,7 +137,8 @@ const int   TC_microsteps = 4;
 // Positions, in mm from home. Negative moves away from the switch.
 const float TC_homePos       = 0.0;
 const float TC_bag1Pos       = -25.0;
-const float TC_shredderPos   = -425.0;
+const float TC_bag2Pos       = -500.0;   // Tune to the Bag 2 stack position.
+const float TC_shredderPos   = -475.0;
 const float TC_stepperMinPos = -550.0;
 const float TC_stepperMaxPos = -10.0;
 
@@ -169,8 +177,8 @@ enum TCState {
   TC_HOMING,
   TC_BACK_TO_BAG1,
   TC_READY,
-  TC_BAG1_TO_SHREDDER,
-  TC_SHREDDER_TO_BAG1,
+  TC_MOVE_TO_BAG,
+  TC_BAG_TO_SHREDDER,
   TC_MANUAL_MOVE,
   TC_DONE
 };
@@ -178,7 +186,11 @@ enum TCState {
 TCState tcState = TC_WAIT_HOME;
 int  tcLastLimitRead   = HIGH;
 int  tcLimitState      = HIGH;
-int  tcBag1TripsDone   = 0;
+int  tcBagTripsDone    = 0;
+int  tcActiveBag       = 1;
+int  tcSequenceStep    = 0;
+bool tcSequenceRunning = false;
+bool tcIrDetectionEnabled = true;
 unsigned long tcLastLimitChange = 0;
 int  tcCurrentServoAngle = TC_servoUpDeg;
 bool tcPumpRunning     = false;
@@ -285,9 +297,9 @@ void printEnergy() {
 // ============================================================================
 //  Trash Conveyor - Pick & Place
 //  Ported from Trash_Conveyor-Test-Pick_Place_Sequence. Pins follow
-//  pinmap_mega2560.md. Vacuum PUMP control is intentionally omitted for now
-//  (relay D24 unused); the vacuum SENSOR on A0 is still sampled so vacuum-based
-//  pick detection works as soon as the pump is wired in and re-enabled.
+//  pinmap_mega2560.md. TC_PICK runs the repeating sequence: Bag 1 four times,
+//  then Bag 2 once, and repeat. The vacuum pump (relay D24) is primed before
+//  each pick; a missing bag or lost vacuum stops the sequence.
 // ============================================================================
 
 long tcMmToSteps(float mm) {
@@ -346,10 +358,17 @@ bool tcVacuumDetectedDuringSettle() {
   return false;
 }
 
+int tcActiveBagSensorPin() {
+  return tcActiveBag == 2 ? TC_rightFilmSensor : TC_leftFilmSensor;
+}
+
 bool tcBagStackEmptyConfirmed() {
+  if (!tcIrDetectionEnabled) {
+    return false;
+  }
   int emptySamples = 0;
   for (int i = 0; i < TC_bagSensorConfirmSamples; i++) {
-    bool bagPresent = digitalRead(TC_leftFilmSensor) == TC_bagPresentState;
+    bool bagPresent = digitalRead(tcActiveBagSensorPin()) == TC_bagPresentState;
     if (!bagPresent) {
       emptySamples++;
     }
@@ -362,7 +381,8 @@ bool tcBagStackEmptyConfirmed() {
 
 void tcWriteServoAngle(int angle) {
   tcCurrentServoAngle = constrain(angle, TC_servoMinDeg, TC_servoMaxDeg);
-  TC_servoMotor.write(tcCurrentServoAngle);
+  int pulseWidth = map(tcCurrentServoAngle, TC_servoMinDeg, TC_servoMaxDeg, TC_servoMinUs, TC_servoMaxUs);
+  TC_servoMotor.writeMicroseconds(pulseWidth);
 }
 
 void tcPumpOn() {
@@ -373,6 +393,12 @@ void tcPumpOn() {
 void tcPumpOff() {
   digitalWrite(TC_vacuumPumpRelay, TC_pumpRelayActiveHigh ? LOW : HIGH);
   tcPumpRunning = false;
+}
+
+void tcSetIrDetection(bool enabled) {
+  tcIrDetectionEnabled = enabled;
+  Serial.print(F("[TC] IR detection "));
+  Serial.println(enabled ? F("ENABLED") : F("DISABLED"));
 }
 
 void tcServoUp() {
@@ -396,29 +422,73 @@ void tcMoveTo(float targetMm, TCState nextState) {
 }
 
 void tcStopPickSequence(const __FlashStringHelper* message) {
+  tcSequenceRunning = false;
+  tcPumpOff();
   TC_stepper.stop();
   TC_stepper.disableOutputs();
-  tcPumpOff();
   tcState = TC_DONE;
   Serial.println(message);
 }
 
-void tcPauseAtShredder() {
+int tcNextSequenceBag() {
+  // Pick Bag 1 four times, then Bag 2 once, then repeat.
+  return tcSequenceStep < 4 ? 1 : 2;
+}
+
+void tcAdvanceSequenceStep() {
+  tcSequenceStep++;
+  if (tcSequenceStep >= 5) {
+    tcSequenceStep = 0;
+  }
+}
+
+float tcActiveBagPosition() {
+  return tcActiveBag == 2 ? TC_bag2Pos : TC_bag1Pos;
+}
+
+const __FlashStringHelper* tcActiveBagName() {
+  return tcActiveBag == 2 ? F("Bag 2") : F("Bag 1");
+}
+
+void tcDropAtShredderAndContinue() {
   // Release the bag over the shredder, then dwell.
   tcPumpOff();
   delay(TC_shredderPauseMs);
+
+  tcBagTripsDone++;
+  Serial.print(F("[TC] Dropped "));
+  Serial.print(tcActiveBagName());
+  Serial.print(F(" at shredder. Trips: "));
+  Serial.println(tcBagTripsDone);
+
+  tcAdvanceSequenceStep();
+
+  if (!tcSequenceRunning) {
+    TC_stepper.disableOutputs();
+    tcState = TC_READY;
+    Serial.println(F("[TC] Sequence paused after shredder drop"));
+    return;
+  }
+
+  tcActiveBag = tcNextSequenceBag();
+  tcMoveTo(tcActiveBagPosition(), TC_MOVE_TO_BAG);
+  Serial.print(F("[TC] Next pick: "));
+  Serial.print(tcActiveBagName());
+  Serial.print(F(" | step "));
+  Serial.print(tcSequenceStep + 1);
+  Serial.println(F(" of 5"));
 }
 
 bool tcPickAtBag() {
   if (tcBagStackEmptyConfirmed()) {
-    tcStopPickSequence(F("[TC] Bag stack empty - pick sequence stopped"));
+    tcStopPickSequence(F("[TC] Bag not detected - sequence stopped"));
     return false;
   }
 
-  // Turn the vacuum pump on before the down stroke so suction builds while the
-  // picker descends; tcVacuumDetectedDuringSettle() grabs as soon as the bag
-  // seals against the cup.
+  // Prime the vacuum pump, then descend; grab as soon as the cup seals.
   tcPumpOn();
+  delay(TC_pumpPrimeMs);
+
   bool bagGrabbed = false;
   for (int angle = TC_servoUpDeg; angle <= TC_servoDownDeg; angle += TC_servoPickStepDeg) {
     tcWriteServoAngle(angle);
@@ -434,7 +504,8 @@ bool tcPickAtBag() {
   if (!bagGrabbed) {
     tcServoDown();
     delay(TC_servoStepSettleMs);
-    Serial.println(F("[TC] No vacuum detected at full down"));
+    tcStopPickSequence(F("[TC] Vacuum not detected - sequence stopped"));
+    return false;
   }
 
   tcReturnServoToUp();
@@ -442,7 +513,10 @@ bool tcPickAtBag() {
 }
 
 void tcStartHome() {
-  tcBag1TripsDone = 0;
+  tcSequenceRunning = false;
+  tcBagTripsDone = 0;
+  tcActiveBag = 1;
+  tcSequenceStep = 0;
   tcState = TC_HOMING;
   TC_stepper.enableOutputs();
   TC_stepper.setSpeed(tcMmToSteps(TC_homeSpeed) * TC_homeDir);
@@ -461,15 +535,17 @@ void tcRunHome() {
 }
 
 void tcStartPick() {
-  if (tcState != TC_READY) {
-    Serial.println(F("[TC] Home first (TC_HOME) and wait until at Bag 1"));
+  if (tcState != TC_READY && tcState != TC_DONE) {
+    Serial.println(F("[TC] Home first (TC_HOME) and wait until ready"));
     return;
   }
-  tcBag1TripsDone = 0;
-  if (tcPickAtBag()) {
-    tcMoveTo(TC_shredderPos, TC_BAG1_TO_SHREDDER);
-    Serial.println(F("[TC] Pick cycle started"));
-  }
+  tcSequenceRunning = true;
+  tcBagTripsDone = 0;
+  tcSequenceStep = 0;
+  tcActiveBag = tcNextSequenceBag();
+  tcMoveTo(tcActiveBagPosition(), TC_MOVE_TO_BAG);
+  Serial.print(F("[TC] Sequence started - moving to "));
+  Serial.println(tcActiveBagName());
 }
 
 void tcMoveStepperTo(float targetMm) {
@@ -482,6 +558,7 @@ void tcMoveStepperTo(float targetMm) {
     return;
   }
   targetMm = constrain(targetMm, TC_stepperMinPos, TC_stepperMaxPos);
+  tcSequenceRunning = false;
   tcMoveTo(targetMm, TC_MANUAL_MOVE);
   Serial.print(F("[TC] Moving to "));
   Serial.print(targetMm);
@@ -507,18 +584,15 @@ void tcRunState() {
       Serial.println(F("[TC] Homed - at Bag 1, send TC_PICK"));
       break;
 
-    case TC_BAG1_TO_SHREDDER:
-      tcPauseAtShredder();
-      tcBag1TripsDone++;
-      Serial.print(F("[TC] Bag 1 trip "));
-      Serial.println(tcBag1TripsDone);
-      tcMoveTo(TC_bag1Pos, TC_SHREDDER_TO_BAG1);
+    case TC_MOVE_TO_BAG:
+      if (tcPickAtBag()) {
+        tcMoveTo(TC_shredderPos, TC_BAG_TO_SHREDDER);
+        Serial.println(F("[TC] Pick complete - moving to shredder"));
+      }
       break;
 
-    case TC_SHREDDER_TO_BAG1:
-      if (tcPickAtBag()) {
-        tcMoveTo(TC_shredderPos, TC_BAG1_TO_SHREDDER);
-      }
+    case TC_BAG_TO_SHREDDER:
+      tcDropAtShredderAndContinue();
       break;
 
     case TC_MANUAL_MOVE:
@@ -540,13 +614,13 @@ void tcUpdate() {
 const __FlashStringHelper* tcStateName() {
   switch (tcState) {
     case TC_HOMING:
-    case TC_BACK_TO_BAG1:      return F("HOMING");
-    case TC_READY:             return F("READY");
-    case TC_BAG1_TO_SHREDDER:
-    case TC_SHREDDER_TO_BAG1:  return F("PICKING");
-    case TC_MANUAL_MOVE:       return F("MANUAL");
-    case TC_DONE:              return F("DONE");
-    default:                   return F("WAIT_HOME");
+    case TC_BACK_TO_BAG1:     return F("HOMING");
+    case TC_READY:            return F("READY");
+    case TC_MOVE_TO_BAG:
+    case TC_BAG_TO_SHREDDER:  return F("PICKING");
+    case TC_MANUAL_MOVE:      return F("MANUAL");
+    case TC_DONE:             return F("DONE");
+    default:                  return F("WAIT_HOME");
   }
 }
 
@@ -557,8 +631,14 @@ void tcPrintStatus() {
   Serial.print(tcStepsToMm(TC_stepper.currentPosition()), 1);
   Serial.print(F(" limit="));
   Serial.print(tcLimitPressed() ? F("PRESSED") : F("OPEN"));
+  Serial.print(F(" bag_num="));
+  Serial.print(tcActiveBag);
   Serial.print(F(" bag="));
-  Serial.print(tcBagStackEmptyConfirmed() ? F("EMPTY") : F("DETECTED"));
+  if (tcIrDetectionEnabled) {
+    Serial.print(tcBagStackEmptyConfirmed() ? F("EMPTY") : F("DETECTED"));
+  } else {
+    Serial.print(F("IR_OFF"));
+  }
   int vacuumRaw = analogRead(TC_vacuumSensor);
   Serial.print(F(" pump="));
   Serial.print(tcPumpRunning ? F("ON") : F("OFF"));
@@ -566,8 +646,12 @@ void tcPrintStatus() {
   Serial.print(tcVacuumDetectedOnce() ? F("YES") : F("NO"));
   Serial.print(F(" vac_v="));
   Serial.print(tcRawToVoltage(vacuumRaw), 2);
+  Serial.print(F(" step="));
+  Serial.print(tcSequenceStep + 1);
+  Serial.print(F(" seq="));
+  Serial.print(tcSequenceRunning ? F("RUN") : F("IDLE"));
   Serial.print(F(" trips="));
-  Serial.print(tcBag1TripsDone);
+  Serial.print(tcBagTripsDone);
   Serial.print(F(" servo="));
   Serial.println(tcCurrentServoAngle);
 }
@@ -587,8 +671,10 @@ void printAllStatus() {
   Serial.print(tcStateName());
   Serial.print(F(" tc_pos_mm="));
   Serial.print(tcStepsToMm(TC_stepper.currentPosition()), 1);
+  Serial.print(F(" tc_bag_num="));
+  Serial.print(tcActiveBag);
   Serial.print(F(" tc_bag="));
-  Serial.print((digitalRead(TC_leftFilmSensor) == TC_bagPresentState) ? F("DETECTED") : F("EMPTY"));
+  Serial.print((digitalRead(tcActiveBagSensorPin()) == TC_bagPresentState) ? F("DETECTED") : F("EMPTY"));
   Serial.print(F(" tc_pump="));
   Serial.println(tcPumpRunning ? F("ON") : F("OFF"));
   printEnergy();
@@ -669,10 +755,16 @@ void handleCommand(const String& cmd) {
     tcPumpOff();
     Serial.println(F("[TC] Vacuum pump OFF"));
 
+  } else if (cmd == "TC_IR_ON") {
+    tcSetIrDetection(true);
+
+  } else if (cmd == "TC_IR_OFF") {
+    tcSetIrDetection(false);
+
   } else if (cmd.startsWith("TC_SERVO ")) {
     int deg = cmd.substring(9).toInt();
     if (deg < TC_servoMinDeg || deg > TC_servoMaxDeg) {
-      Serial.println(F("[TC] ERROR: servo angle must be 0-180"));
+      Serial.println(F("[TC] ERROR: servo angle must be 0-270"));
     } else {
       tcWriteServoAngle(deg);
       Serial.print(F("[TC] Servo "));
@@ -746,9 +838,10 @@ void setup() {
   // Trash conveyor - servo up, pump off, stepper disabled, awaiting TC_HOME
   pinMode(TC_stepperHomeLimit, INPUT_PULLUP);
   pinMode(TC_leftFilmSensor, INPUT);
+  pinMode(TC_rightFilmSensor, INPUT);
   pinMode(TC_vacuumPumpRelay, OUTPUT);
   tcPumpOff();
-  TC_servoMotor.attach(TC_servoMotor_pin);
+  TC_servoMotor.attach(TC_servoMotor_pin, TC_servoMinUs, TC_servoMaxUs);
   tcServoUp();
   TC_stepper.setEnablePin(TC_stepperMotorController_enable);
   TC_stepper.setPinsInverted(false, false, true);  // Enable pin is active LOW

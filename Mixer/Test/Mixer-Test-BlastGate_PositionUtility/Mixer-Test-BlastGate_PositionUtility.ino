@@ -20,6 +20,7 @@
  *
  * -- Serial commands (9600 baud, newline-terminated) -------------------------
  *   home <L|R|ALL>          Retract to MIN and set that gate to 0 %
+ *   homemax <L|R|ALL>       Extend to MAX and set that gate to 100 %
  *   cal  <L|R|ALL>          Home, then time a full stroke to MAX (calibrate)
  *   pos  <L|R> <0-100>      Move a gate to a % of its stroke
  *   ext  <L|R> <ms>         Jog extend  (toward MAX) for <ms> milliseconds
@@ -133,6 +134,29 @@ bool gateHome(int g) {
   gateStop(g);
   positionMs[g] = 0;
   Serial.println(F("  at MIN (0%)"));
+  return true;
+}
+
+bool gateHomeMax(int g) {
+  Serial.print(F("["));
+  Serial.print(GATE_NAME[g]);
+  Serial.println(F("] Homing to MAX..."));
+
+  unsigned long start = millis();
+  while (!maxHit(g)) {
+    monitorLimits();
+    if (abortRequested()) { gateStop(g); Serial.println(F("  aborted")); return false; }
+    gateExtend(g);
+    if (millis() - start > MOVE_TIMEOUT_MS) {
+      gateStop(g);
+      Serial.println(F("  MAX timeout - check wiring/stroke time"));
+      return false;
+    }
+    delay(MOVE_TICK_MS);
+  }
+  gateStop(g);
+  positionMs[g] = strokeMs[g];
+  Serial.println(F("  at MAX (100%)"));
   return true;
 }
 
@@ -289,6 +313,7 @@ void printStatus() {
 void printHelp() {
   Serial.println(F("Commands:"));
   Serial.println(F("  home <L|R|ALL>       Retract to MIN, set 0%"));
+  Serial.println(F("  homemax <L|R|ALL>    Extend to MAX, set 100%"));
   Serial.println(F("  cal  <L|R|ALL>       Home then time a full stroke"));
   Serial.println(F("  pos  <L|R> <0-100>   Move gate to a % of stroke"));
   Serial.println(F("  ext  <L|R> <ms>      Jog extend for <ms>"));
@@ -341,14 +366,17 @@ void handleCommand(const String& line) {
   if (verb == "status") { printStatus(); return; }
   if (verb == "help")   { printHelp();   return; }
 
-  if (verb == "home" || verb == "cal") {
+  if (verb == "home" || verb == "homemax" || verb == "cal") {
     String g = a1; g.toUpperCase();
     bool doL = (g == "ALL" || parseGate(a1) == LEFT);
     bool doR = (g == "ALL" || parseGate(a1) == RIGHT);
-    if (!doL && !doR) { Serial.println(F("Usage: home/cal <L|R|ALL>")); return; }
+    if (!doL && !doR) { Serial.println(F("Usage: home/homemax/cal <L|R|ALL>")); return; }
     if (verb == "home") {
       if (doL) gateHome(LEFT);
       if (doR) gateHome(RIGHT);
+    } else if (verb == "homemax") {
+      if (doL) gateHomeMax(LEFT);
+      if (doR) gateHomeMax(RIGHT);
     } else {
       if (doL) gateCalibrate(LEFT);
       if (doR) gateCalibrate(RIGHT);

@@ -33,6 +33,15 @@
  *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
  *   SHREDDER_FWD / _REV    Set shredder motor direction
  *
+ *   BLASTGATE_HOME <L|R|ALL>     Retract gate to MIN (0%)
+ *   BLASTGATE_HOMEMAX <L|R|ALL>  Extend gate to MAX (100%)
+ *   BLASTGATE_CAL <L|R|ALL>      Home then time a full stroke (calibrate)
+ *   BLASTGATE_POS <L|R> <0-100>  Move gate to a % of its stroke
+ *   BLASTGATE_EXT/RET <L|R> <ms> Jog extend / retract for <ms>
+ *   BLASTGATE_SPEED <1-100>      Set blast gate motion speed (% of full)
+ *   BLASTGATE_STOP               Stop both blast gate actuators
+ *   BLASTGATE_STATUS             Print blast gate calibration + position
+ *
  *   STATUS                 Print all subsystem states + one INA219 snapshot
  *   ESTOP                  Stop motor, close gate, halt conveyor immediately
  *
@@ -45,6 +54,10 @@
  *   Screw motor ENA    ->  D3  (PWM)
  *   Screw motor IN1/2  ->  D7  / D8
  *   INA219             ->  D20 (SDA) / D21 (SCL)   [hardware I2C]
+ *
+ *   Mixer blast gates (RoboClaw RC pulse):
+ *     LEFT  actuator  ->  D9,  limits MIN=D37 MAX=D38
+ *     RIGHT actuator  ->  D8,  limits MIN=D39 MAX=D40
  *
  *   Trash conveyor (per pinmap_mega2560.md):
  *     Stepper STEP / DIR / EN  ->  D4 / D22 / D23
@@ -86,6 +99,16 @@ const int TC_vacuumSensor                  = A0;
 const int Shredder_motorController_onOff     = 25;
 const int Shredder_motorController_direction = 26;
 
+// Mixer blast gates - RoboClaw RC-pulse linear actuators (pinmap_mega2560.md).
+// Mapping verified on the bench: LEFT  -> RC D9, limits MIN=D37 MAX=D38;
+//                               RIGHT -> RC D8, limits MIN=D39 MAX=D40.
+const int Mixer_blastGatePin[2]    = { 9, 8 };     // [LEFT, RIGHT] RC pulse out
+const int Mixer_blastGateMinPin[2] = { 37, 39 };   // [LEFT, RIGHT] MIN limit
+const int Mixer_blastGateMaxPin[2] = { 38, 40 };   // [LEFT, RIGHT] MAX limit
+const char* Mixer_blastGateName[2] = { "LEFT", "RIGHT" };
+const int BG_LEFT  = 0;
+const int BG_RIGHT = 1;
+
 // ============================================================================
 //  Constants
 // ============================================================================
@@ -112,6 +135,19 @@ const bool TC_pumpRelayActiveHigh = true;
 // match the drive's logic levels.
 const bool ShredderOnOffActiveHigh = true;   // true: HIGH runs the motor
 const bool ShredderDirFwdIsHigh    = true;   // true: HIGH = forward
+
+// ── Mixer blast gate (RoboClaw) tunables ───────────────────────────────────
+// RC pulse widths: 1500 us neutral; the extremes give full speed. speedPct
+// scales the offset from neutral so lower values move slower.
+const int BG_STOP_US    = 1500;
+const int BG_EXTEND_US  = 1000;   // toward MAX (fully extended) at full speed
+const int BG_RETRACT_US = 2000;   // toward MIN (shortest stroke) at full speed
+int blastGateSpeedPct   = 100;    // 1-100 % of full speed
+
+const unsigned long BG_MOVE_TIMEOUT_MS   = 8000;   // guard for any single move
+const unsigned long BG_DEFAULT_STROKE_MS = 3000;   // assumed travel until cal
+const long          BG_POS_DEADBAND_MS   = 40;     // ignore tiny moves
+const unsigned long BG_MOVE_TICK_MS      = 5;      // control-loop period
 
 // Vacuum pick detection (sensor on A0).
 const float TC_analogReferenceV = 5.0;
@@ -171,6 +207,8 @@ AccelStepper TC_stepper(AccelStepper::DRIVER,
                         TC_stepperMotorController_dir);
 Servo TC_servoMotor;
 
+Servo Mixer_blastGateServo[2];
+
 // ============================================================================
 //  State
 // ============================================================================
@@ -208,6 +246,13 @@ int  tcCurrentServoAngle = TC_servoUpDeg;
 bool tcPumpRunning     = false;
 bool shredderRunning   = false;
 bool shredderFwd       = true;
+
+// Mixer blast gate estimated position state (indexed [LEFT, RIGHT]).
+unsigned long blastGateStrokeMs[2]   = { BG_DEFAULT_STROKE_MS, BG_DEFAULT_STROKE_MS };
+long          blastGatePositionMs[2] = { 0, 0 };   // estimated ms of travel from MIN
+bool          blastGateCalibrated[2] = { false, false };
+bool          blastGatePrevMin[2]    = { false, false };
+bool          blastGatePrevMax[2]    = { false, false };
 
 // ============================================================================
 //  Gate helpers
@@ -698,6 +743,332 @@ void shredderSetDirection(bool fwd) {
 }
 
 // ============================================================================
+//  Mixer Blast Gates - RoboClaw linear actuators
+//  Ported from Mixer-Test-BlastGate_PositionUtility. Position is ESTIMATED
+//  from timed motion (no encoders); the MIN / MAX limit switches provide the
+//  0% / 100% references. Moves are blocking; any serial byte aborts a move.
+// ============================================================================
+
+bool bgMinHit(int g) { return digitalRead(Mixer_blastGateMinPin[g]) == LOW; }
+bool bgMaxHit(int g) { return digitalRead(Mixer_blastGateMaxPin[g]) == LOW; }
+
+void bgStop(int g) { Mixer_blastGateServo[g].writeMicroseconds(BG_STOP_US); }
+
+void bgExtend(int g) {
+  int us = BG_STOP_US + (int)((long)(BG_EXTEND_US - BG_STOP_US) * blastGateSpeedPct / 100);
+  Mixer_blastGateServo[g].writeMicroseconds(us);
+}
+
+void bgRetract(int g) {
+  int us = BG_STOP_US + (int)((long)(BG_RETRACT_US - BG_STOP_US) * blastGateSpeedPct / 100);
+  Mixer_blastGateServo[g].writeMicroseconds(us);
+}
+
+void bgStopAll() {
+  bgStop(BG_LEFT);
+  bgStop(BG_RIGHT);
+}
+
+// True if the user sent any byte (used to abort a blocking move).
+bool bgAbortRequested() {
+  if (Serial.available() > 0) {
+    while (Serial.available() > 0) Serial.read();  // flush
+    return true;
+  }
+  return false;
+}
+
+// Watch all four limit switches and report press / release transitions.
+void bgMonitorLimits() {
+  for (int g = 0; g < 2; g++) {
+    bool m = bgMinHit(g);
+    if (m != blastGatePrevMin[g]) {
+      Serial.print(F("[BLASTGATE "));
+      Serial.print(Mixer_blastGateName[g]);
+      Serial.println(m ? F("] MIN limit PRESSED") : F("] MIN limit released"));
+      blastGatePrevMin[g] = m;
+    }
+    bool x = bgMaxHit(g);
+    if (x != blastGatePrevMax[g]) {
+      Serial.print(F("[BLASTGATE "));
+      Serial.print(Mixer_blastGateName[g]);
+      Serial.println(x ? F("] MAX limit PRESSED") : F("] MAX limit released"));
+      blastGatePrevMax[g] = x;
+    }
+  }
+}
+
+float bgPercent(int g) {
+  if (blastGateStrokeMs[g] == 0) return 0.0;
+  return 100.0 * (float)blastGatePositionMs[g] / (float)blastGateStrokeMs[g];
+}
+
+bool bgHome(int g) {
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.println(F("] Homing to MIN..."));
+
+  unsigned long start = millis();
+  while (!bgMinHit(g)) {
+    bgMonitorLimits();
+    if (bgAbortRequested()) { bgStop(g); Serial.println(F("[BLASTGATE] aborted")); return false; }
+    bgRetract(g);
+    if (millis() - start > BG_MOVE_TIMEOUT_MS) {
+      bgStop(g);
+      Serial.println(F("[BLASTGATE] MIN timeout - check wiring/stroke time"));
+      return false;
+    }
+    delay(BG_MOVE_TICK_MS);
+  }
+  bgStop(g);
+  blastGatePositionMs[g] = 0;
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.println(F("] at MIN (0%)"));
+  return true;
+}
+
+bool bgHomeMax(int g) {
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.println(F("] Homing to MAX..."));
+
+  unsigned long start = millis();
+  while (!bgMaxHit(g)) {
+    bgMonitorLimits();
+    if (bgAbortRequested()) { bgStop(g); Serial.println(F("[BLASTGATE] aborted")); return false; }
+    bgExtend(g);
+    if (millis() - start > BG_MOVE_TIMEOUT_MS) {
+      bgStop(g);
+      Serial.println(F("[BLASTGATE] MAX timeout - check wiring/stroke time"));
+      return false;
+    }
+    delay(BG_MOVE_TICK_MS);
+  }
+  bgStop(g);
+  blastGatePositionMs[g] = blastGateStrokeMs[g];
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.println(F("] at MAX (100%)"));
+  return true;
+}
+
+bool bgCalibrate(int g) {
+  if (!bgHome(g)) return false;
+
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.println(F("] Calibrating - timing MIN->MAX..."));
+
+  unsigned long start = millis();
+  while (!bgMaxHit(g)) {
+    bgMonitorLimits();
+    if (bgAbortRequested()) { bgStop(g); Serial.println(F("[BLASTGATE] aborted")); return false; }
+    bgExtend(g);
+    if (millis() - start > BG_MOVE_TIMEOUT_MS) {
+      bgStop(g);
+      Serial.println(F("[BLASTGATE] MAX timeout - calibration failed"));
+      return false;
+    }
+    delay(BG_MOVE_TICK_MS);
+  }
+  bgStop(g);
+
+  blastGateStrokeMs[g]   = millis() - start;
+  blastGatePositionMs[g] = blastGateStrokeMs[g];
+  blastGateCalibrated[g] = true;
+
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.print(F("] stroke="));
+  Serial.print(blastGateStrokeMs[g]);
+  Serial.println(F(" ms (at MAX / 100%)"));
+  return true;
+}
+
+void bgMoveToPercent(int g, float pct) {
+  pct = constrain(pct, 0.0, 100.0);
+
+  if (!blastGateCalibrated[g]) {
+    Serial.print(F("[BLASTGATE "));
+    Serial.print(Mixer_blastGateName[g]);
+    Serial.print(F("] WARNING not calibrated - assumed stroke "));
+    Serial.print(blastGateStrokeMs[g]);
+    Serial.println(F(" ms; run BLASTGATE_CAL"));
+  }
+
+  long targetMs = (long)((float)blastGateStrokeMs[g] * pct / 100.0);
+  long deltaMs  = targetMs - blastGatePositionMs[g];
+
+  if (labs(deltaMs) < BG_POS_DEADBAND_MS) {
+    Serial.print(F("[BLASTGATE "));
+    Serial.print(Mixer_blastGateName[g]);
+    Serial.println(F("] already at target"));
+    return;
+  }
+
+  bool extending = deltaMs > 0;
+  unsigned long moveTime = (unsigned long)labs(deltaMs);
+
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.print(F("] moving to "));
+  Serial.print(pct, 1);
+  Serial.print(F("% ("));
+  Serial.print(extending ? F("extend ") : F("retract "));
+  Serial.print(moveTime);
+  Serial.println(F(" ms)"));
+
+  unsigned long start = millis();
+  bool hitLimit = false;
+  while (millis() - start < moveTime) {
+    bgMonitorLimits();
+    if (bgAbortRequested()) { Serial.println(F("[BLASTGATE] aborted")); break; }
+    if (extending) {
+      if (bgMaxHit(g)) { hitLimit = true; break; }
+      bgExtend(g);
+    } else {
+      if (bgMinHit(g)) { hitLimit = true; break; }
+      bgRetract(g);
+    }
+    if (millis() - start > BG_MOVE_TIMEOUT_MS) { Serial.println(F("[BLASTGATE] move timeout")); break; }
+    delay(BG_MOVE_TICK_MS);
+  }
+  bgStop(g);
+
+  unsigned long elapsed = millis() - start;
+  blastGatePositionMs[g] += extending ? (long)elapsed : -(long)elapsed;
+  if (bgMinHit(g)) blastGatePositionMs[g] = 0;
+  if (bgMaxHit(g)) blastGatePositionMs[g] = blastGateStrokeMs[g];
+  blastGatePositionMs[g] = constrain(blastGatePositionMs[g], 0L, (long)blastGateStrokeMs[g]);
+
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.print(F("] done at ~"));
+  Serial.print(bgPercent(g), 1);
+  Serial.print(F("%"));
+  if (hitLimit) Serial.print(F(" (limit)"));
+  Serial.println();
+}
+
+void bgJog(int g, bool extend, unsigned long ms) {
+  Serial.print(F("[BLASTGATE "));
+  Serial.print(Mixer_blastGateName[g]);
+  Serial.print(extend ? F("] extending ") : F("] retracting "));
+  Serial.print(ms);
+  Serial.println(F(" ms"));
+
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    bgMonitorLimits();
+    if (bgAbortRequested()) { Serial.println(F("[BLASTGATE] aborted")); break; }
+    if (extend) {
+      if (bgMaxHit(g)) { Serial.println(F("[BLASTGATE] MAX limit")); break; }
+      bgExtend(g);
+    } else {
+      if (bgMinHit(g)) { Serial.println(F("[BLASTGATE] MIN limit")); break; }
+      bgRetract(g);
+    }
+    delay(BG_MOVE_TICK_MS);
+  }
+  bgStop(g);
+
+  unsigned long elapsed = millis() - start;
+  blastGatePositionMs[g] += extend ? (long)elapsed : -(long)elapsed;
+  if (bgMinHit(g)) blastGatePositionMs[g] = 0;
+  if (bgMaxHit(g)) blastGatePositionMs[g] = blastGateStrokeMs[g];
+  blastGatePositionMs[g] = constrain(blastGatePositionMs[g], 0L, (long)blastGateStrokeMs[g]);
+}
+
+void bgPrintStatus() {
+  for (int g = 0; g < 2; g++) {
+    Serial.print(F("[BLASTGATE "));
+    Serial.print(Mixer_blastGateName[g]);
+    Serial.print(F("] pos=~"));
+    Serial.print(bgPercent(g), 1);
+    Serial.print(F("% stroke="));
+    Serial.print(blastGateStrokeMs[g]);
+    Serial.print(F(" ms cal="));
+    Serial.print(blastGateCalibrated[g] ? F("YES") : F("NO"));
+    Serial.print(F(" MIN="));
+    Serial.print(bgMinHit(g) ? F("HIT") : F("open"));
+    Serial.print(F(" MAX="));
+    Serial.println(bgMaxHit(g) ? F("HIT") : F("open"));
+  }
+}
+
+int bgParseGate(const String& token) {
+  String t = token; t.trim(); t.toUpperCase();
+  if (t == "L" || t == "LEFT")  return BG_LEFT;
+  if (t == "R" || t == "RIGHT") return BG_RIGHT;
+  return -1;
+}
+
+void bgParseSelection(const String& sel, bool& doL, bool& doR) {
+  String g = sel; g.trim(); g.toUpperCase();
+  doL = (g == "ALL" || g == "L" || g == "LEFT");
+  doR = (g == "ALL" || g == "R" || g == "RIGHT");
+}
+
+// Dispatch a single BLASTGATE_* command. The caller prints [BLASTGATE_DONE]
+// afterward so the host knows the (possibly multi-second, blocking) op finished.
+void handleBlastGateCommand(const String& cmd) {
+  if (cmd.startsWith("BLASTGATE_HOMEMAX ")) {
+    bool doL, doR; bgParseSelection(cmd.substring(18), doL, doR);
+    if (!doL && !doR) { Serial.println(F("[BLASTGATE] usage BLASTGATE_HOMEMAX <L|R|ALL>")); return; }
+    if (doL) bgHomeMax(BG_LEFT);
+    if (doR) bgHomeMax(BG_RIGHT);
+
+  } else if (cmd.startsWith("BLASTGATE_HOME ")) {
+    bool doL, doR; bgParseSelection(cmd.substring(15), doL, doR);
+    if (!doL && !doR) { Serial.println(F("[BLASTGATE] usage BLASTGATE_HOME <L|R|ALL>")); return; }
+    if (doL) bgHome(BG_LEFT);
+    if (doR) bgHome(BG_RIGHT);
+
+  } else if (cmd.startsWith("BLASTGATE_CAL ")) {
+    bool doL, doR; bgParseSelection(cmd.substring(14), doL, doR);
+    if (!doL && !doR) { Serial.println(F("[BLASTGATE] usage BLASTGATE_CAL <L|R|ALL>")); return; }
+    if (doL) bgCalibrate(BG_LEFT);
+    if (doR) bgCalibrate(BG_RIGHT);
+
+  } else if (cmd.startsWith("BLASTGATE_POS ")) {
+    String args = cmd.substring(14); args.trim();
+    int sp = args.indexOf(' ');
+    int g = (sp < 0) ? -1 : bgParseGate(args.substring(0, sp));
+    if (g < 0 || sp < 0) { Serial.println(F("[BLASTGATE] usage BLASTGATE_POS <L|R> <0-100>")); return; }
+    bgMoveToPercent(g, args.substring(sp + 1).toFloat());
+
+  } else if (cmd.startsWith("BLASTGATE_EXT ") || cmd.startsWith("BLASTGATE_RET ")) {
+    bool ext = cmd.startsWith("BLASTGATE_EXT ");
+    String args = cmd.substring(14); args.trim();
+    int sp = args.indexOf(' ');
+    int g = (sp < 0) ? -1 : bgParseGate(args.substring(0, sp));
+    long ms = (sp < 0) ? 0 : args.substring(sp + 1).toInt();
+    if (g < 0 || ms <= 0) { Serial.println(F("[BLASTGATE] usage BLASTGATE_EXT/RET <L|R> <ms>")); return; }
+    bgJog(g, ext, (unsigned long)ms);
+
+  } else if (cmd.startsWith("BLASTGATE_SPEED ")) {
+    int v = cmd.substring(16).toInt();
+    if (v < 1 || v > 100) { Serial.println(F("[BLASTGATE] speed must be 1-100")); return; }
+    blastGateSpeedPct = v;
+    Serial.print(F("[BLASTGATE] speed="));
+    Serial.print(blastGateSpeedPct);
+    Serial.println(F("%"));
+
+  } else if (cmd == "BLASTGATE_STOP") {
+    bgStopAll();
+    Serial.println(F("[BLASTGATE] stopped both"));
+
+  } else if (cmd == "BLASTGATE_STATUS") {
+    bgPrintStatus();
+
+  } else {
+    Serial.print(F("[BLASTGATE] unknown: "));
+    Serial.println(cmd);
+  }
+}
+
+// ============================================================================
 //  Global STATUS
 // ============================================================================
 
@@ -721,7 +1092,11 @@ void printAllStatus() {
   Serial.print(F(" shredder="));
   Serial.print(shredderRunning ? F("ON") : F("OFF"));
   Serial.print(F(" shredder_dir="));
-  Serial.println(shredderFwd ? F("FWD") : F("REV"));
+  Serial.print(shredderFwd ? F("FWD") : F("REV"));
+  Serial.print(F(" bg_left="));
+  Serial.print(bgPercent(BG_LEFT), 0);
+  Serial.print(F(" bg_right="));
+  Serial.println(bgPercent(BG_RIGHT), 0);
   printEnergy();
 }
 
@@ -817,6 +1192,10 @@ void handleCommand(const String& cmd) {
     shredderSetDirection(false);
     Serial.println(F("[SHREDDER] Direction REV"));
 
+  } else if (cmd.startsWith("BLASTGATE_")) {
+    handleBlastGateCommand(cmd);
+    Serial.println(F("[BLASTGATE_DONE]"));   // unique terminal marker for the host
+
   } else if (cmd == "TC_IR_ON") {
     tcSetIrDetection(true);
 
@@ -846,6 +1225,7 @@ void handleCommand(const String& cmd) {
     motorStop();
     gateCloseCmd();
     shredderOff();
+    bgStopAll();
     tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
     tcState = TC_WAIT_HOME;
     Serial.println(F("[SYSTEM] ESTOP - all stopped"));
@@ -902,6 +1282,15 @@ void setup() {
   pinMode(Shredder_motorController_onOff, OUTPUT);
   pinMode(Shredder_motorController_direction, OUTPUT);
   shredderOff();
+
+  // Mixer blast gates - hold RC neutral (1500 us) so the RoboClaw arms;
+  // limit switches use internal pull-ups (active LOW).
+  for (int g = 0; g < 2; g++) {
+    pinMode(Mixer_blastGateMinPin[g], INPUT_PULLUP);
+    pinMode(Mixer_blastGateMaxPin[g], INPUT_PULLUP);
+    Mixer_blastGateServo[g].attach(Mixer_blastGatePin[g]);
+  }
+  bgStopAll();
 
   // Trash conveyor - servo up, pump off, stepper disabled, awaiting TC_HOME
   pinMode(TC_stepperHomeLimit, INPUT_PULLUP);

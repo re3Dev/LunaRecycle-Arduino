@@ -39,6 +39,7 @@ from pymodbus.client import ModbusSerialClient
 ARDUINO_PORT     = os.environ.get("LUNA_ARDUINO_PORT", "/dev/ttyACM0")
 ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "9600"))
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
+BLASTGATE_TIMEOUT = 12.0  # blast gate moves are blocking and can take seconds
 
 DRYER_PORT      = os.environ.get("LUNA_DRYER_PORT", "/dev/ttyUSB0")
 DRYER_BAUDRATE  = int(os.environ.get("LUNA_DRYER_BAUD", "57600"))
@@ -126,15 +127,20 @@ class ArduinoBridge:
         self._ser.flush()
 
         is_status = cmd.strip().upper() == "STATUS"
+        # Blast gate moves are blocking on the Mega (home / cal / pos can take a
+        # few seconds) and emit several [BLASTGATE ...] lines, ending with a
+        # unique [BLASTGATE_DONE] marker. Give them a longer read window.
+        is_blastgate = cmd.strip().upper().startswith("BLASTGATE_")
+        total_timeout = BLASTGATE_TIMEOUT if is_blastgate else ARDUINO_TIMEOUT
         # Tags that mark a genuine command reply. [ENERGY] is async telemetry the
         # firmware streams every 500 ms; for non-STATUS commands it must be skipped
         # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies
         # with a [TC] line, not [ENERGY]).
-        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[SYSTEM]")
+        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[BLASTGATE_DONE]", "[SYSTEM]")
 
         lines: list[str] = []
         seen_status = False
-        deadline = time.monotonic() + ARDUINO_TIMEOUT
+        deadline = time.monotonic() + total_timeout
         while time.monotonic() < deadline:
             if self._ser.in_waiting:
                 raw = self._ser.readline()
@@ -670,6 +676,108 @@ def api_shredder_fwd():
 def api_shredder_rev():
     try:
         lines = arduino.send("SHREDDER_REV")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Routes — Mixer blast gates (RoboClaw linear actuators)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _blastgate_gate_arg(default: str = "ALL") -> str:
+    """Read + validate a gate selector (L / R / ALL) from the JSON body."""
+    gate = str((request.json or {}).get("gate", default)).strip().upper()
+    if gate not in ("L", "R", "LEFT", "RIGHT", "ALL"):
+        raise ValueError("gate must be L, R or ALL")
+    return gate
+
+
+@app.route("/api/blastgate/home", methods=["POST"])
+def api_blastgate_home():
+    try:
+        lines = arduino.send(f"BLASTGATE_HOME {_blastgate_gate_arg()}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/blastgate/homemax", methods=["POST"])
+def api_blastgate_homemax():
+    try:
+        lines = arduino.send(f"BLASTGATE_HOMEMAX {_blastgate_gate_arg()}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/blastgate/cal", methods=["POST"])
+def api_blastgate_cal():
+    try:
+        lines = arduino.send(f"BLASTGATE_CAL {_blastgate_gate_arg()}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/blastgate/pos", methods=["POST"])
+def api_blastgate_pos():
+    try:
+        gate = _blastgate_gate_arg(default="")
+        if gate in ("ALL", ""):
+            raise ValueError("pos requires a single gate: L or R")
+        pct = float(request.json["percent"])
+        if pct < 0 or pct > 100:
+            raise ValueError("percent must be 0-100")
+        lines = arduino.send(f"BLASTGATE_POS {gate} {pct:g}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/blastgate/jog", methods=["POST"])
+def api_blastgate_jog():
+    try:
+        gate = _blastgate_gate_arg(default="")
+        if gate in ("ALL", ""):
+            raise ValueError("jog requires a single gate: L or R")
+        direction = str((request.json or {}).get("dir", "")).strip().upper()
+        if direction not in ("EXT", "RET"):
+            raise ValueError("dir must be EXT or RET")
+        ms = int(request.json["ms"])
+        if ms <= 0:
+            raise ValueError("ms must be > 0")
+        lines = arduino.send(f"BLASTGATE_{direction} {gate} {ms}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/blastgate/speed", methods=["POST"])
+def api_blastgate_speed():
+    try:
+        pct = int(request.json["percent"])
+        if pct < 1 or pct > 100:
+            raise ValueError("percent must be 1-100")
+        lines = arduino.send(f"BLASTGATE_SPEED {pct}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/blastgate/stop", methods=["POST"])
+def api_blastgate_stop():
+    try:
+        lines = arduino.send("BLASTGATE_STOP")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/blastgate/status", methods=["POST"])
+def api_blastgate_status():
+    try:
+        lines = arduino.send("BLASTGATE_STATUS")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500

@@ -855,6 +855,57 @@
           </div>
         </section>
 
+        <!-- ── Mixer blast gates ───────────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">⇅</div>
+              <div style="min-width:0">
+                <h2>Blast Gates</h2>
+                <div class="hint">RoboClaw linear actuators · L / R</div>
+              </div>
+            </div>
+            <span class="statechip" id="blastGateChip">—</span>
+          </div>
+          <div class="bd">
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Gate</label>
+              <select id="blastGateSel"
+                style="padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+                <option value="ALL">Both</option>
+                <option value="L">Left</option>
+                <option value="R">Right</option>
+              </select>
+            </div>
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+              <button class="btn mini"         id="btnBgHome">Home (MIN)</button>
+              <button class="btn mini"         id="btnBgHomeMax">Home (MAX)</button>
+              <button class="btn mini primary" id="btnBgCal">Calibrate</button>
+              <button class="btn mini danger"  id="btnBgStop">Stop</button>
+            </div>
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Position %</label>
+              <input type="number" id="blastGatePos" min="0" max="100" value="50"
+                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+              <button class="btn mini primary" id="btnBgPos">Move</button>
+            </div>
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Speed %</label>
+              <input type="number" id="blastGateSpeed" min="1" max="100" value="100"
+                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+              <button class="btn mini" id="btnBgSpeed">Set</button>
+            </div>
+            <div class="split">
+              <div class="kv">
+                <div class="k">Left</div><div class="v"><span id="bgLeftText">—</span> %</div>
+              </div>
+              <div class="kv">
+                <div class="k">Right</div><div class="v"><span id="bgRightText">—</span> %</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="card placeholder-card">
           <div class="hd">
             <div class="title">
@@ -938,6 +989,8 @@
       tcPump: "—",
       shredder: "—",
       shredderDir: "—",
+      bgLeft: "—",
+      bgRight: "—",
 
       convA_on: false,
       convB_on: false,
@@ -1098,6 +1151,8 @@
         S.tcPump     = d.tc_pump     || "—";
         S.shredder   = d.shredder    || "—";
         S.shredderDir = d.shredder_dir || "—";
+        S.bgLeft     = d.bg_left     !== undefined ? d.bg_left  : "—";
+        S.bgRight    = d.bg_right    !== undefined ? d.bg_right : "—";
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
@@ -1161,6 +1216,18 @@
       if(st){ st.textContent = S.shredder; }
       const sdt = $("#shredderDirText");
       if(sdt){ sdt.textContent = S.shredderDir; }
+      // Blast gates (linear actuators)
+      const blt = $("#bgLeftText");
+      if(blt){ blt.textContent = S.bgLeft; }
+      const brt = $("#bgRightText");
+      if(brt){ brt.textContent = S.bgRight; }
+      const bgc = $("#blastGateChip");
+      if(bgc){
+        const l = parseFloat(S.bgLeft), r = parseFloat(S.bgRight);
+        const moving = (!isNaN(l) && l > 0) || (!isNaN(r) && r > 0);
+        bgc.textContent = (S.bgLeft === "—" && S.bgRight === "—") ? "—" : `L ${S.bgLeft}% · R ${S.bgRight}%`;
+        bgc.className = "statechip" + (moving ? " good" : "");
+      }
     }
 
     async function doorCmd(endpoint){
@@ -1201,6 +1268,18 @@
         log(`Shredder: ${msg}`, "info");
         await arduinoRefreshStatus();
       }catch(err){ log(`Shredder cmd failed: ${err.message}`, "bad"); }
+    }
+
+    async function blastGateCmd(endpoint, body, label){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const opts = { method: "POST" };
+        if(body){ opts.body = JSON.stringify(body); }
+        const res = await apiArduino(endpoint, opts);
+        const msg = (res.response || []).join(" | ") || label;
+        log(`Blast Gate: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`Blast Gate cmd failed: ${err.message}`, "bad"); }
     }
 
     async function motorSet(){
@@ -1920,6 +1999,24 @@
       on("btnShredderOff", "click", ()=>shredderCmd("/shredder/off", "SHREDDER OFF"));
       on("btnShredderFwd", "click", ()=>shredderCmd("/shredder/fwd", "SHREDDER FWD"));
       on("btnShredderRev", "click", ()=>shredderCmd("/shredder/rev", "SHREDDER REV"));
+
+      // Mixer blast gates
+      on("btnBgHome",    "click", ()=>blastGateCmd("/blastgate/home",    { gate: $("#blastGateSel").value }, "HOME"));
+      on("btnBgHomeMax", "click", ()=>blastGateCmd("/blastgate/homemax", { gate: $("#blastGateSel").value }, "HOMEMAX"));
+      on("btnBgCal",     "click", ()=>blastGateCmd("/blastgate/cal",     { gate: $("#blastGateSel").value }, "CAL"));
+      on("btnBgStop",    "click", ()=>blastGateCmd("/blastgate/stop",    null, "STOP"));
+      on("btnBgPos",     "click", ()=>{
+        const gate = $("#blastGateSel").value;
+        if(gate === "ALL"){ log("Select Left or Right for a position move.", "bad"); return; }
+        const percent = parseFloat($("#blastGatePos").value);
+        if(isNaN(percent) || percent < 0 || percent > 100){ log("Position must be 0–100.", "bad"); return; }
+        blastGateCmd("/blastgate/pos", { gate, percent }, `POS ${gate} ${percent}`);
+      });
+      on("btnBgSpeed",   "click", ()=>{
+        const percent = parseInt($("#blastGateSpeed").value, 10);
+        if(isNaN(percent) || percent < 1 || percent > 100){ log("Speed must be 1–100.", "bad"); return; }
+        blastGateCmd("/blastgate/speed", { percent }, `SPEED ${percent}`);
+      });
 
       // Dryer Screw motor
       on("btnMotorSet",    "click", ()=>motorSet());

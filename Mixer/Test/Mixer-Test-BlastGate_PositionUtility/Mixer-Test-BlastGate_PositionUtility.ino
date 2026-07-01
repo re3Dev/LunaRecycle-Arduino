@@ -34,13 +34,12 @@
 #include <Servo.h>
 
 // ── Pin assignments ─────────────────────────────────────────────────────────
-// Mapping corrected for actual bench wiring: LEFT/RIGHT channels and MIN/MAX
-// limit switches are swapped relative to pinmap_mega2560.md.
-//   LEFT  gate  -> RC D9, limits MIN=D40 MAX=D39
-//   RIGHT gate  -> RC D8, limits MIN=D38 MAX=D37
+// Limit-switch mapping verified against actual bench presses:
+//   LEFT  gate  -> RC D9, limits MIN=D37 MAX=D38
+//   RIGHT gate  -> RC D8, limits MIN=D39 MAX=D40
 const int GATE_PIN[2]      = { 9, 8 };     // [LEFT, RIGHT] RC pulse output
-const int GATE_MIN_PIN[2]  = { 40, 38 };   // [LEFT, RIGHT] MIN limit switch
-const int GATE_MAX_PIN[2]  = { 39, 37 };   // [LEFT, RIGHT] MAX limit switch
+const int GATE_MIN_PIN[2]  = { 37, 39 };   // [LEFT, RIGHT] MIN limit switch
+const int GATE_MAX_PIN[2]  = { 38, 40 };   // [LEFT, RIGHT] MAX limit switch
 const char* GATE_NAME[2]   = { "LEFT", "RIGHT" };
 
 const int LEFT  = 0;

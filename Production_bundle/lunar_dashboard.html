@@ -840,8 +840,17 @@
               <button class="btn mini primary" id="btnShredderOn">Shredder On</button>
               <button class="btn mini danger"  id="btnShredderOff">Shredder Off</button>
             </div>
-            <div class="kv">
-              <div class="k">Motor</div><div class="v" id="shredderText">—</div>
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+              <button class="btn mini" id="btnShredderFwd">Forward</button>
+              <button class="btn mini" id="btnShredderRev">Reverse</button>
+            </div>
+            <div class="split">
+              <div class="kv">
+                <div class="k">Motor</div><div class="v" id="shredderText">—</div>
+              </div>
+              <div class="kv">
+                <div class="k">Direction</div><div class="v" id="shredderDirText">—</div>
+              </div>
             </div>
           </div>
         </section>
@@ -928,6 +937,7 @@
       tcBag: "—",
       tcPump: "—",
       shredder: "—",
+      shredderDir: "—",
 
       convA_on: false,
       convB_on: false,
@@ -1087,6 +1097,7 @@
         S.tcBag      = d.tc_bag      || "—";
         S.tcPump     = d.tc_pump     || "—";
         S.shredder   = d.shredder    || "—";
+        S.shredderDir = d.shredder_dir || "—";
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
@@ -1148,6 +1159,8 @@
       }
       const st = $("#shredderText");
       if(st){ st.textContent = S.shredder; }
+      const sdt = $("#shredderDirText");
+      if(sdt){ sdt.textContent = S.shredderDir; }
     }
 
     async function doorCmd(endpoint){
@@ -1905,6 +1918,8 @@
       on("btnTcPumpOff", "click", ()=>tcCmd("/tc/pump/off", "PUMP OFF"));
       on("btnShredderOn",  "click", ()=>shredderCmd("/shredder/on",  "SHREDDER ON"));
       on("btnShredderOff", "click", ()=>shredderCmd("/shredder/off", "SHREDDER OFF"));
+      on("btnShredderFwd", "click", ()=>shredderCmd("/shredder/fwd", "SHREDDER FWD"));
+      on("btnShredderRev", "click", ()=>shredderCmd("/shredder/rev", "SHREDDER REV"));
 
       // Dryer Screw motor
       on("btnMotorSet",    "click", ()=>motorSet());

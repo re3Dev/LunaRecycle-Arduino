@@ -657,6 +657,24 @@ def api_shredder_off():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/shredder/fwd", methods=["POST"])
+def api_shredder_fwd():
+    try:
+        lines = arduino.send("SHREDDER_FWD")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/shredder/rev", methods=["POST"])
+def api_shredder_rev():
+    try:
+        lines = arduino.send("SHREDDER_REV")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Routes — Energy monitor
 # ─────────────────────────────────────────────────────────────────────────────

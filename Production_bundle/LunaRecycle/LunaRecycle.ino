@@ -30,6 +30,9 @@
  *   TC_MOVE <-550..-10>    Manual stepper move (mm from home)
  *   TC_STATUS              Print trash-conveyor detail status
  *
+ *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
+ *   SHREDDER_FWD / _REV    Set shredder motor direction
+ *
  *   STATUS                 Print all subsystem states + one INA219 snapshot
  *   ESTOP                  Stop motor, close gate, halt conveyor immediately
  *
@@ -80,7 +83,8 @@ const int TC_rightFilmSensor               = 36;
 const int TC_vacuumSensor                  = A0;
 
 // Shredder (pinmap_mega2560.md).
-const int Shredder_motorController_onOff   = 25;
+const int Shredder_motorController_onOff     = 25;
+const int Shredder_motorController_direction = 26;
 
 // ============================================================================
 //  Constants
@@ -104,9 +108,10 @@ const int TC_servoDownDeg = 270;
 // on hardware); set true only for a board/SSR that energizes on HIGH.
 const bool TC_pumpRelayActiveHigh = false;
 
-// Shredder motor relay (D25). Energizes on HIGH by default; set false if the
-// relay board is active-LOW (energizes on LOW).
-const bool ShredderRelayActiveHigh = true;
+// Shredder motor controller (D25 = ON/OFF, D26 = direction). Adjust these to
+// match the drive's logic levels.
+const bool ShredderOnOffActiveHigh = true;   // true: HIGH runs the motor
+const bool ShredderDirFwdIsHigh    = true;   // true: HIGH = forward
 
 // Vacuum pick detection (sensor on A0).
 const float TC_analogReferenceV = 5.0;
@@ -202,6 +207,7 @@ unsigned long tcLastLimitChange = 0;
 int  tcCurrentServoAngle = TC_servoUpDeg;
 bool tcPumpRunning     = false;
 bool shredderRunning   = false;
+bool shredderFwd       = true;
 
 // ============================================================================
 //  Gate helpers
@@ -668,14 +674,27 @@ void tcPrintStatus() {
 //  Shredder
 // ============================================================================
 
+void shredderApply() {
+  bool dirLevel = ShredderDirFwdIsHigh ? shredderFwd : !shredderFwd;
+  bool onLevel  = ShredderOnOffActiveHigh ? shredderRunning : !shredderRunning;
+  // Set direction before enabling so the drive sees a stable dir signal.
+  digitalWrite(Shredder_motorController_direction, dirLevel ? HIGH : LOW);
+  digitalWrite(Shredder_motorController_onOff, onLevel ? HIGH : LOW);
+}
+
 void shredderOn() {
-  digitalWrite(Shredder_motorController_onOff, ShredderRelayActiveHigh ? HIGH : LOW);
   shredderRunning = true;
+  shredderApply();
 }
 
 void shredderOff() {
-  digitalWrite(Shredder_motorController_onOff, ShredderRelayActiveHigh ? LOW : HIGH);
   shredderRunning = false;
+  shredderApply();
+}
+
+void shredderSetDirection(bool fwd) {
+  shredderFwd = fwd;
+  shredderApply();
 }
 
 // ============================================================================
@@ -700,7 +719,9 @@ void printAllStatus() {
   Serial.print(F(" tc_pump="));
   Serial.print(tcPumpRunning ? F("ON") : F("OFF"));
   Serial.print(F(" shredder="));
-  Serial.println(shredderRunning ? F("ON") : F("OFF"));
+  Serial.print(shredderRunning ? F("ON") : F("OFF"));
+  Serial.print(F(" shredder_dir="));
+  Serial.println(shredderFwd ? F("FWD") : F("REV"));
   printEnergy();
 }
 
@@ -781,11 +802,20 @@ void handleCommand(const String& cmd) {
 
   } else if (cmd == "SHREDDER_ON") {
     shredderOn();
-    Serial.println(F("[SHREDDER] Shredder ON"));
+    Serial.print(F("[SHREDDER] Shredder ON "));
+    Serial.println(shredderFwd ? F("FWD") : F("REV"));
 
   } else if (cmd == "SHREDDER_OFF") {
     shredderOff();
     Serial.println(F("[SHREDDER] Shredder OFF"));
+
+  } else if (cmd == "SHREDDER_FWD") {
+    shredderSetDirection(true);
+    Serial.println(F("[SHREDDER] Direction FWD"));
+
+  } else if (cmd == "SHREDDER_REV") {
+    shredderSetDirection(false);
+    Serial.println(F("[SHREDDER] Direction REV"));
 
   } else if (cmd == "TC_IR_ON") {
     tcSetIrDetection(true);
@@ -868,8 +898,9 @@ void setup() {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
   }
 
-  // Shredder - relay off at boot
+  // Shredder motor controller - off, forward at boot
   pinMode(Shredder_motorController_onOff, OUTPUT);
+  pinMode(Shredder_motorController_direction, OUTPUT);
   shredderOff();
 
   // Trash conveyor - servo up, pump off, stepper disabled, awaiting TC_HOME

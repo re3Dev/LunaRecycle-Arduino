@@ -79,6 +79,9 @@ const int TC_leftFilmSensor                = 35;
 const int TC_rightFilmSensor               = 36;
 const int TC_vacuumSensor                  = A0;
 
+// Shredder (pinmap_mega2560.md).
+const int Shredder_motorController_onOff   = 25;
+
 // ============================================================================
 //  Constants
 // ============================================================================
@@ -100,6 +103,10 @@ const int TC_servoDownDeg = 270;
 // Vacuum pump relay (D24). This build's pump switch energizes on LOW (verified
 // on hardware); set true only for a board/SSR that energizes on HIGH.
 const bool TC_pumpRelayActiveHigh = false;
+
+// Shredder motor relay (D25). Energizes on HIGH by default; set false if the
+// relay board is active-LOW (energizes on LOW).
+const bool ShredderRelayActiveHigh = true;
 
 // Vacuum pick detection (sensor on A0).
 const float TC_analogReferenceV = 5.0;
@@ -194,6 +201,7 @@ bool tcIrDetectionEnabled = true;
 unsigned long tcLastLimitChange = 0;
 int  tcCurrentServoAngle = TC_servoUpDeg;
 bool tcPumpRunning     = false;
+bool shredderRunning   = false;
 
 // ============================================================================
 //  Gate helpers
@@ -657,6 +665,20 @@ void tcPrintStatus() {
 }
 
 // ============================================================================
+//  Shredder
+// ============================================================================
+
+void shredderOn() {
+  digitalWrite(Shredder_motorController_onOff, ShredderRelayActiveHigh ? HIGH : LOW);
+  shredderRunning = true;
+}
+
+void shredderOff() {
+  digitalWrite(Shredder_motorController_onOff, ShredderRelayActiveHigh ? LOW : HIGH);
+  shredderRunning = false;
+}
+
+// ============================================================================
 //  Global STATUS
 // ============================================================================
 
@@ -676,7 +698,9 @@ void printAllStatus() {
   Serial.print(F(" tc_bag="));
   Serial.print((digitalRead(tcActiveBagSensorPin()) == TC_bagPresentState) ? F("DETECTED") : F("EMPTY"));
   Serial.print(F(" tc_pump="));
-  Serial.println(tcPumpRunning ? F("ON") : F("OFF"));
+  Serial.print(tcPumpRunning ? F("ON") : F("OFF"));
+  Serial.print(F(" shredder="));
+  Serial.println(shredderRunning ? F("ON") : F("OFF"));
   printEnergy();
 }
 
@@ -755,6 +779,14 @@ void handleCommand(const String& cmd) {
     tcPumpOff();
     Serial.println(F("[TC] Vacuum pump OFF"));
 
+  } else if (cmd == "SHREDDER_ON") {
+    shredderOn();
+    Serial.println(F("[SHREDDER] Shredder ON"));
+
+  } else if (cmd == "SHREDDER_OFF") {
+    shredderOff();
+    Serial.println(F("[SHREDDER] Shredder OFF"));
+
   } else if (cmd == "TC_IR_ON") {
     tcSetIrDetection(true);
 
@@ -783,6 +815,7 @@ void handleCommand(const String& cmd) {
   } else if (cmd == "ESTOP") {
     motorStop();
     gateCloseCmd();
+    shredderOff();
     tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
     tcState = TC_WAIT_HOME;
     Serial.println(F("[SYSTEM] ESTOP - all stopped"));
@@ -834,6 +867,10 @@ void setup() {
   if (!inaOk) {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
   }
+
+  // Shredder - relay off at boot
+  pinMode(Shredder_motorController_onOff, OUTPUT);
+  shredderOff();
 
   // Trash conveyor - servo up, pump off, stepper disabled, awaiting TC_HOME
   pinMode(TC_stepperHomeLimit, INPUT_PULLUP);

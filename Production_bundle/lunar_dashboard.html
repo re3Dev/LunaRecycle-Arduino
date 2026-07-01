@@ -824,19 +824,25 @@
           </div>
         </section>
 
-        <section class="card placeholder-card">
+        <section class="card">
           <div class="hd">
             <div class="title">
               <div class="sicon" aria-hidden="true">⟲</div>
               <div style="min-width:0">
                 <h2>Shredder</h2>
-                <div class="hint">on/off • direction • jam detect</div>
+                <div class="hint">motor relay on/off</div>
               </div>
             </div>
-            <span class="statechip warn">PLANNED</span>
+            <span class="statechip" id="shredderChip">—</span>
           </div>
-          <div class="bd" style="padding:16px 12px; text-align:center; color:var(--muted2); font-size:12px;">
-            Shredder control coming soon
+          <div class="bd">
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+              <button class="btn mini primary" id="btnShredderOn">Shredder On</button>
+              <button class="btn mini danger"  id="btnShredderOff">Shredder Off</button>
+            </div>
+            <div class="kv">
+              <div class="k">Motor</div><div class="v" id="shredderText">—</div>
+            </div>
           </div>
         </section>
 
@@ -921,6 +927,7 @@
       tcPosMm: "—",
       tcBag: "—",
       tcPump: "—",
+      shredder: "—",
 
       convA_on: false,
       convB_on: false,
@@ -1079,6 +1086,7 @@
         S.tcPosMm    = d.tc_pos_mm   !== undefined ? d.tc_pos_mm : "—";
         S.tcBag      = d.tc_bag      || "—";
         S.tcPump     = d.tc_pump     || "—";
+        S.shredder   = d.shredder    || "—";
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
@@ -1132,6 +1140,14 @@
       $("#tcPosText").textContent = S.tcPosMm;
       $("#tcBagText").textContent = S.tcBag;
       $("#tcPumpText").textContent = S.tcPump;
+      // Shredder (motor relay)
+      const sc = $("#shredderChip");
+      if(sc){
+        sc.textContent = S.shredder === "ON" ? "RUNNING" : (S.shredder || "—");
+        sc.className = "statechip" + (S.shredder === "ON" ? " good" : "");
+      }
+      const st = $("#shredderText");
+      if(st){ st.textContent = S.shredder; }
     }
 
     async function doorCmd(endpoint){
@@ -1162,6 +1178,16 @@
         log(`Trash Conveyor: ${msg}`, "info");
         await arduinoRefreshStatus();
       }catch(err){ log(`Conveyor cmd failed: ${err.message}`, "bad"); }
+    }
+
+    async function shredderCmd(endpoint, label){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const res = await apiArduino(endpoint, { method: "POST" });
+        const msg = (res.response || []).join(" | ") || label;
+        log(`Shredder: ${msg}`, "info");
+        await arduinoRefreshStatus();
+      }catch(err){ log(`Shredder cmd failed: ${err.message}`, "bad"); }
     }
 
     async function motorSet(){
@@ -1877,6 +1903,8 @@
       on("btnTcStatus", "click", ()=>arduinoRefreshStatus());
       on("btnTcPumpOn",  "click", ()=>tcCmd("/tc/pump/on",  "PUMP ON"));
       on("btnTcPumpOff", "click", ()=>tcCmd("/tc/pump/off", "PUMP OFF"));
+      on("btnShredderOn",  "click", ()=>shredderCmd("/shredder/on",  "SHREDDER ON"));
+      on("btnShredderOff", "click", ()=>shredderCmd("/shredder/off", "SHREDDER OFF"));
 
       // Dryer Screw motor
       on("btnMotorSet",    "click", ()=>motorSet());

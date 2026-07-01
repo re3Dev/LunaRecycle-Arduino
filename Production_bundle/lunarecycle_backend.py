@@ -130,7 +130,7 @@ class ArduinoBridge:
         # firmware streams every 500 ms; for non-STATUS commands it must be skipped
         # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies
         # with a [TC] line, not [ENERGY]).
-        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SYSTEM]")
+        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[SYSTEM]")
 
         lines: list[str] = []
         seen_status = False
@@ -630,6 +630,28 @@ def api_tc_pump_on():
 def api_tc_pump_off():
     try:
         lines = arduino.send("TC_PUMP_OFF")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Routes — Shredder
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/shredder/on", methods=["POST"])
+def api_shredder_on():
+    try:
+        lines = arduino.send("SHREDDER_ON")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/shredder/off", methods=["POST"])
+def api_shredder_off():
+    try:
+        lines = arduino.send("SHREDDER_OFF")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500

@@ -97,9 +97,9 @@ const int TC_servoMaxUs   = 2500;
 const int TC_servoUpDeg   = 0;
 const int TC_servoDownDeg = 270;
 
-// Vacuum pump relay (D24). The pump board energizes on HIGH; set false if a
-// board is active-LOW (energizes on LOW).
-const bool TC_pumpRelayActiveHigh = true;
+// Vacuum pump relay (D24). This build's pump switch energizes on LOW (verified
+// on hardware); set true only for a board/SSR that energizes on HIGH.
+const bool TC_pumpRelayActiveHigh = false;
 
 // Vacuum pick detection (sensor on A0).
 const float TC_analogReferenceV = 5.0;

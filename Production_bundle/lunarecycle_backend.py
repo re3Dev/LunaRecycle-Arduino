@@ -595,6 +595,24 @@ def api_tc_status():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/tc/pump/on", methods=["POST"])
+def api_tc_pump_on():
+    try:
+        lines = arduino.send("TC_PUMP_ON")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/tc/pump/off", methods=["POST"])
+def api_tc_pump_off():
+    try:
+        lines = arduino.send("TC_PUMP_OFF")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Routes — Energy monitor
 # ─────────────────────────────────────────────────────────────────────────────

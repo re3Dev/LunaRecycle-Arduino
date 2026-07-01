@@ -767,6 +767,10 @@
               <button class="btn mini danger"  id="btnTcStop">Stop</button>
               <button class="btn mini"         id="btnTcStatus">Status</button>
             </div>
+            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
+              <button class="btn mini" id="btnTcPumpOn">Pump On</button>
+              <button class="btn mini" id="btnTcPumpOff">Pump Off</button>
+            </div>
             <div class="split">
               <div class="kv">
                 <div class="k">Position</div>
@@ -1868,6 +1872,8 @@
       on("btnTcPick",   "click", ()=>tcCmd("/tc/pick", "PICK"));
       on("btnTcStop",   "click", ()=>tcCmd("/tc/stop", "STOP"));
       on("btnTcStatus", "click", ()=>arduinoRefreshStatus());
+      on("btnTcPumpOn",  "click", ()=>tcCmd("/tc/pump/on",  "PUMP ON"));
+      on("btnTcPumpOff", "click", ()=>tcCmd("/tc/pump/off", "PUMP OFF"));
 
       // Dryer Screw motor
       on("btnMotorSet",    "click", ()=>motorSet());

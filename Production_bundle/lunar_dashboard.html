@@ -777,6 +777,9 @@
                 <div class="v" id="tcBagText">—</div>
               </div>
             </div>
+            <div class="kv" style="margin-top:8px;">
+              <div class="k">Vacuum Pump</div><div class="v" id="tcPumpText">—</div>
+            </div>
           </div>
         </section>
 
@@ -913,6 +916,7 @@
       tcState: "—",
       tcPosMm: "—",
       tcBag: "—",
+      tcPump: "—",
 
       convA_on: false,
       convB_on: false,
@@ -1067,6 +1071,7 @@
         S.tcState    = d.tc_state    || "—";
         S.tcPosMm    = d.tc_pos_mm   !== undefined ? d.tc_pos_mm : "—";
         S.tcBag      = d.tc_bag      || "—";
+        S.tcPump     = d.tc_pump     || "—";
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
@@ -1119,6 +1124,7 @@
       );
       $("#tcPosText").textContent = S.tcPosMm;
       $("#tcBagText").textContent = S.tcBag;
+      $("#tcPumpText").textContent = S.tcPump;
     }
 
     async function doorCmd(endpoint){

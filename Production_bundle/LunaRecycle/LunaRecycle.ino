@@ -25,6 +25,7 @@
  *   TC_STOP                Stop the pick cycle
  *   TC_UP / TC_DOWN        Raise / lower the picker servo
  *   TC_SERVO <0-180>       Move picker servo to an angle (deg)
+ *   TC_PUMP_ON / _OFF      Manually switch the vacuum pump relay
  *   TC_MOVE <-550..-10>    Manual stepper move (mm from home)
  *   TC_STATUS              Print trash-conveyor detail status
  *
@@ -66,12 +67,12 @@ const int Mixer_motorController_ENA   = 3;   // ENA on module (Timer 2 PWM)
 const int Mixer_motorController_IN1   = 7;   // IN1 on module
 const int Mixer_motorController_IN2   = 8;   // IN2 on module
 
-// Trash conveyor (pinmap_mega2560.md). Vacuum pump relay (D24) intentionally
-// unused for now; the vacuum sensor on A0 is still read.
+// Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
 const int TC_stepperMotorController_dir    = 22;
 const int TC_stepperMotorController_enable = 23;
 const int TC_servoMotor_pin                = 5;
+const int TC_vacuumPumpRelay               = 24;
 const int TC_stepperHomeLimit              = 34;
 const int TC_leftFilmSensor                = 35;
 const int TC_vacuumSensor                  = A0;
@@ -92,7 +93,11 @@ const int TC_servoMaxDeg  = 180;
 const int TC_servoUpDeg   = 0;
 const int TC_servoDownDeg = 180;
 
-// Vacuum pick detection (sensor on A0). Pump control omitted for now.
+// Vacuum pump relay (D24). Most relay boards energize on LOW; set false if
+// your board is active-LOW, true if it energizes on HIGH.
+const bool TC_pumpRelayActiveHigh = false;
+
+// Vacuum pick detection (sensor on A0).
 const float TC_analogReferenceV = 5.0;
 const float TC_vacuumThresholdV = 2.5;
 const bool  TC_vacuumDetectedWhenVoltageHigh = true;
@@ -176,6 +181,7 @@ int  tcLimitState      = HIGH;
 int  tcBag1TripsDone   = 0;
 unsigned long tcLastLimitChange = 0;
 int  tcCurrentServoAngle = TC_servoUpDeg;
+bool tcPumpRunning     = false;
 
 // ============================================================================
 //  Gate helpers
@@ -359,6 +365,16 @@ void tcWriteServoAngle(int angle) {
   TC_servoMotor.write(tcCurrentServoAngle);
 }
 
+void tcPumpOn() {
+  digitalWrite(TC_vacuumPumpRelay, TC_pumpRelayActiveHigh ? HIGH : LOW);
+  tcPumpRunning = true;
+}
+
+void tcPumpOff() {
+  digitalWrite(TC_vacuumPumpRelay, TC_pumpRelayActiveHigh ? LOW : HIGH);
+  tcPumpRunning = false;
+}
+
 void tcServoUp() {
   tcWriteServoAngle(TC_servoUpDeg);
 }
@@ -382,12 +398,14 @@ void tcMoveTo(float targetMm, TCState nextState) {
 void tcStopPickSequence(const __FlashStringHelper* message) {
   TC_stepper.stop();
   TC_stepper.disableOutputs();
+  tcPumpOff();
   tcState = TC_DONE;
   Serial.println(message);
 }
 
 void tcPauseAtShredder() {
-  // Pump control omitted for now; this is where the drop/release would occur.
+  // Release the bag over the shredder, then dwell.
+  tcPumpOff();
   delay(TC_shredderPauseMs);
 }
 
@@ -397,9 +415,10 @@ bool tcPickAtBag() {
     return false;
   }
 
-  // NOTE: vacuum pump is not wired yet. Without suction the picker performs a
-  // full down stroke and returns; wire the pump (relay D24), turn it on here,
-  // and tcVacuumDetectedDuringSettle() will grab as soon as vacuum is sensed.
+  // Turn the vacuum pump on before the down stroke so suction builds while the
+  // picker descends; tcVacuumDetectedDuringSettle() grabs as soon as the bag
+  // seals against the cup.
+  tcPumpOn();
   bool bagGrabbed = false;
   for (int angle = TC_servoUpDeg; angle <= TC_servoDownDeg; angle += TC_servoPickStepDeg) {
     tcWriteServoAngle(angle);
@@ -541,6 +560,8 @@ void tcPrintStatus() {
   Serial.print(F(" bag="));
   Serial.print(tcBagStackEmptyConfirmed() ? F("EMPTY") : F("DETECTED"));
   int vacuumRaw = analogRead(TC_vacuumSensor);
+  Serial.print(F(" pump="));
+  Serial.print(tcPumpRunning ? F("ON") : F("OFF"));
   Serial.print(F(" vac="));
   Serial.print(tcVacuumDetectedOnce() ? F("YES") : F("NO"));
   Serial.print(F(" vac_v="));
@@ -567,7 +588,9 @@ void printAllStatus() {
   Serial.print(F(" tc_pos_mm="));
   Serial.print(tcStepsToMm(TC_stepper.currentPosition()), 1);
   Serial.print(F(" tc_bag="));
-  Serial.println((digitalRead(TC_leftFilmSensor) == TC_bagPresentState) ? F("DETECTED") : F("EMPTY"));
+  Serial.print((digitalRead(TC_leftFilmSensor) == TC_bagPresentState) ? F("DETECTED") : F("EMPTY"));
+  Serial.print(F(" tc_pump="));
+  Serial.println(tcPumpRunning ? F("ON") : F("OFF"));
   printEnergy();
 }
 
@@ -637,6 +660,14 @@ void handleCommand(const String& cmd) {
   } else if (cmd == "TC_DOWN") {
     tcServoDown();
     Serial.println(F("[TC] Servo down"));
+
+  } else if (cmd == "TC_PUMP_ON") {
+    tcPumpOn();
+    Serial.println(F("[TC] Vacuum pump ON"));
+
+  } else if (cmd == "TC_PUMP_OFF") {
+    tcPumpOff();
+    Serial.println(F("[TC] Vacuum pump OFF"));
 
   } else if (cmd.startsWith("TC_SERVO ")) {
     int deg = cmd.substring(9).toInt();
@@ -712,9 +743,11 @@ void setup() {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
   }
 
-  // Trash conveyor - servo up, stepper disabled, awaiting TC_HOME
+  // Trash conveyor - servo up, pump off, stepper disabled, awaiting TC_HOME
   pinMode(TC_stepperHomeLimit, INPUT_PULLUP);
   pinMode(TC_leftFilmSensor, INPUT);
+  pinMode(TC_vacuumPumpRelay, OUTPUT);
+  tcPumpOff();
   TC_servoMotor.attach(TC_servoMotor_pin);
   tcServoUp();
   TC_stepper.setEnablePin(TC_stepperMotorController_enable);

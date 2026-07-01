@@ -47,8 +47,8 @@ const int RIGHT = 1;
 
 // ── RC pulse widths ─────────────────────────────────────────────────────────
 const int STOP_US    = 1500;
-const int EXTEND_US  = 2000;   // drive toward MAX
-const int RETRACT_US = 1000;   // drive toward MIN
+const int EXTEND_US  = 1000;   // drive toward MAX (fully extended)
+const int RETRACT_US = 2000;   // drive toward MIN (shortest stroke)
 
 // ── Motion tunables ─────────────────────────────────────────────────────────
 const unsigned long MOVE_TIMEOUT_MS   = 8000;   // guard for any single move

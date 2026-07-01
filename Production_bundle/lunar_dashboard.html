@@ -686,7 +686,7 @@
           </div>
           <div class="bd">
             <div class="row" style="margin-bottom:8px; flex-wrap:wrap; gap:6px;">
-              <input type="text" id="arduinoPortInput" value="COM3" style="width:80px;" />
+              <input type="text" id="arduinoPortInput" value="/dev/ttyACM0" placeholder="auto (server default)" style="width:150px;" title="Serial port. Leave blank to use the server's configured port (LUNA_ARDUINO_PORT). Pi: /dev/ttyACM0 · Windows: COM3" />
               <button class="btn mini" id="btnArduinoConnect">Connect</button>
               <button class="btn mini" id="btnArduinoDisconnect">Disconnect</button>
               <button class="btn mini" id="btnArduinoRefresh">Status</button>
@@ -1038,11 +1038,14 @@
     }
 
     async function arduinoConnect(){
-      const port = $("#arduinoPortInput").value.trim() || "COM3";
+      const port = $("#arduinoPortInput").value.trim();
       try{
+        // If the field is blank, omit port so the backend uses its configured
+        // default (LUNA_ARDUINO_PORT, e.g. /dev/ttyACM0 on the Pi).
+        const body = port ? { port } : {};
         const data = await apiArduino("/arduino/connect", {
           method: "POST",
-          body: JSON.stringify({ port })
+          body: JSON.stringify(body)
         });
         S.arduinoConnected = true;
         log(`Arduino connected on ${data.port}.`, "good");
@@ -1937,7 +1940,7 @@
       $("#log").textContent = "";
       log("Console initialized.", "good");
       log("Dryer card supports SIM and LIVE Modbus API mode.", "info");
-      log("Arduino: connect via the Arduino panel (COM3 default).", "info");
+      log("Arduino: connect via the Arduino panel (/dev/ttyACM0 default on the Pi).", "info");
 
       S.connected = false;
       S.convA_speed = 45;

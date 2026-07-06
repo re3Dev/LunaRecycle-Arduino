@@ -27,7 +27,7 @@
  *   TC_SERVO <0-270>       Move picker servo to an angle (deg)
  *   TC_PUMP_ON / _OFF      Manually switch the vacuum pump relay
  *   TC_IR_ON / _OFF        Enable / disable the IR bag-stack sensor check
- *   TC_MOVE <-550..-10>    Manual stepper move (mm from home)
+ *   TC_MOVE <-570..-10>    Manual stepper move (mm from home)
  *   TC_STATUS              Print trash-conveyor detail status
  *
  *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
@@ -100,9 +100,9 @@ const int Mixer_motorController_IN1   = 27;   // IN1 on module
 const int Mixer_motorController_IN2   = 28;   // IN2 on module
 
 // Mixer agitator - second channel of the mixer H-bridge (Interface List).
-const int Mixer_agitatorMotor_ENB = 3;    // ENB enable (PWM)
-const int Mixer_agitatorMotor_IN3 = 12;   // IN3
-const int Mixer_agitatorMotor_IN4 = 13;   // IN4
+const int Mixer_agitatorMotor_ENB = 11;    // ENB enable (PWM)
+const int Mixer_agitatorMotor_IN3 = 42;   // IN3
+const int Mixer_agitatorMotor_IN4 = 43;   // IN4
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
@@ -213,9 +213,10 @@ const int   TC_microsteps = 4;
 // Positions, in mm from home. Negative moves away from the switch.
 const float TC_homePos       = 0.0;
 const float TC_bag1Pos       = -25.0;
-const float TC_bag2Pos       = -500.0;   // Tune to the Bag 2 stack position.
-const float TC_shredderPos   = -475.0;
-const float TC_stepperMinPos = -550.0;
+const float TC_bag2Pos       = -565.0;   // Tune to the Bag 2 stack position.
+const float TC_bag1ShredderPos = -475.0;
+const float TC_bag2ShredderPos = -275.0;
+const float TC_stepperMinPos = -570.0;
 const float TC_stepperMaxPos = -10.0;
 
 const int TC_homeDir = 1;   // Change to -1 if homing moves away from the switch.
@@ -542,6 +543,10 @@ float tcActiveBagPosition() {
   return tcActiveBag == 2 ? TC_bag2Pos : TC_bag1Pos;
 }
 
+float tcActiveShredderPosition() {
+  return tcActiveBag == 2 ? TC_bag2ShredderPos : TC_bag1ShredderPos;
+}
+
 const __FlashStringHelper* tcActiveBagName() {
   return tcActiveBag == 2 ? F("Bag 2") : F("Bag 1");
 }
@@ -682,7 +687,7 @@ void tcRunState() {
 
     case TC_MOVE_TO_BAG:
       if (tcPickAtBag()) {
-        tcMoveTo(TC_shredderPos, TC_BAG_TO_SHREDDER);
+        tcMoveTo(tcActiveShredderPosition(), TC_BAG_TO_SHREDDER);
         Serial.println(F("[TC] Pick complete - moving to shredder"));
       }
       break;

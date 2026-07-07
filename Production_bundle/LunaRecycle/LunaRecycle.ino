@@ -30,6 +30,10 @@
  *   TC_MOVE <-570..-10>    Manual stepper move (mm from home)
  *   TC_STATUS              Print trash-conveyor detail status
  *
+ *   SR_START <pe> <pa>     Size Reduction: auto-shred <pe> PE + <pa> PA bags
+ *   SR_STOP                Abort the size-reduction sequence
+ *   SR_STATUS              Print size-reduction progress
+ *
  *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
  *   SHREDDER_FWD / _REV    Set shredder motor direction
  *
@@ -223,6 +227,16 @@ const int TC_homeDir = 1;   // Change to -1 if homing moves away from the switch
 const unsigned long TC_debounceMs      = 50;
 const unsigned long TC_shredderPauseMs = 1000;
 
+// ── Size Reduction (automated shred cadence) tunables ──────────────────────
+// First-guess defaults from the process spec; verify on hardware. PE bags come
+// from the LEFT cassette (bag 1), PA+EVOH+PE from the RIGHT cassette (bag 2).
+const unsigned long SR_shredTimePerBagMs = 7000;    // dwell per bag (~7 s)     [tune]
+const int           SR_reverseEveryBags  = 10;      // reverse-clear cadence    [tune]
+const unsigned long SR_reverseDurationMs = 5000;    // reverse-clear time (5 s) [tune]
+const int           SR_coolEveryBags     = 100;     // motor-cool cadence       [tune]
+const unsigned long SR_coolDurationMs    = 15000;   // cool pause (15 s)        [tune]
+const unsigned long SR_endReverseMs      = 5000;    // final reverse (5 s)      [tune]
+
 // ============================================================================
 //  Objects
 // ============================================================================
@@ -260,6 +274,10 @@ enum TCState {
   TC_MOVE_TO_BAG,
   TC_BAG_TO_SHREDDER,
   TC_MANUAL_MOVE,
+  TC_SR_SHREDDING,
+  TC_SR_REVERSING,
+  TC_SR_COOLING,
+  TC_SR_END_REVERSE,
   TC_DONE
 };
 
@@ -276,6 +294,15 @@ int  tcCurrentServoAngle = TC_servoUpDeg;
 bool tcPumpRunning     = false;
 bool shredderRunning   = false;
 bool shredderFwd       = true;
+
+// Size Reduction (automated shred cadence) state.
+bool srRunning      = false;
+long srPeRemaining  = 0;
+long srPaRemaining  = 0;
+int  srRatioPe      = 1;      // PE bags per single PA bag (cadence)
+int  srPeInCadence  = 0;
+long srBagsShredded = 0;
+unsigned long srPhaseStart = 0;
 
 // Mixer agitator state.
 int  agitatorPercent   = 0;      // 0..AGITATOR_MAX_PERCENT
@@ -666,9 +693,196 @@ void tcMoveStepperTo(float targetMm) {
   Serial.println(F(" mm"));
 }
 
+// ============================================================================
+//  Size Reduction - automated shred cadence (process spec, Step 3)
+//  Interleaves PE bags (LEFT cassette / bag 1) and PA+EVOH+PE bags (RIGHT
+//  cassette / bag 2) at a PE:PA ratio, shredding each. Periodically reverses
+//  the shredder to clear the blades and pauses to cool the motor. Non-blocking:
+//  layered on the trash-conveyor state machine, so serial / E-STOP stay live.
+//  Stops when both target counts are met or a cassette empties.
+// ============================================================================
+
+bool srSelectNextBag() {
+  bool pe = srPeRemaining > 0;
+  bool pa = srPaRemaining > 0;
+  if (!pe && !pa) return false;
+  // Pick PE while within the cadence and available; otherwise a single PA.
+  if (pe && (!pa || srPeInCadence < srRatioPe)) {
+    tcActiveBag = 1;   // PE / LEFT cassette
+  } else {
+    tcActiveBag = 2;   // PA+EVOH+PE / RIGHT cassette
+  }
+  return true;
+}
+
+void srBeginEndReverse() {
+  shredderSetDirection(false);   // REV
+  shredderOn();
+  srPhaseStart = millis();
+  tcState = TC_SR_END_REVERSE;
+  Serial.println(F("[SIZERED] Targets met / cassette empty - final reverse"));
+}
+
+void srMoveToNextBag() {
+  if (!srSelectNextBag()) {
+    srBeginEndReverse();
+    return;
+  }
+  tcMoveTo(tcActiveBagPosition(), TC_MOVE_TO_BAG);
+  Serial.print(F("[SIZERED] Fetching "));
+  Serial.print(tcActiveBag == 1 ? F("PE (left)") : F("PA (right)"));
+  Serial.print(F(" | pe_left="));
+  Serial.print(srPeRemaining);
+  Serial.print(F(" pa_left="));
+  Serial.println(srPaRemaining);
+}
+
+void srStart(long peUnits, long paUnits) {
+  if (tcState == TC_WAIT_HOME || tcState == TC_HOMING) {
+    Serial.println(F("[SIZERED] Home first (TC_HOME) before starting"));
+    return;
+  }
+  if (peUnits < 0 || paUnits < 0 || (peUnits + paUnits) <= 0) {
+    Serial.println(F("[SIZERED] ERROR: need at least one PE or PA unit"));
+    return;
+  }
+  srPeRemaining  = peUnits;
+  srPaRemaining  = paUnits;
+  srPeInCadence  = 0;
+  srBagsShredded = 0;
+  if (srPaRemaining > 0)
+    srRatioPe = (int)max(1L, lround((double)srPeRemaining / (double)srPaRemaining));
+  else
+    srRatioPe = 1;
+
+  srRunning = true;
+  tcSequenceRunning = false;   // take the conveyor away from the manual pick loop
+
+  gateOpenCmd();               // shredder gates open so shred falls to the mixer
+  shredderSetDirection(true);  // FWD
+  shredderOn();
+
+  Serial.print(F("[SIZERED] Started pe="));
+  Serial.print(peUnits);
+  Serial.print(F(" pa="));
+  Serial.print(paUnits);
+  Serial.print(F(" cadence="));
+  Serial.print(srRatioPe);
+  Serial.println(F(":1 (PE:PA)"));
+
+  srMoveToNextBag();
+}
+
+void srAfterDrop() {
+  // Bag has arrived over the shredder: release it and dwell while it shreds.
+  tcPumpOff();
+  if (tcActiveBag == 2) { srPaRemaining--; srPeInCadence = 0; }
+  else                  { srPeRemaining--; srPeInCadence++; }
+
+  shredderSetDirection(true);
+  shredderOn();
+  srPhaseStart = millis();
+  tcState = TC_SR_SHREDDING;
+  Serial.print(F("[SIZERED] Shredding ("));
+  Serial.print(SR_shredTimePerBagMs / 1000);
+  Serial.println(F("s dwell)"));
+}
+
+void srFinish(const __FlashStringHelper* why) {
+  shredderOff();
+  gateCloseCmd();
+  tcPumpOff();
+  TC_stepper.disableOutputs();
+  srRunning = false;
+  tcState = TC_READY;
+  Serial.print(F("[SIZERED] Done - "));
+  Serial.println(why);
+}
+
+void srAbort() {
+  shredderOff();
+  tcPumpOff();
+  TC_stepper.stop();
+  TC_stepper.disableOutputs();
+  srRunning = false;
+  tcState = TC_READY;
+}
+
+void srServiceTimedPhase() {
+  unsigned long elapsed = millis() - srPhaseStart;
+  switch (tcState) {
+    case TC_SR_SHREDDING:
+      if (elapsed >= SR_shredTimePerBagMs) {
+        srBagsShredded++;
+        if (SR_coolEveryBags > 0 && (srBagsShredded % SR_coolEveryBags) == 0) {
+          shredderOff();
+          srPhaseStart = millis();
+          tcState = TC_SR_COOLING;
+          Serial.println(F("[SIZERED] Cooling pause"));
+        } else if (SR_reverseEveryBags > 0 && (srBagsShredded % SR_reverseEveryBags) == 0) {
+          shredderSetDirection(false);
+          shredderOn();
+          srPhaseStart = millis();
+          tcState = TC_SR_REVERSING;
+          Serial.println(F("[SIZERED] Reverse-clearing blades"));
+        } else {
+          srMoveToNextBag();
+        }
+      }
+      break;
+
+    case TC_SR_REVERSING:
+      if (elapsed >= SR_reverseDurationMs) {
+        shredderSetDirection(true);
+        shredderOn();
+        srMoveToNextBag();
+      }
+      break;
+
+    case TC_SR_COOLING:
+      if (elapsed >= SR_coolDurationMs) {
+        shredderSetDirection(true);
+        shredderOn();
+        srMoveToNextBag();
+      }
+      break;
+
+    case TC_SR_END_REVERSE:
+      if (elapsed >= SR_endReverseMs) {
+        srFinish(F("shredding complete"));
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+void srPrintStatus() {
+  Serial.print(F("[SIZERED] run="));
+  Serial.print(srRunning ? F("YES") : F("NO"));
+  Serial.print(F(" pe_left="));
+  Serial.print(srPeRemaining);
+  Serial.print(F(" pa_left="));
+  Serial.print(srPaRemaining);
+  Serial.print(F(" ratio_pe="));
+  Serial.print(srRatioPe);
+  Serial.print(F(" shredded="));
+  Serial.print(srBagsShredded);
+  Serial.print(F(" phase="));
+  Serial.println(tcStateName());
+}
+
 void tcRunState() {
   if (tcState == TC_HOMING) {
     tcRunHome();
+    return;
+  }
+
+  // Size-reduction timed phases run while the stepper is parked.
+  if (tcState == TC_SR_SHREDDING || tcState == TC_SR_REVERSING ||
+      tcState == TC_SR_COOLING   || tcState == TC_SR_END_REVERSE) {
+    srServiceTimedPhase();
     return;
   }
 
@@ -688,12 +902,21 @@ void tcRunState() {
     case TC_MOVE_TO_BAG:
       if (tcPickAtBag()) {
         tcMoveTo(tcActiveShredderPosition(), TC_BAG_TO_SHREDDER);
-        Serial.println(F("[TC] Pick complete - moving to shredder"));
+        Serial.println(srRunning ? F("[SIZERED] Pick OK - moving to shredder")
+                                 : F("[TC] Pick complete - moving to shredder"));
+      } else if (srRunning) {
+        // Pick failed: treat this cassette as depleted, then continue/finish.
+        if (tcActiveBag == 2) srPaRemaining = 0; else srPeRemaining = 0;
+        Serial.print(F("[SIZERED] "));
+        Serial.print(tcActiveBag == 1 ? F("PE (left)") : F("PA (right)"));
+        Serial.println(F(" cassette empty"));
+        srMoveToNextBag();
       }
       break;
 
     case TC_BAG_TO_SHREDDER:
-      tcDropAtShredderAndContinue();
+      if (srRunning) srAfterDrop();
+      else tcDropAtShredderAndContinue();
       break;
 
     case TC_MANUAL_MOVE:
@@ -720,6 +943,10 @@ const __FlashStringHelper* tcStateName() {
     case TC_MOVE_TO_BAG:
     case TC_BAG_TO_SHREDDER:  return F("PICKING");
     case TC_MANUAL_MOVE:      return F("MANUAL");
+    case TC_SR_SHREDDING:
+    case TC_SR_REVERSING:
+    case TC_SR_COOLING:
+    case TC_SR_END_REVERSE:   return F("SIZERED");
     case TC_DONE:             return F("DONE");
     default:                  return F("WAIT_HOME");
   }
@@ -1385,6 +1612,25 @@ void handleCommand(const String& cmd) {
   } else if (cmd == "TC_STATUS") {
     tcPrintStatus();
 
+  } else if (cmd.startsWith("SR_START ")) {
+    // SR_START <pe_units> <pa_units>
+    String args = cmd.substring(9); args.trim();
+    int sp = args.indexOf(' ');
+    if (sp < 0) {
+      Serial.println(F("[SIZERED] usage SR_START <pe_units> <pa_units>"));
+      return;
+    }
+    long pe = args.substring(0, sp).toInt();
+    long pa = args.substring(sp + 1).toInt();
+    srStart(pe, pa);
+
+  } else if (cmd == "SR_STOP") {
+    if (srRunning) { srAbort(); Serial.println(F("[SIZERED] stopped by user")); }
+    else Serial.println(F("[SIZERED] not running"));
+
+  } else if (cmd == "SR_STATUS") {
+    srPrintStatus();
+
   } else if (cmd == "STATUS") {
     printAllStatus();
 
@@ -1395,6 +1641,7 @@ void handleCommand(const String& cmd) {
     agitatorStop();
     vacuumStop();
     bgStopAll();
+    srRunning = false;
     tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
     tcState = TC_WAIT_HOME;
     Serial.println(F("[SYSTEM] ESTOP - all stopped"));
@@ -1495,6 +1742,7 @@ void setup() {
 
   Serial.println(F("[SYSTEM] LunaRecycle Mega firmware ready"));
   Serial.println(F("[SYSTEM] Commands: GATE_OPEN, GATE_CLOSE, MOTOR_SET <spd> <FWD|REV>, MOTOR_STOP, TC_HOME, TC_PICK, TC_STOP, STATUS, ESTOP"));
+  Serial.println(F("[SYSTEM] Auto: SR_START <pe_units> <pa_units>, SR_STOP, SR_STATUS (size reduction)"));
 }
 
 void loop() {

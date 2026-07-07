@@ -238,13 +238,6 @@ const float TC_maxSpeed  = 250.0;
 const float TC_accel     = 700.0;
 const float TC_homeSpeed = 50.0;
 const int   TC_minPulseWidthUs = 2;
-// The vacuum pump (brushed DC motor) loads the shared supply while it holds a
-// bag, sagging the stepper driver's rail and cutting torque headroom - the
-// carry-to-shredder move then stutters / skips while pump-off moves stay
-// smooth. Cap the speed during pump-on moves so the reduced torque can still
-// follow the step train. Raise toward TC_maxSpeed once the power issue is
-// fixed in hardware (separate pump supply / bulk cap on VMOT).
-const float TC_maxSpeedPumpOn = 120.0;
 
 // 3GT belt with 18T pulley.
 const float TC_beltPitchMm = 3.0;
@@ -318,7 +311,6 @@ unsigned long          mixerPeriodSum   = 0;
 int                    mixerPeriodCount = 0;
 int                    mixerPeriodHead  = 0;
 bool                   mixerRawDebug   = true;   // stream raw readings (RPM_DEBUG_ON/OFF)
-bool                   mixerIsrActive  = true;   // hall interrupt armed? paused during stepper moves
 
 // Trash conveyor state machine.
 enum TCState {
@@ -465,26 +457,6 @@ void mixerOnPulse() {
 }
 
 void mixerUpdateRpm() {
-  // Pause hall sensing while the conveyor stepper is moving. The vacuum pump and
-  // other motors inject EMI on the D2 sensor lead; each spurious interrupt
-  // preempts AccelStepper's polled step-pulse train and makes that move stutter
-  // (pump-on carry-to-shredder moves stutter; pump-off moves stay smooth). RPM
-  // is not reported during a move, so detach the interrupt while the stepper
-  // runs and re-arm it - with a fresh edge reference - the instant it parks.
-  if (TC_stepper.isRunning()) {
-    if (mixerIsrActive) {
-      detachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor));
-      mixerIsrActive = false;
-    }
-    return;   // hold the last RPM; resume measuring once parked
-  }
-  if (!mixerIsrActive) {
-    mixerLastEdgeUs = micros();   // avoid a huge bogus first period on re-arm
-    mixerNewPeriod  = false;
-    attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
-    mixerIsrActive = true;
-  }
-
   // Atomically snapshot the ISR-owned values.
   noInterrupts();
   unsigned long periodUs   = mixerPeriodUs;
@@ -699,9 +671,7 @@ void tcReturnServoToUp() {
 
 void tcMoveTo(float targetMm, TCState nextState) {
   TC_stepper.enableOutputs();
-  // Slow down while the vacuum pump is running: it sags the shared rail and
-  // steals torque headroom, so a full-speed move would skip/stutter.
-  TC_stepper.setMaxSpeed(tcMmToSteps(tcPumpRunning ? TC_maxSpeedPumpOn : TC_maxSpeed));
+  TC_stepper.setMaxSpeed(tcMmToSteps(TC_maxSpeed));
   TC_stepper.moveTo(tcMmToSteps(targetMm));
   tcState = nextState;
 }
@@ -823,109 +793,18 @@ void tcRunHome() {
   TC_stepper.runSpeed();
 }
 
-// ── Blocking pick-and-place sequence ───────────────────────────────────────
-// TC_PICK runs the predetermined pattern (Bag 1 x4, then Bag 2 x1, repeat) as a
-// self-contained blocking loop. While it runs NOTHING else is serviced - no
-// status / RPM / energy prints, the hall interrupt is paused, and each stepper
-// move is a tight run() loop - which gives the cleanest possible step timing.
-// Send TC_STOP (or ESTOP) at any time to end it; it is polled every step and
-// between cycles.
-
-bool tcSequenceStopRequested() {
-  while (Serial.available() > 0) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') {
-      cmdBuffer.trim();
-      cmdBuffer.toUpperCase();
-      bool stop = (cmdBuffer == "TC_STOP" || cmdBuffer == "ESTOP");
-      cmdBuffer = "";
-      if (stop) return true;
-      // Any other command is ignored while the sequence owns the machine.
-    } else {
-      cmdBuffer += c;
-    }
-  }
-  return false;
-}
-
-// Drive the stepper to targetMm, pumping run() as fast as possible. Returns
-// false if a stop was requested mid-move (caller aborts the sequence).
-bool tcBlockingMoveTo(float targetMm) {
-  TC_stepper.enableOutputs();
-  // Slower while the pump loads the shared rail (see TC_maxSpeedPumpOn).
-  TC_stepper.setMaxSpeed(tcMmToSteps(tcPumpRunning ? TC_maxSpeedPumpOn : TC_maxSpeed));
-  TC_stepper.moveTo(tcMmToSteps(targetMm));
-  while (TC_stepper.distanceToGo() != 0) {
-    TC_stepper.run();
-    if (tcSequenceStopRequested()) return false;
-  }
-  return true;
-}
-
-void tcRunPickSequenceBlocking() {
-  Serial.println(F("[TC] Pick sequence RUNNING - send TC_STOP to end"));
-
-  // Pause hall RPM sensing: nothing reads RPM while we block, and the sensor
-  // lead's EMI must not preempt the step train.
-  if (mixerIsrActive) {
-    detachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor));
-    mixerIsrActive = false;
-  }
-
-  tcSequenceRunning = true;
-  tcBagTripsDone = 0;
-  tcSequenceStep = 0;
-
-  while (true) {
-    tcActiveBag = (tcSequenceStep < 4) ? 1 : 2;
-
-    // 1) Go to the bag stack.
-    if (!tcBlockingMoveTo(tcActiveBagPosition())) break;
-
-    // 2) Pick the bag (blocking; the carriage is parked).
-    if (!tcPickAtBag()) break;   // no bag / lost vacuum -> tcPickAtBag stopped us
-
-    // 3) Carry it to the shredder.
-    if (!tcBlockingMoveTo(tcActiveShredderPosition())) break;
-
-    // 4) Release over the shredder and dwell.
-    tcPumpOff();
-    delay(TC_shredderPauseMs);
-    tcBagTripsDone++;
-    Serial.print(F("[TC] Dropped "));
-    Serial.print(tcActiveBagName());
-    Serial.print(F(" - trips "));
-    Serial.println(tcBagTripsDone);
-
-    // 5) Advance the predetermined pattern (Bag 1 x4, Bag 2 x1, repeat).
-    tcSequenceStep++;
-    if (tcSequenceStep >= 5) tcSequenceStep = 0;
-
-    if (tcSequenceStopRequested()) break;
-  }
-
-  // Park and hand control back to the normal loop.
-  tcPumpOff();
-  TC_stepper.stop();
-  TC_stepper.disableOutputs();
-  tcSequenceRunning = false;
-  tcState = TC_READY;
-
-  // Re-arm hall RPM sensing with a fresh edge reference.
-  mixerLastEdgeUs = micros();
-  mixerNewPeriod  = false;
-  attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
-  mixerIsrActive = true;
-
-  Serial.println(F("[TC] Pick sequence ENDED"));
-}
-
 void tcStartPick() {
   if (tcState != TC_READY && tcState != TC_DONE) {
     Serial.println(F("[TC] Home first (TC_HOME) and wait until ready"));
     return;
   }
-  tcRunPickSequenceBlocking();
+  tcSequenceRunning = true;
+  tcBagTripsDone = 0;
+  tcSequenceStep = 0;
+  tcActiveBag = tcNextSequenceBag();
+  tcMoveTo(tcActiveBagPosition(), TC_MOVE_TO_BAG);
+  Serial.print(F("[TC] Sequence started - moving to "));
+  Serial.println(tcActiveBagName());
 }
 
 void tcMoveStepperTo(float targetMm) {

@@ -983,6 +983,395 @@ def api_sr_status():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Process automation — Drying / Mixing / Discharge + Print-feed metering
+#
+#  These phases follow Size Reduction in the LunaRecycle process and span both
+#  the Arduino FPU (mixer screw motor, shredder gates, blast gates, agitator,
+#  vacuum) and the Modbus dryer, so they are orchestrated here in the backend
+#  instead of the firmware. Each runs on its own background thread and drives
+#  the existing firmware primitives; nothing blocks the Flask request threads.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Drying / mixing tunables (override via environment) ──────────────────────
+MIX_ON_SECONDS       = int(os.environ.get("LUNA_MIX_ON_SEC", "120"))       # mix 2 min
+MIX_PERIOD_SECONDS   = int(os.environ.get("LUNA_MIX_PERIOD_SEC", "600"))   # every 10 min
+MIX_PWM              = int(os.environ.get("LUNA_MIX_PWM", "150"))          # 0-255 mixer speed
+MIX_UP_DIR           = os.environ.get("LUNA_MIX_UP_DIR", "FWD").upper()    # upward mixing dir
+MIX_DOWN_DIR         = "REV" if MIX_UP_DIR == "FWD" else "FWD"
+DISCHARGE_SECONDS    = int(os.environ.get("LUNA_DISCHARGE_SEC", "60"))     # downward mix time
+PREHEAT_LEAD_SECONDS = int(os.environ.get("LUNA_PREHEAT_LEAD_SEC", "1500"))  # 25 min printer lead
+BLASTGATE_OPEN_CMD   = os.environ.get("LUNA_BG_OPEN_CMD", "BLASTGATE_HOMEMAX ALL")
+BLASTGATE_CLOSE_CMD  = os.environ.get("LUNA_BG_CLOSE_CMD", "BLASTGATE_HOME ALL")
+
+# ── Print-feed metering tunables ─────────────────────────────────────────────
+FEED_PRIME_SECONDS        = int(os.environ.get("LUNA_FEED_PRIME_SEC", "10"))
+FEED_METER_ON_SECONDS     = int(os.environ.get("LUNA_FEED_METER_ON_SEC", "3"))
+FEED_METER_PERIOD_SECONDS = int(os.environ.get("LUNA_FEED_METER_PERIOD_SEC", "20"))
+FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", "40"))
+FEED_AGITATOR_PCT         = int(os.environ.get("LUNA_FEED_AGITATOR_PCT", "50"))
+
+
+class ProcessOrchestrator:
+    """Runs the Drying -> Discharge phase on a background thread.
+
+    DRYING    - shredder gates closed, dryer ON at the requested setpoint, mixer
+                screw runs upward for MIX_ON every MIX_PERIOD for the requested
+                duration. A ``preheat_due`` flag rises PREHEAT_LEAD before the
+                end so the operator/printer can begin barrel + bed heating.
+    DISCHARGE - mixer stops, dryer OFF, lower blast gates open, mixer runs
+                downward for DISCHARGE_SECONDS to drop material into the crammer.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._reset()
+
+    def _reset(self):
+        self.phase = "IDLE"          # IDLE, DRYING, DISCHARGE, DONE, ABORTED, ERROR
+        self.started_at = 0.0
+        self.dry_end_at = 0.0
+        self.total_seconds = 0
+        self.temp_c = 0
+        self.mixing = False
+        self.dryer_on = False
+        self.preheat_due = False
+        self.message = ""
+        self.notes: list[str] = []
+
+    # ── helpers (never raise into the run loop) ──────────────────────────────
+    def _note(self, msg: str):
+        with self._lock:
+            self.notes.append(msg)
+            self.notes = self.notes[-8:]
+
+    def _arduino(self, cmd: str) -> list[str]:
+        try:
+            return arduino.send(cmd)
+        except Exception as exc:
+            self._note(f"arduino '{cmd}' failed: {exc}")
+            return []
+
+    def _dryer_on(self, temp_c: int):
+        try:
+            if not dryer.connected:
+                dryer.connect()
+            dryer.set_process_setpoint(int(temp_c))
+            if dryer.get_run_state_raw() != 100:
+                dryer.toggle_on_off()
+            with self._lock:
+                self.dryer_on = True
+        except Exception as exc:
+            self._note(f"dryer ON failed: {exc}")
+
+    def _dryer_off(self):
+        try:
+            if dryer.connected and dryer.get_run_state_raw() == 100:
+                dryer.toggle_on_off()
+        except Exception as exc:
+            self._note(f"dryer OFF failed: {exc}")
+        finally:
+            with self._lock:
+                self.dryer_on = False
+
+    # ── background run loop ──────────────────────────────────────────────────
+    def _run(self, total_seconds: int, temp_c: int):
+        try:
+            self._arduino("GATE_CLOSE")           # trap dried air in the barrel
+            self._dryer_on(temp_c)
+
+            now = time.monotonic()
+            with self._lock:
+                self.phase = "DRYING"
+                self.started_at = now
+                self.dry_end_at = now + total_seconds
+            cycle_start = now
+            mixing = False
+
+            while not self._stop.is_set():
+                now = time.monotonic()
+                remaining = self.dry_end_at - now
+                if remaining <= 0:
+                    break
+                with self._lock:
+                    self.preheat_due = remaining <= PREHEAT_LEAD_SECONDS
+                # Mixer cadence: MIX_ON seconds of upward mixing per MIX_PERIOD.
+                phase_t = (now - cycle_start) % MIX_PERIOD_SECONDS
+                want_mix = phase_t < MIX_ON_SECONDS
+                if want_mix and not mixing:
+                    self._arduino(f"MOTOR_SET {MIX_PWM} {MIX_UP_DIR}")
+                    mixing = True
+                    with self._lock:
+                        self.mixing = True
+                elif not want_mix and mixing:
+                    self._arduino("MOTOR_STOP")
+                    mixing = False
+                    with self._lock:
+                        self.mixing = False
+                self._stop.wait(1.0)
+
+            if mixing:
+                self._arduino("MOTOR_STOP")
+                with self._lock:
+                    self.mixing = False
+
+            if self._stop.is_set():
+                self._dryer_off()
+                with self._lock:
+                    self.phase = "ABORTED"
+                    self.message = "Drying aborted by operator."
+                return
+
+            # ── Discharge: dryer off, open gates, run mixer downward ──────────
+            with self._lock:
+                self.phase = "DISCHARGE"
+                self.message = "Discharging: gates open, mixer reversing down."
+            self._dryer_off()
+            self._arduino(BLASTGATE_OPEN_CMD)
+            self._arduino(f"MOTOR_SET {MIX_PWM} {MIX_DOWN_DIR}")
+            with self._lock:
+                self.mixing = True
+            end = time.monotonic() + DISCHARGE_SECONDS
+            while not self._stop.is_set() and time.monotonic() < end:
+                self._stop.wait(0.5)
+            self._arduino("MOTOR_STOP")
+            with self._lock:
+                self.mixing = False
+                if self._stop.is_set():
+                    self.phase = "ABORTED"
+                    self.message = "Discharge aborted by operator."
+                else:
+                    self.phase = "DONE"
+                    self.message = "Drying + discharge complete."
+
+        except Exception as exc:
+            self._note(f"fatal: {exc}")
+            self._arduino("MOTOR_STOP")
+            self._dryer_off()
+            with self._lock:
+                self.phase = "ERROR"
+                self.message = f"Error: {exc}"
+
+    # ── public API ───────────────────────────────────────────────────────────
+    def start(self, total_seconds: int, temp_c: int):
+        with self._lock:
+            if self.phase in ("DRYING", "DISCHARGE"):
+                raise RuntimeError("Drying cycle already running.")
+            self._reset()
+            self.total_seconds = int(total_seconds)
+            self.temp_c = int(temp_c)
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, args=(int(total_seconds), int(temp_c)), daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def status(self) -> dict:
+        with self._lock:
+            now = time.monotonic()
+            running = self.phase in ("DRYING", "DISCHARGE")
+            elapsed = int(now - self.started_at) if self.started_at else 0
+            remaining = max(0, int(self.dry_end_at - now)) if self.phase == "DRYING" else 0
+            return {
+                "phase":             self.phase,
+                "running":           running,
+                "total_seconds":     self.total_seconds,
+                "elapsed_seconds":   elapsed if running else 0,
+                "remaining_seconds": remaining,
+                "temp_c":            self.temp_c,
+                "mixing":            self.mixing,
+                "dryer_on":          self.dryer_on,
+                "preheat_due":       self.preheat_due,
+                "message":           self.message,
+                "notes":             list(self.notes),
+            }
+
+
+class FeedController:
+    """Print-feed prime + intermittent metering on a background thread.
+
+    PRIME  - vacuum + agitator both run for FEED_PRIME_SECONDS to charge the
+             film crammer before the print starts.
+    METER  - vacuum stays on (compaction); the agitator pulses on for
+             FEED_METER_ON every FEED_METER_PERIOD to meter material in.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._reset()
+
+    def _reset(self):
+        self.phase = "IDLE"          # IDLE, PRIMING, METERING, STOPPED, ERROR
+        self.started_at = 0.0
+        self.vacuum_pct = 0
+        self.agitator_pct = 0
+        self.agitator_on = False
+        self.message = ""
+
+    def _arduino(self, cmd: str):
+        try:
+            arduino.send(cmd)
+        except Exception as exc:
+            with self._lock:
+                self.message = f"arduino '{cmd}' failed: {exc}"
+
+    def _run(self, prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct):
+        try:
+            with self._lock:
+                self.phase = "PRIMING"
+                self.started_at = time.monotonic()
+                self.vacuum_pct = vacuum_pct
+                self.agitator_pct = agitator_pct
+                self.message = "Priming crammer (vacuum + agitator)."
+            self._arduino(f"VACUUM_SET {vacuum_pct}")
+            self._arduino(f"AGITATOR_SET {agitator_pct} FWD")
+            with self._lock:
+                self.agitator_on = True
+            end = time.monotonic() + prime_sec
+            while not self._stop.is_set() and time.monotonic() < end:
+                self._stop.wait(0.2)
+
+            # ── Metering: vacuum steady, agitator pulses ─────────────────────
+            with self._lock:
+                self.phase = "METERING"
+                self.message = "Metering material to the crammer."
+            self._arduino("AGITATOR_STOP")
+            with self._lock:
+                self.agitator_on = False
+            cycle_start = time.monotonic()
+            while not self._stop.is_set():
+                phase_t = (time.monotonic() - cycle_start) % meter_period
+                want = phase_t < meter_on
+                with self._lock:
+                    on = self.agitator_on
+                if want and not on:
+                    self._arduino(f"AGITATOR_SET {agitator_pct} FWD")
+                    with self._lock:
+                        self.agitator_on = True
+                elif not want and on:
+                    self._arduino("AGITATOR_STOP")
+                    with self._lock:
+                        self.agitator_on = False
+                self._stop.wait(0.5)
+
+            self._arduino("AGITATOR_STOP")
+            self._arduino("VACUUM_STOP")
+            with self._lock:
+                self.agitator_on = False
+                self.phase = "STOPPED"
+                self.message = "Feed stopped."
+        except Exception as exc:
+            self._arduino("AGITATOR_STOP")
+            self._arduino("VACUUM_STOP")
+            with self._lock:
+                self.phase = "ERROR"
+                self.message = f"Error: {exc}"
+
+    def start(self, prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct):
+        with self._lock:
+            if self.phase in ("PRIMING", "METERING"):
+                raise RuntimeError("Feed already running.")
+            self._reset()
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct),
+            daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def status(self) -> dict:
+        with self._lock:
+            running = self.phase in ("PRIMING", "METERING")
+            return {
+                "phase":        self.phase,
+                "running":      running,
+                "vacuum_pct":   self.vacuum_pct,
+                "agitator_pct": self.agitator_pct,
+                "agitator_on":  self.agitator_on,
+                "message":      self.message,
+            }
+
+
+orchestrator = ProcessOrchestrator()
+feeder = FeedController()
+
+
+@app.route("/api/dry/start", methods=["POST"])
+def api_dry_start():
+    """Begin the drying + mixing cycle. Body: {minutes, temp_c}."""
+    try:
+        body = request.get_json(silent=True) or {}
+        minutes = float(body.get("minutes", 0))
+        temp_c = int(body.get("temp_c", 0))
+        if minutes <= 0:
+            return jsonify({"ok": False, "error": "minutes must be > 0"}), 400
+        if temp_c <= 0 or temp_c > 250:
+            return jsonify({"ok": False, "error": "temp_c must be 1-250"}), 400
+        orchestrator.start(int(minutes * 60), temp_c)
+        return jsonify({"ok": True, "data": orchestrator.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/dry/stop", methods=["POST"])
+def api_dry_stop():
+    try:
+        orchestrator.stop()
+        return jsonify({"ok": True, "data": orchestrator.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/dry/status", methods=["GET"])
+def api_dry_status():
+    return jsonify({"ok": True, "data": orchestrator.status()})
+
+
+@app.route("/api/feed/start", methods=["POST"])
+def api_feed_start():
+    """Begin print-feed prime + metering. Body overrides are optional."""
+    try:
+        body = request.get_json(silent=True) or {}
+        prime_sec    = int(body.get("prime_sec", FEED_PRIME_SECONDS))
+        meter_on     = int(body.get("meter_on_sec", FEED_METER_ON_SECONDS))
+        meter_period = int(body.get("meter_period_sec", FEED_METER_PERIOD_SECONDS))
+        vacuum_pct   = int(body.get("vacuum_pct", FEED_VACUUM_PCT))
+        agitator_pct = int(body.get("agitator_pct", FEED_AGITATOR_PCT))
+        if not (0 <= vacuum_pct <= 100):
+            return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
+        if not (0 <= agitator_pct <= 50):
+            return jsonify({"ok": False, "error": "agitator_pct must be 0-50"}), 400
+        if meter_period <= 0 or meter_on < 0 or meter_on > meter_period:
+            return jsonify({"ok": False, "error": "meter timing invalid"}), 400
+        feeder.start(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct)
+        return jsonify({"ok": True, "data": feeder.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/feed/stop", methods=["POST"])
+def api_feed_stop():
+    try:
+        feeder.stop()
+        return jsonify({"ok": True, "data": feeder.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/feed/status", methods=["GET"])
+def api_feed_status():
+    return jsonify({"ok": True, "data": feeder.status()})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Routes — Energy monitor
 # ─────────────────────────────────────────────────────────────────────────────
 

@@ -1442,6 +1442,10 @@ void setup() {
 
   // INA219
   Wire.begin();
+  // Motor EMI can corrupt the I2C bus and hang a read forever (no default
+  // timeout on AVR TWI). Enable a 3 ms timeout with auto bus-reset so a
+  // glitched INA219/DS3502 transaction recovers instead of freezing loop().
+  Wire.setWireTimeout(3000, true);
   inaOk = Mixer_screwMotorCurrentSensor.begin();
   if (!inaOk) {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));

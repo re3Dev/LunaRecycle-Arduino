@@ -19,6 +19,7 @@
  *   MOTOR_SET <spd> <dir>  Set screw motor.  spd = 0-255,  dir = FWD or REV
  *   MOTOR_STOP             Stop screw motor (PWM = 0)
  *   MOTOR_STATUS           Print current motor speed / direction
+ *   MIXER_RPM              Print the mixer screw RPM (hall-effect sensor)
  *
  *   TC_HOME                Home the conveyor stepper, then park at Bag 1
  *   TC_PICK                Run the repeating sequence: Bag 1 x4, then Bag 2 x1
@@ -67,6 +68,9 @@
  *   Screw motor IN1/2  ->  D7  / D8
  *   INA219             ->  D20 (SDA) / D21 (SCL)   [hardware I2C]
  *
+ *   Mixer screw RPM (hall effect):
+ *     US5881 sensor    ->  D2 (INT0)   [FALLING-edge pulse count]
+ *
  *   Mixer agitator (2nd H-bridge channel):
  *     ENB / IN3 / IN4  ->  D3 / D12 / D13   (power capped at 50%)
  *
@@ -102,6 +106,10 @@ const int Mixer_shredderGateRightServoMotor_pin = 7;
 const int Mixer_motorController_ENA   = 10;   // ENA on module (Timer 2 PWM)
 const int Mixer_motorController_IN1   = 27;   // IN1 on module
 const int Mixer_motorController_IN2   = 28;   // IN2 on module
+
+// Mixer screw RPM - US5881 hall-effect sensor on D2 (INT0). Counts one pulse
+// per magnet per revolution via a hardware interrupt (pinmap_mega2560.md).
+const int Mixer_screwRotationSensor   = 2;    // D2 = INT0
 
 // Mixer agitator - second channel of the mixer H-bridge (Interface List).
 const int Mixer_agitatorMotor_ENB = 11;    // ENB enable (PWM)
@@ -141,6 +149,11 @@ const int GATE_OPEN_DEG  = 55;
 const int GATE_CLOSE_DEG = 0;
 
 const unsigned long ENERGY_PRINT_INTERVAL_MS = 500;
+
+// Mixer screw RPM: how often to recompute the rate, and the number of hall
+// pulses per full revolution (magnets on the shaft).
+const unsigned long RPM_CALC_INTERVAL_MS = 500;
+const int           MIXER_PULSES_PER_REV = 1;    // magnets per revolution [tune]
 
 // ── Trash conveyor tunables ────────────────────────────────────────────────
 // Picker servo angles (deg) for a 270-degree servo driven by pulse width.
@@ -265,6 +278,11 @@ bool inaOk     = false;
 String cmdBuffer;
 unsigned long lastEnergyPrint = 0;
 
+// Mixer screw RPM (hall effect). pulseCount is written from the ISR only.
+volatile unsigned long mixerPulseCount = 0;
+unsigned long mixerLastCalcMs = 0;
+float         mixerRpm        = 0.0;
+
 // Trash conveyor state machine.
 enum TCState {
   TC_WAIT_HOME,
@@ -388,7 +406,42 @@ void motorStatus() {
   Serial.print(F("[MOTOR] pwm="));
   Serial.print(motorPwm);
   Serial.print(F(" dir="));
-  Serial.println(motorFwd ? F("FWD") : F("REV"));
+  Serial.print(motorFwd ? F("FWD") : F("REV"));
+  Serial.print(F(" rpm="));
+  Serial.println(mixerRpm, 0);
+}
+
+// ============================================================================
+//  Mixer Screw RPM - US5881 hall-effect sensor (D2 / INT0)
+//  One pulse per magnet per revolution, counted in an ISR. mixerUpdateRpm()
+//  is called every loop and recomputes the rate every RPM_CALC_INTERVAL_MS
+//  without blocking, so it never disturbs the stepper step timing.
+// ============================================================================
+
+void mixerOnPulse() {
+  mixerPulseCount++;
+}
+
+void mixerUpdateRpm() {
+  unsigned long nowMs = millis();
+  if (nowMs - mixerLastCalcMs < RPM_CALC_INTERVAL_MS) return;
+
+  // Snapshot and reset the ISR counter atomically.
+  noInterrupts();
+  unsigned long pulses = mixerPulseCount;
+  mixerPulseCount = 0;
+  interrupts();
+
+  float elapsedSec = (nowMs - mixerLastCalcMs) / 1000.0f;
+  mixerLastCalcMs = nowMs;
+  if (elapsedSec > 0.0f) {
+    mixerRpm = (pulses / (float)MIXER_PULSES_PER_REV) / elapsedSec * 60.0f;
+  }
+}
+
+void mixerRpmStatus() {
+  Serial.print(F("[RPM] mixer_rpm="));
+  Serial.println(mixerRpm, 0);
 }
 
 // ============================================================================
@@ -1454,7 +1507,9 @@ void printAllStatus() {
   Serial.print(F(" agitator_dir="));
   Serial.print(agitatorFwd ? F("FWD") : F("REV"));
   Serial.print(F(" vacuum_pct="));
-  Serial.println(vacuumPercent);
+  Serial.print(vacuumPercent);
+  Serial.print(F(" mixer_rpm="));
+  Serial.println(mixerRpm, 0);
   printEnergy();
 }
 
@@ -1504,6 +1559,9 @@ void handleCommand(const String& cmd) {
 
   } else if (cmd == "MOTOR_STATUS") {
     motorStatus();
+
+  } else if (cmd == "MIXER_RPM") {
+    mixerRpmStatus();
 
   } else if (cmd == "MOTOR_TEST") {
     motorTest();
@@ -1702,6 +1760,11 @@ void setup() {
   pinMode(Mixer_motorController_IN2, OUTPUT);
   motorStop();
 
+  // Mixer screw RPM - hall-effect sensor on D2 (INT0), FALLING-edge pulses
+  pinMode(Mixer_screwRotationSensor, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
+  mixerLastCalcMs = millis();
+
   // INA219
   Wire.begin();
   // Motor EMI can corrupt the I2C bus and hang a read forever (no default
@@ -1765,6 +1828,9 @@ void loop() {
 
   // Drive the trash-conveyor stepper / pick-place state machine
   tcUpdate();
+
+  // Recompute mixer screw RPM from the hall-effect pulse count (non-blocking)
+  mixerUpdateRpm();
 
   // Stream energy readings automatically every 500 ms — but NEVER while the
   // conveyor stepper is actively moving. The INA219 reads are blocking I2C

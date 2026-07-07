@@ -817,6 +817,9 @@
             <div class="kv">
               <div class="k">Direction</div><div class="v" id="motorDirText">—</div>
             </div>
+            <div class="kv">
+              <div class="k">Screw RPM</div><div class="v" id="motorRpmText">—</div>
+            </div>
           </div>
         </section>
 
@@ -1163,6 +1166,7 @@
       gateState: "CLOSED",
       motorPwm: 0,
       motorDir: "FWD",
+      mixerRpm: "—",
 
       tcState: "—",
       tcPosMm: "—",
@@ -1349,6 +1353,9 @@
         if(d.vacuum_pct   !== undefined) S.vacuumPct   = d.vacuum_pct;
         if(d.bg_left      !== undefined) S.bgLeft      = d.bg_left;
         if(d.bg_right     !== undefined) S.bgRight     = d.bg_right;
+        if(d.motor_pwm    !== undefined) S.motorPwm    = Number(d.motor_pwm);
+        if(d.motor_dir    !== undefined) S.motorDir    = d.motor_dir;
+        if(d.mixer_rpm    !== undefined) S.mixerRpm    = d.mixer_rpm;
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
@@ -1402,6 +1409,7 @@
       mc.className = "statechip" + (S.motorPwm > 0 ? " good" : "");
       $("#motorPwmText").textContent = S.motorPwm;
       $("#motorDirText").textContent = S.motorDir || "—";
+      $("#motorRpmText").textContent = (S.mixerRpm === "—" || S.mixerRpm === undefined) ? "—" : `${S.mixerRpm} RPM`;
       // Trash conveyor
       const tc = $("#tcChip");
       tc.textContent = S.tcState || "—";

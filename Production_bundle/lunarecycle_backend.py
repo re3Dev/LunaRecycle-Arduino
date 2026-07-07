@@ -173,7 +173,7 @@ class ArduinoBridge:
         # firmware streams every 500 ms; for non-STATUS commands it must be skipped
         # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies
         # with a [TC] line, not [ENERGY]).
-        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[VACUUM]", "[BLASTGATE_DONE]", "[SYSTEM]")
+        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[VACUUM]", "[BLASTGATE_DONE]", "[SIZERED]", "[SYSTEM]")
 
         lines: list[str] = []
         seen_status = False
@@ -930,6 +930,54 @@ def api_blastgate_status():
     try:
         lines = arduino.send("BLASTGATE_STATUS")
         return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ── Automation (Size Reduction) ──────────────────────────────────────────────
+
+def _parse_sizered(lines: list[str]) -> dict:
+    """Parse the firmware's [SIZERED] key=value status line into a dict."""
+    for line in lines:
+        if line.startswith("[SIZERED]"):
+            result: dict = {}
+            for part in line.replace("[SIZERED]", "").strip().split():
+                if "=" in part:
+                    k, _, v = part.partition("=")
+                    result[k] = v
+            return result
+    return {}
+
+
+@app.route("/api/sr/start", methods=["POST"])
+def api_sr_start():
+    """Begin the Size Reduction shred sequence: SR_START <pe_units> <pa_units>."""
+    try:
+        body = request.get_json(silent=True) or {}
+        pe = int(body.get("pe_units", 0))
+        pa = int(body.get("pa_units", 0))
+        if pe < 0 or pa < 0 or (pe + pa) <= 0:
+            return jsonify({"ok": False, "error": "pe_units/pa_units must be >= 0 and not both zero"}), 400
+        lines = arduino.send(f"SR_START {pe} {pa}")
+        return jsonify({"ok": True, "response": lines, "data": _parse_sizered(lines)})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/sr/stop", methods=["POST"])
+def api_sr_stop():
+    try:
+        lines = arduino.send("SR_STOP")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/sr/status", methods=["GET"])
+def api_sr_status():
+    try:
+        lines = arduino.send("SR_STATUS")
+        return jsonify({"ok": True, "data": _parse_sizered(lines), "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 

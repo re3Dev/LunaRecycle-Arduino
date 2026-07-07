@@ -520,10 +520,6 @@
         <span><strong id="connState">CONNECTING</strong> • <span class="mono" id="connMeta">—</span></span>
       </div>
 
-      <button class="btn mini" id="btnSim">
-        Simulation: <span id="simState">ON</span>
-      </button>
-
       <button class="btn mini" id="btnDryerMode">
         Dryer IO: <span id="dryerIoState">SIM</span>
       </button>
@@ -974,35 +970,53 @@
           </div>
         </section>
 
-        <section class="card placeholder-card">
+        <section class="card">
           <div class="hd">
             <div class="title">
-              <div class="sicon" aria-hidden="true">◔</div>
+              <div class="sicon" aria-hidden="true">⚙</div>
               <div style="min-width:0">
-                <h2>Feedstock</h2>
-                <div class="hint">detection + confidence</div>
+                <h2>Automation — Size Reduction</h2>
+                <div class="hint">auto-shred PE + PA bags on a cadence</div>
               </div>
             </div>
-            <span class="statechip warn">PLANNED</span>
+            <span class="statechip" id="automationChip">IDLE</span>
           </div>
-          <div class="bd" style="padding:16px 12px; text-align:center; color:var(--muted2); font-size:12px;">
-            Feedstock detection coming soon
-          </div>
-        </section>
-
-        <section class="card placeholder-card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">⟂</div>
-              <div style="min-width:0">
-                <h2>Vacuum</h2>
-                <div class="hint">on/off + pressure monitor</div>
+          <div class="bd">
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">PE units (bag&nbsp;1&nbsp;/&nbsp;LEFT)</label>
+              <input type="number" id="srPeUnits" min="0" step="1" value="0"
+                style="width:80px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+            </div>
+            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
+              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">PA units (bag&nbsp;2&nbsp;/&nbsp;RIGHT)</label>
+              <input type="number" id="srPaUnits" min="0" step="1" value="0"
+                style="width:80px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
+            </div>
+            <div class="row" style="flex-wrap:wrap; gap:6px;">
+              <button class="btn mini primary" id="btnSrStart">Start</button>
+              <button class="btn mini danger"  id="btnSrStop">Stop</button>
+              <button class="btn mini"         id="btnSrStatus">Refresh</button>
+            </div>
+            <div class="split" style="margin-top:10px;">
+              <div class="kv">
+                <div class="k">Running</div><div class="v" id="srRunText">—</div>
+              </div>
+              <div class="kv">
+                <div class="k">Phase</div><div class="v" id="srPhaseText">—</div>
+              </div>
+              <div class="kv">
+                <div class="k">PE left</div><div class="v" id="srPeLeftText">—</div>
+              </div>
+              <div class="kv">
+                <div class="k">PA left</div><div class="v" id="srPaLeftText">—</div>
+              </div>
+              <div class="kv">
+                <div class="k">Cadence (PE:PA)</div><div class="v" id="srCadenceText">—</div>
+              </div>
+              <div class="kv">
+                <div class="k">Shredded</div><div class="v" id="srShreddedText">—</div>
               </div>
             </div>
-            <span class="statechip warn">PLANNED</span>
-          </div>
-          <div class="bd" style="padding:16px 12px; text-align:center; color:var(--muted2); font-size:12px;">
-            Vacuum control coming soon
           </div>
         </section>
 
@@ -1034,7 +1048,6 @@
     const ARDUINO_BASE  = "/api";
 
     const S = {
-      sim: true,
       connected: false,
       latencyMs: 0,
       uptimeSec: 0,
@@ -1067,35 +1080,19 @@
       bgLeft: "—",
       bgRight: "—",
 
-      convA_on: false,
-      convB_on: false,
-      convA_speed: 0,
-      convB_speed: 0,
-
-      shred_on: false,
-      shred_dir: "fwd",
-      shred_load: 0,
+      // Size Reduction automation status (parsed from SR_STATUS)
+      srRun: "—",
+      srPhase: "—",
+      srPeLeft: "—",
+      srPaLeft: "—",
+      srCadence: "—",
+      srShredded: "—",
+      srPolling: false,
 
       screw_on: false,
       heater_on: false,
       heater_set: 60,
-      dryer_temp: 24,
-      dryer_mode: "STANDARD",
 
-      vac_on: false,
-      dp_kpa: 0,
-      clogRisk: 0,
-
-      door_pos: 0,
-      door_target: 0,
-
-      feed_pct: 0,
-      feed_conf: "—",
-      flow_est: 0,
-      noise: 0,
-
-      estThroughput: 0,
-      interlock: "READY",
       estop: false,
 
       dryerData: {
@@ -1157,17 +1154,6 @@
 
     function escapeHtml(s){
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-    }
-
-    function setSwitch(sw, on){
-      sw.classList.toggle("on", !!on);
-      sw.setAttribute("aria-checked", on ? "true" : "false");
-    }
-
-    function toggleKey(key){
-      S[key] = !S[key];
-      applyRules(`toggle:${key}`);
-      render();
     }
 
     // Single hardened fetch wrapper: aborts on timeout so a stuck request can
@@ -1352,6 +1338,73 @@
         bgc.textContent = (S.bgLeft === "—" && S.bgRight === "—") ? "—" : `L ${S.bgLeft}% · R ${S.bgRight}%`;
         bgc.className = "statechip" + (moving ? " good" : "");
       }
+      // Automation — Size Reduction
+      const running = String(S.srRun).toUpperCase() === "YES";
+      setText("srRunText", running ? "RUNNING" : (S.srRun === "—" ? "—" : "IDLE"));
+      setText("srPhaseText", S.srPhase);
+      setText("srPeLeftText", S.srPeLeft);
+      setText("srPaLeftText", S.srPaLeft);
+      setText("srCadenceText", S.srCadence);
+      setText("srShreddedText", S.srShredded);
+      const ac = document.getElementById("automationChip");
+      if(ac){
+        ac.textContent = running ? "RUNNING" : "IDLE";
+        ac.className = "statechip" + (running ? " good" : "");
+      }
+    }
+
+    async function srRefreshStatus(silent=false){
+      if(!S.arduinoConnected){
+        if(!silent){ log("Arduino not connected.", "bad"); }
+        return;
+      }
+      try{
+        const res = await apiArduino("/sr/status");
+        const d = res.data || {};
+        S.srRun      = d.run      !== undefined ? d.run      : "—";
+        S.srPhase    = d.phase    || "—";
+        S.srPeLeft   = d.pe_left  !== undefined ? d.pe_left  : "—";
+        S.srPaLeft   = d.pa_left  !== undefined ? d.pa_left  : "—";
+        S.srCadence  = d.ratio_pe !== undefined ? `${d.ratio_pe}:1` : "—";
+        S.srShredded = d.shredded !== undefined ? d.shredded : "—";
+      }catch(err){
+        if(!silent){ log(`Size Reduction status failed: ${err.message}`, "bad"); }
+      }
+      renderArduino();
+    }
+
+    async function pollSr(){
+      if(!S.arduinoConnected || S.srPolling) return;
+      S.srPolling = true;
+      try{ await srRefreshStatus(true); }
+      finally{ S.srPolling = false; }
+    }
+
+    async function srStart(){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      const pe = parseInt($("#srPeUnits").value, 10) || 0;
+      const pa = parseInt($("#srPaUnits").value, 10) || 0;
+      if(pe < 0 || pa < 0 || (pe + pa) <= 0){
+        log("Enter at least one PE or PA unit to start Size Reduction.", "bad");
+        return;
+      }
+      try{
+        const res = await apiArduino("/sr/start", {
+          method: "POST",
+          body: JSON.stringify({ pe_units: pe, pa_units: pa }),
+        });
+        log(`Size Reduction started: ${pe} PE + ${pa} PA.`, "good", (res.response || []).join(" | "));
+        await srRefreshStatus(true);
+      }catch(err){ log(`Size Reduction start failed: ${err.message}`, "bad"); }
+    }
+
+    async function srStop(){
+      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
+      try{
+        const res = await apiArduino("/sr/stop", { method: "POST" });
+        log("Size Reduction stopped.", "warn", (res.response || []).join(" | "));
+        await srRefreshStatus(true);
+      }catch(err){ log(`Size Reduction stop failed: ${err.message}`, "bad"); }
     }
 
     async function doorCmd(endpoint){
@@ -1516,7 +1569,6 @@
         S.dryerLastPollOk = true;
         S.dryerData = d;
 
-        S.dryer_temp = d.process_temp != null ? d.process_temp / 10 : S.dryer_temp;
         S.heater_set = d.process_setpoint ?? S.heater_set;
 
         const run = d.run_state;
@@ -1611,83 +1663,6 @@
       S.latencyMs += (target - S.latencyMs) * 0.1;
     }
 
-    function tickProcess(dt){
-      if(!S.sim) return;
-
-      const speed = 55;
-      const delta = S.door_target - S.door_pos;
-      const step = clamp(delta, -speed*dt, speed*dt);
-      S.door_pos = clamp(S.door_pos + step, 0, 100);
-
-      const convEff = (S.convA_on ? S.convA_speed : 0) + (S.convB_on ? S.convB_speed : 0);
-      const shredEff = S.shred_on ? 1 : 0.25;
-      const vacEff   = S.vac_on ? 1 : 0.35;
-
-      const base = clamp((convEff/2) * 0.75 * shredEff * vacEff, 0, 100);
-      const noise = (Math.random() - 0.5) * 2 * S.noise;
-      S.feed_pct += (base - S.feed_pct) * 0.08 + noise * 0.04;
-      S.feed_pct = clamp(S.feed_pct, 0, 100);
-
-      const confScore = clamp(90 - S.noise*3 - (S.vac_on ? 0 : 18) - (S.connected ? 0 : 22), 0, 100);
-      S.feed_conf = confScore > 75 ? "HIGH" : confScore > 45 ? "MED" : "LOW";
-
-      const flow = (convEff/200) * (S.feed_pct/100) * 18;
-      S.flow_est += (flow - S.flow_est) * 0.12;
-      S.flow_est = clamp(S.flow_est, 0, 25);
-
-      const targetLoad = S.shred_on
-        ? clamp((S.feed_pct * 0.75) + (S.shred_dir==="rev" ? 20 : 0) + (S.vac_on ? -10 : 8), 0, 100)
-        : 0;
-      S.shred_load += (targetLoad - S.shred_load) * 0.10;
-
-      const dpTarget = S.vac_on ? clamp((S.shred_load*0.07) + (S.feed_pct*0.03) + (S.clogRisk*0.12), 0, 12) : 0;
-      S.dp_kpa += (dpTarget - S.dp_kpa) * 0.10;
-
-      const riskUp = (!S.vac_on ? 0.22 : 0.06) + (S.shred_load > 75 ? 0.10 : 0);
-      const riskDown = (S.vac_on && S.shred_load < 55) ? 0.18 : 0.06;
-      S.clogRisk = clamp(S.clogRisk + (riskUp - riskDown) * dt, 0, 100);
-
-      if(!S.dryerIoLive){
-        const ambient = 24;
-        const set = clamp(S.heater_set, 30, 120);
-        const heaterPower = S.heater_on ? 1 : 0;
-        const screwCool = S.screw_on ? 0.05 : 0.02;
-        const targetTemp = heaterPower ? set : ambient;
-        S.dryer_temp += (targetTemp - S.dryer_temp) * (heaterPower ? 0.06 : 0.03);
-        S.dryer_temp -= screwCool * (S.dryer_temp - ambient);
-      }
-
-      S.estThroughput += (S.flow_est * 1.15 - S.estThroughput) * 0.10;
-      S.estThroughput = clamp(S.estThroughput, 0, 30);
-
-      let inter = "READY";
-      if(S.estop) inter = "E-STOP";
-      else if(S.shred_on && !S.vac_on) inter = "BLOCKED";
-      else if(!S.dryerIoLive && S.heater_on && !S.screw_on && (S.dryer_temp > 32)) inter = "CAUTION";
-      S.interlock = inter;
-
-      if(S.vac_on && S.dp_kpa > 9.5 && Math.random() < 0.03){
-        log(`Vacuum pressure high (${S.dp_kpa.toFixed(1)} kPa). Consider unclog.`, "warn");
-      }
-    }
-
-    function applyRules(){
-      if(S.estop){
-        S.convA_on = false;
-        S.convB_on = false;
-        S.shred_on = false;
-        S.screw_on = false;
-        S.heater_on = false;
-        S.vac_on = false;
-        S.door_target = 0;
-      }
-
-      if(S.shred_on && !S.vac_on){
-        S.shred_on = false;
-        log("Shredder blocked: Vacuum must be ON.", "bad");
-      }
-    }
-
     function render(){
       const connDot = $("#connDot");
       const connState = $("#connState");
@@ -1702,41 +1677,10 @@
         connMeta.textContent = "retrying…";
       }
 
-      setText("interlockState", S.interlock);
-      const throughputDot = document.getElementById("throughputDot");
-      if(throughputDot){
-        if(S.estop || S.interlock==="BLOCKED") throughputDot.className="dot bad";
-        else if(S.interlock==="CAUTION") throughputDot.className="dot warn";
-        else throughputDot.className="dot good";
-      }
-
-      setText("throughput", fmt2(S.estThroughput));
-
-      setText("convA_speed_lbl", Math.round(S.convA_speed));
-      setText("convB_speed_lbl", Math.round(S.convB_speed));
-      safeSetChip("chipConvA", S.convA_on);
-      safeSetChip("chipConvB", S.convB_on);
-
-      setText("shred_dir_lbl", S.shred_dir==="fwd" ? "Forward" : "Reverse");
-      safeSetChip("chipShred", S.shred_on, false, (S.interlock==="BLOCKED"));
-      setText("shred_load_lbl", Math.round(S.shred_load));
-      setStyle("shred_load_bar", "width", `${clamp(S.shred_load,0,100)}%`);
-
-      const shredDot = document.getElementById("shredDot");
-      if(shredDot){
-        if(S.shred_on){
-          shredDot.className = "dot good";
-          setText("shredStatus", S.shred_dir==="fwd" ? "RUNNING" : "REVERSE");
-        }else{
-          shredDot.className = (S.interlock==="BLOCKED") ? "dot bad" : "dot";
-          setText("shredStatus", (S.interlock==="BLOCKED") ? "BLOCKED" : "IDLE");
-        }
-      }
-
       const d = S.dryerData;
 
-      $("#dryer_temp").textContent = d.process_temp != null ? (d.process_temp / 10).toFixed(1) : fmt2(S.dryer_temp);
-      $("#dryer_set").textContent = d.process_setpoint ?? Math.round(S.heater_set);
+      $("#dryer_temp").textContent = d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—";
+      $("#dryer_set").textContent = d.process_setpoint ?? "—";
       $("#dryer_dp").textContent = d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—";
 
       $("#dryer_process_temp").textContent = d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—";
@@ -1757,7 +1701,7 @@
       $("#dryer_output_word").textContent = d.output_word != null ? `${d.output_word} (${d.output_word_hex})` : "—";
       $("#dryer_status_bits").textContent = Array.isArray(d.status_bits_set) ? JSON.stringify(d.status_bits_set) : "—";
 
-      $("#dryerMode").textContent = S.dryerIoLive ? "LIVE MODBUS" : S.dryer_mode;
+      $("#dryerMode").textContent = S.dryerIoLive ? "LIVE MODBUS" : "OFFLINE";
 
       safeSetChip("chipScrew", S.screw_on);
       safeSetChip("chipHeater", S.heater_on, (S.heater_on && !S.screw_on), false);
@@ -1768,9 +1712,7 @@
         else if(S.dryerApiConnected) dryerDot.className = "dot warn";
         else dryerDot.className = "dot bad";
       }else{
-        if(S.heater_on && Math.abs(S.dryer_temp - S.heater_set) < 3) dryerDot.className = "dot good";
-        else if(S.heater_on) dryerDot.className = "dot warn";
-        else dryerDot.className = "dot";
+        dryerDot.className = "dot";
       }
 
       const dryerConnDot = $("#dryerConnDot");
@@ -1791,196 +1733,11 @@
       })();
       $("#heater_stability_bar").style.width = `${stab}%`;
 
-      safeSetChip("chipVac", S.vac_on);
-      const vacDot = document.getElementById("vacDot");
-      if(vacDot){
-        if(S.vac_on && S.dp_kpa < 6) vacDot.className="dot good";
-        else if(S.vac_on) vacDot.className="dot warn";
-        else vacDot.className="dot";
-      }
-      setText("vacStatus", S.vac_on ? "RUNNING" : "IDLE");
-
-      setText("dp_lbl", fmt2(S.dp_kpa));
-      setStyle("dp_bar", "width", `${clamp((S.dp_kpa/12)*100, 0, 100)}%`);
-
-      setText("doorPosLbl", Math.round(S.door_pos));
-      setText("door_pos_readout", Math.round(S.door_pos));
-      setStyle("door_bar", "width", `${S.door_pos}%`);
-      const openish = S.door_pos > 65;
-      const closedish = S.door_pos < 35;
-      setText("doorLabel", openish ? "OPEN" : closedish ? "CLOSED" : "MOVING");
-      setClass("doorDot", openish ? "dot good" : closedish ? "dot" : "dot warn");
-      safeToggleOnQ(".doorViz", "open", openish);
-
-      const feed = clamp(S.feed_pct,0,100);
-      setText("feed_readout", fmt2(feed));
-      setText("feedPct", `${Math.round(feed)}%`);
-      setStyle("feed_bar", "width", `${feed}%`);
-      setText("flow_est", fmt2(S.flow_est));
-
-      setText("feedConf", S.feed_conf);
-      setClass("feedDot", S.feed_conf==="HIGH" ? "dot good" : S.feed_conf==="MED" ? "dot warn" : "dot bad");
-
-      drawGauge(feed, S.feed_conf);
-
-      setText("simState", S.sim ? "ON" : "OFF");
-      toggleClass("btnSim", "primary", S.sim);
-
-      setText("dryerIoState", S.dryerIoLive ? "LIVE" : "SIM");
+      setText("dryerIoState", S.dryerIoLive ? "LIVE" : "OFFLINE");
       toggleClass("btnDryerMode", "primary", S.dryerIoLive);
-
-      $$(".switch").forEach(sw=>{
-        const key = sw.dataset.key;
-        setSwitch(sw, !!S[key]);
-      });
 
       renderArduino();
     }
-
-    function drawGauge(pct, conf){
-      const c = $("#gauge");
-      if (!c) return;
-      const ctx = c.getContext("2d");
-      const w = c.width, h = c.height;
-      ctx.clearRect(0,0,w,h);
-
-      roundRect(ctx, 0,0,w,h, 16);
-      ctx.fillStyle = "rgba(0,0,0,.10)";
-      ctx.fill();
-
-      const cx = w/2, cy = h/2;
-      const r = 44;
-
-      ctx.lineWidth = 11;
-      ctx.lineCap = "round";
-
-      ctx.beginPath();
-      ctx.strokeStyle = "rgba(255,255,255,.12)";
-      ctx.arc(cx, cy, r, Math.PI*0.8, Math.PI*2.2);
-      ctx.stroke();
-
-      const a0 = Math.PI*0.8;
-      const a1 = Math.PI*2.2;
-      const t = pct/100;
-      const av = a0 + (a1-a0)*t;
-
-      const color =
-        conf==="HIGH" ? "rgba(49,208,170,.95)" :
-        conf==="MED"  ? "rgba(255,207,90,.95)" :
-                        "rgba(255,92,122,.95)";
-
-      ctx.beginPath();
-      ctx.strokeStyle = color;
-      ctx.arc(cx, cy, r, a0, av);
-      ctx.stroke();
-
-      const nx = cx + Math.cos(av) * r;
-      const ny = cy + Math.sin(av) * r;
-      ctx.beginPath();
-      ctx.fillStyle = color;
-      ctx.arc(nx, ny, 5, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.textAlign = "center";
-      ctx.fillStyle = "rgba(232,238,248,.92)";
-      ctx.font = "800 20px system-ui";
-      ctx.fillText(Math.round(pct) + "%", cx, cy + 6);
-
-      ctx.fillStyle = "rgba(232,238,248,.55)";
-      ctx.font = "700 10px ui-monospace";
-      ctx.fillText("FEED", cx, cy - 16);
-    }
-
-    function roundRect(ctx, x,y,w,h,r){
-      const rr = Math.min(r, w/2, h/2);
-      ctx.beginPath();
-      ctx.moveTo(x+rr, y);
-      ctx.arcTo(x+w, y, x+w, y+h, rr);
-      ctx.arcTo(x+w, y+h, x, y+h, rr);
-      ctx.arcTo(x, y+h, x, y, rr);
-      ctx.arcTo(x, y, x+w, y, rr);
-      ctx.closePath();
-    }
-
-    const PROCEDURE = [
-      { t: "Pause upstream feed", s: "Stop conveyors to prevent additional material entering the crammer." },
-      { t: "Stabilize vacuum", s: "Ensure vacuum is ON. Observe pressure trend for 10–15 seconds." },
-      { t: "Reverse shredder briefly", s: "Jog shredder in REVERSE for 2–3 seconds (if safe)." },
-      { t: "Inspect chute", s: "Confirm no large fragments are bridging at the inlet." },
-      { t: "Resume at reduced rate", s: "Start conveyors at 30–40% and ramp slowly once stable." },
-    ];
-    let procIndex = 0;
-    let procDone = new Array(PROCEDURE.length).fill(false);
-
-    function openModal(){
-      procIndex = 0;
-      procDone = new Array(PROCEDURE.length).fill(false);
-      renderProcedure();
-      $("#modal").classList.add("show");
-      log("Opened Unclog procedure.", "info");
-    }
-    function closeModal(){ $("#modal").classList.remove("show"); }
-    function renderProcedure(){
-      const steps = $("#steps");
-      steps.innerHTML = "";
-      PROCEDURE.forEach((st, i)=>{
-        const div = document.createElement("div");
-        div.className = "step" + (procDone[i] ? " done" : "");
-        div.innerHTML = `
-          <div class="badge">${procDone[i] ? "✓" : (i+1)}</div>
-          <div class="txt">
-            <div class="t">${escapeHtml(st.t)}</div>
-            <div class="s">${escapeHtml(st.s)}</div>
-          </div>
-        `;
-        steps.appendChild(div);
-      });
-
-      $("#btnStepBack").disabled = (procIndex === 0);
-      $("#btnStepNext").textContent = (procIndex >= PROCEDURE.length-1) ? "Finish" : "Next";
-      $("#modalSub").textContent = `Step ${procIndex+1} of ${PROCEDURE.length}`;
-    }
-    function procNext(){
-      procDone[procIndex] = true;
-
-      if(procIndex === 0){
-        S.convA_on = false; S.convB_on = false;
-        log("Procedure: Conveyors stopped.", "warn");
-      }
-      if(procIndex === 1){
-        S.vac_on = true;
-        log("Procedure: Vacuum forced ON.", "good");
-      }
-      if(procIndex === 2){
-        S.shred_on = true;
-        S.shred_dir = "rev";
-        log("Procedure: Shredder reverse jog.", "warn", "Stops automatically (demo).");
-        setTimeout(()=>{
-          S.shred_on = false;
-          S.shred_dir = "fwd";
-          S.clogRisk = clamp(S.clogRisk - 30, 0, 100);
-          log("Procedure: Jog complete. Clog risk reduced.", "good");
-          render();
-        }, 900);
-      }
-      if(procIndex === 4){
-        S.convA_on = true; S.convB_on = true;
-        S.convA_speed = Math.max(S.convA_speed, 35);
-        S.convB_speed = Math.max(S.convB_speed, 35);
-        log("Procedure: Conveyors resumed at reduced rate.", "good");
-      }
-
-      if(procIndex >= PROCEDURE.length-1){
-        closeModal();
-        log("Unclog procedure completed.", "good");
-        render();
-        return;
-      }
-      procIndex++;
-      renderProcedure();
-      render();
-    }
-    function procBack(){ if(procIndex > 0) procIndex--; renderProcedure(); }
 
     function on(id, evt, fn){
       const el = document.getElementById(id);
@@ -1997,88 +1754,15 @@
     function safeToggleOnQ(q, cls, on){ const el = document.querySelector(q); if(el) el.classList.toggle(cls, on); }
 
     function bind(){
-      $$(".switch").forEach(sw=>{
-        const key = sw.dataset.key;
-        const click = () => {
-          if(S.estop){ log("E-STOP active: controls locked.", "bad"); return; }
-
-          if(S.dryerIoLive && (key === "screw_on" || key === "heater_on")){
-            log("Dryer run control is live. Use Toggle On/Off instead.", "warn");
-            return;
-          }
-
-          toggleKey(key);
-          log(`${prettyKey(key)} → ${S[key] ? "ON" : "OFF"}`, S[key] ? "good" : "info");
-        };
-        sw.addEventListener("click", click);
-        sw.addEventListener("keydown", (e)=>{
-          if(e.key==="Enter" || e.key===" "){ e.preventDefault(); click(); }
-        });
-      });
-
-      $$('input[type="range"][data-key]').forEach(r=>{
-        const key = r.dataset.key;
-        r.addEventListener("input", ()=>{
-          if(S.dryerIoLive && key === "heater_set"){
-            return;
-          }
-          S[key] = +r.value;
-          render();
-        });
-        r.addEventListener("change", ()=>{
-          if(S.dryerIoLive && key === "heater_set"){
-            return;
-          }
-          log(`${prettyKey(key)} set to ${r.value}${key.includes("speed")||key==="noise" ? "%" : ""}`, "info");
-        });
-      });
-
-      $$('select[data-key]').forEach(sel=>{
-        const key = sel.dataset.key;
-        sel.addEventListener("change", ()=>{
-          if(S.estop){ log("E-STOP active: controls locked.", "bad"); sel.value = S[key]; return; }
-          S[key] = sel.value;
-          render();
-          log(`${prettyKey(key)} → ${sel.value==="fwd" ? "Forward" : "Reverse"}`, "info");
-        });
-      });
-
-      on("btnBalance", "click", ()=>{
-        const avg = Math.round((S.convA_speed + S.convB_speed)/2);
-        S.convA_speed = avg; S.convB_speed = avg;
-        log(`Conveyor speeds normalized to ${avg}%.`, "good");
-        render();
-      });
-
-      on("btnPurge", "click", ()=>{
-        if(S.estop){ log("E-STOP active: controls locked.", "bad"); return; }
-        S.shred_on = true; S.shred_dir = "rev";
-        log("Clear Jam: reverse purge started (demo).", "warn");
-        setTimeout(()=>{
-          S.shred_on = false; S.shred_dir = "fwd";
-          S.clogRisk = clamp(S.clogRisk - 18, 0, 100);
-          log("Clear Jam: completed.", "good");
-          render();
-        }, 750);
-        render();
-      });
-
-      on("btnUnclog",    "click", openModal);
-      on("btnCloseModal","click", closeModal);
-      on("modal",        "click", (e)=>{ if(e.target.id==="modal") closeModal(); });
-      on("btnStepNext",  "click", procNext);
-      on("btnStepBack",  "click", procBack);
-
       on("btnClearLog", "click", ()=>{
         $("#log").textContent = "";
         toast("Log cleared.", "info", "Event log reset by operator.");
       });
 
-      on("btnSim", "click", ()=>{
-        S.sim = !S.sim;
-        log(`Simulation ${S.sim ? "ENABLED" : "PAUSED"}.`, "info");
-        render();
-      });
+      // Automation — Size Reduction
+      on("btnSrStart",  "click", srStart);
+      on("btnSrStop",   "click", srStop);
+      on("btnSrStatus", "click", ()=>srRefreshStatus(false));
 
       on("btnDryerMode", "click", async ()=>{
         S.dryerIoLive = !S.dryerIoLive;
@@ -2086,7 +1770,7 @@
           log("Dryer IO switched to LIVE mode.", "warn", "Dashboard will poll local Modbus API.");
           await dryerConnect();
         }else{
-          log("Dryer IO switched to SIM mode.", "info");
+          log("Dryer IO switched to OFFLINE.", "info");
           await dryerDisconnect();
         }
         render();
@@ -2176,36 +1860,21 @@
       on("btnEStop", "click", async ()=>{
         S.estop = !S.estop;
         if(S.estop){
-          applyRules();
-          log("E-STOP engaged. Motion/heater disabled; door closing.", "bad");
+          log("E-STOP engaged. Sending ESTOP to all subsystems.", "bad");
           // Send ESTOP to backend (covers Arduino + dryer)
           try{ await fetch("/api/estop", { method: "POST" }); }catch(_){}
+          await arduinoRefreshStatus(true);
         }else{
-          log("E-STOP released. Controls re-enabled.", "warn", "Verify conditions before restart.");
+          log("E-STOP released. Verify conditions before restart.", "warn");
         }
         render();
       });
     }
 
-    function prettyKey(k){
-      return ({
-        convA_on: "Conveyor A",
-        convB_on: "Conveyor B",
-        convA_speed: "Conveyor A speed",
-        convB_speed: "Conveyor B speed",
-        shred_on: "Shredder",
-        shred_dir: "Shredder direction",
-        screw_on: "Dryer screw",
-        heater_on: "Dryer heater",
-        heater_set: "Heater setpoint",
-        vac_on: "Vacuum",
-        noise: "Sensor noise"
-      }[k] || k);
-    }
-
     let last = performance.now();
     let dryerPollTimer = 0;
     let arduinoPollTimer = 0;
+    let srPollTimer = 0;
 
     function loop(now){
       const dt = Math.min(0.05, (now-last)/1000);
@@ -2214,10 +1883,9 @@
       S.uptimeSec += dt;
       dryerPollTimer += dt;
       arduinoPollTimer += dt;
+      srPollTimer += dt;
 
       tickConnection(dt);
-      tickProcess(dt);
-      applyRules();
 
       if(S.dryerIoLive && dryerPollTimer >= 1.0){
         dryerPollTimer = 0;
@@ -2232,6 +1900,12 @@
         pollArduino();
       }
 
+      // Size Reduction progress heartbeat (slower than the status poll).
+      if(srPollTimer >= 2.0){
+        srPollTimer = 0;
+        pollSr();
+      }
+
       render();
       requestAnimationFrame(loop);
     }
@@ -2239,22 +1913,11 @@
     function init(){
       $("#log").textContent = "";
       log("Console initialized.", "good");
-      log("Dryer card supports SIM and LIVE Modbus API mode.", "info");
+      log("Dryer card: switch to LIVE to poll the local Modbus API.", "info");
       log("Arduino: connect via the Arduino panel (/dev/ttyACM0 default on the Pi).", "info");
 
       S.connected = false;
-      S.convA_speed = 45;
-      S.convB_speed = 38;
       S.heater_set = 60;
-      S.dryer_temp = 24;
-      S.door_pos = 0;
-      S.door_target = 0;
-
-      const _set = (sel, val) => { const el = document.querySelector(sel); if(el) el.value = val; };
-      _set('input[data-key="convA_speed"]', S.convA_speed);
-      _set('input[data-key="convB_speed"]', S.convB_speed);
-      _set('input[data-key="noise"]',       S.noise);
-      _set('select[data-key="shred_dir"]',  S.shred_dir);
 
       bind();
       render();

@@ -58,8 +58,13 @@
  *   STATUS                 Print all subsystem states + one INA219 snapshot
  *   ESTOP                  Stop motor, close gate, halt conveyor immediately
  *
- * INA219 readings are also streamed automatically every 500 ms:
+ * INA219 energy telemetry streams only when enabled (OFF by default):
+ *   ENERGY_ON / ENERGY_OFF          toggle the 500 ms [ENERGY] stream
  *   [ENERGY] pwm=150 dir=FWD V=12.34 I=1.234 P=15.23
+ *
+ * Raw hall-effect RPM readings stream when enabled (ON by default):
+ *   RPM_DEBUG_ON / RPM_DEBUG_OFF    toggle the [RPM_RAW] stream
+ *   [RPM_RAW] period_us=98765 rpm_raw=486 rpm_filt=490
  *
  * -- Pin map (Mega 2560) ------------------------------------------------------
  *
@@ -282,14 +287,16 @@ bool inaOk     = false;
 
 String cmdBuffer;
 unsigned long lastEnergyPrint = 0;
+bool energyStreamEnabled = false;   // auto 500 ms [ENERGY] telemetry (ENERGY_ON/OFF)
 
 // Mixer screw RPM (hall effect). The volatile fields are written by the ISR
 // only and read via a brief noInterrupts() snapshot. mixerRpm is the filtered
-// value the rest of the firmware reports.
+// value the rest of the firmware reports; mixerRawDebug streams [RPM_RAW].
 volatile unsigned long mixerLastEdgeUs = 0;   // micros() of last accepted pulse
 volatile unsigned long mixerPeriodUs   = 0;   // last accepted inter-pulse interval
 volatile bool          mixerNewPeriod  = false;
 float                  mixerRpm        = 0.0;
+bool                   mixerRawDebug   = true;   // stream raw readings (RPM_DEBUG_ON/OFF)
 
 // Trash conveyor state machine.
 enum TCState {
@@ -456,6 +463,17 @@ void mixerUpdateRpm() {
     mixerRpm = (mixerRpm <= 0.0f)
                  ? rpmRaw
                  : mixerRpm + MIXER_RPM_ALPHA * (rpmRaw - mixerRpm);
+
+    // Stream the raw + filtered reading for tuning. Skipped while the conveyor
+    // stepper is moving so the print never blocks the step-pulse train.
+    if (mixerRawDebug && !TC_stepper.isRunning()) {
+      Serial.print(F("[RPM_RAW] period_us="));
+      Serial.print(periodUs);
+      Serial.print(F(" rpm_raw="));
+      Serial.print(rpmRaw, 0);
+      Serial.print(F(" rpm_filt="));
+      Serial.println(mixerRpm, 0);
+    }
   }
 }
 
@@ -1583,6 +1601,22 @@ void handleCommand(const String& cmd) {
   } else if (cmd == "MIXER_RPM") {
     mixerRpmStatus();
 
+  } else if (cmd == "RPM_DEBUG_ON") {
+    mixerRawDebug = true;
+    Serial.println(F("[RPM] raw debug ON"));
+
+  } else if (cmd == "RPM_DEBUG_OFF") {
+    mixerRawDebug = false;
+    Serial.println(F("[RPM] raw debug OFF"));
+
+  } else if (cmd == "ENERGY_ON") {
+    energyStreamEnabled = true;
+    Serial.println(F("[ENERGY] stream ON"));
+
+  } else if (cmd == "ENERGY_OFF") {
+    energyStreamEnabled = false;
+    Serial.println(F("[ENERGY] stream OFF"));
+
   } else if (cmd == "MOTOR_TEST") {
     motorTest();
 
@@ -1851,15 +1885,15 @@ void loop() {
   // Recompute mixer screw RPM from the hall-effect pulse count (non-blocking)
   mixerUpdateRpm();
 
-  // Stream energy readings automatically every 500 ms — but NEVER while the
-  // conveyor stepper is actively moving. The INA219 reads are blocking I2C
-  // transactions (a few ms each, up to the 3 ms Wire timeout under motor EMI,
-  // times four per print). Any gap between AccelStepper.run() calls starves the
-  // step-pulse train and makes the motion visibly jittery. Pausing the reads
-  // during moves keeps the step timing smooth; they resume the instant the
-  // stepper is parked (including during shredding / mixing dwell).
+  // Stream energy readings automatically every 500 ms — but only when the
+  // ENERGY stream is enabled (ENERGY_ON) and NEVER while the conveyor stepper
+  // is actively moving. The INA219 reads are blocking I2C transactions (a few
+  // ms each, up to the 3 ms Wire timeout under motor EMI, times four per
+  // print). Any gap between AccelStepper.run() calls starves the step-pulse
+  // train and makes the motion visibly jittery. Pausing the reads during moves
+  // keeps the step timing smooth; they resume the instant the stepper is parked.
   unsigned long now = millis();
-  if (!TC_stepper.isRunning() &&
+  if (energyStreamEnabled && !TC_stepper.isRunning() &&
       now - lastEnergyPrint >= ENERGY_PRINT_INTERVAL_MS) {
     lastEnergyPrint = now;
     printEnergy();

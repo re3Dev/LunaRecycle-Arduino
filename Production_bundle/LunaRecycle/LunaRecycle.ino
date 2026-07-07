@@ -161,9 +161,11 @@ const unsigned long ENERGY_PRINT_INTERVAL_MS = 500;
 // (contact / slow-edge bounce that would otherwise double the count), an EMA
 // filter steadies the readout, and a stall timeout zeroes it when stopped.
 const int           MIXER_PULSES_PER_REV   = 1;          // magnets per revolution [tune]
-const unsigned long MIXER_MIN_PULSE_US     = 3000UL;     // ignore edges <3 ms apart (caps ~20000 RPM)
+const unsigned long MIXER_MIN_PULSE_US     = 20000UL;    // ignore edges <20 ms apart - kills spurious double-edges (caps ~3000 RPM)
 const unsigned long MIXER_STALL_TIMEOUT_US = 2000000UL;  // no pulse for 2 s -> RPM 0 (min ~30 RPM)
 const float         MIXER_RPM_ALPHA        = 0.30f;      // EMA weight 0..1 (lower = smoother)
+const float         MIXER_RPM_SPIKE_RATIO  = 2.5f;       // backup gate: drop raw > 2.5x the filtered value
+const float         MIXER_RPM_MIN_VALID    = 60.0f;      // only apply the spike gate once a real speed is established
 
 // ── Trash conveyor tunables ────────────────────────────────────────────────
 // Picker servo angles (deg) for a 270-degree servo driven by pulse width.
@@ -460,9 +462,18 @@ void mixerUpdateRpm() {
   // Fold a fresh reading into the EMA only when a new pulse period arrived.
   if (hasNew) {
     float rpmRaw = 60000000.0f / ((float)periodUs * (float)MIXER_PULSES_PER_REV);
-    mixerRpm = (mixerRpm <= 0.0f)
-                 ? rpmRaw
-                 : mixerRpm + MIXER_RPM_ALPHA * (rpmRaw - mixerRpm);
+
+    // Backup outlier gate: once a real speed is established, a raw sample far
+    // above the running average is almost always a spurious hall double-edge
+    // (a physical screw can't jump several-fold in one pulse). Drop it so it
+    // never spikes the filter.
+    bool rejected = (mixerRpm > MIXER_RPM_MIN_VALID) &&
+                    (rpmRaw > mixerRpm * MIXER_RPM_SPIKE_RATIO);
+    if (!rejected) {
+      mixerRpm = (mixerRpm <= 0.0f)
+                   ? rpmRaw
+                   : mixerRpm + MIXER_RPM_ALPHA * (rpmRaw - mixerRpm);
+    }
 
     // Stream the raw + filtered reading for tuning. Skipped while the conveyor
     // stepper is moving so the print never blocks the step-pulse train.
@@ -472,7 +483,9 @@ void mixerUpdateRpm() {
       Serial.print(F(" rpm_raw="));
       Serial.print(rpmRaw, 0);
       Serial.print(F(" rpm_filt="));
-      Serial.println(mixerRpm, 0);
+      Serial.print(mixerRpm, 0);
+      if (rejected) Serial.print(F(" REJECTED"));
+      Serial.println();
     }
   }
 }

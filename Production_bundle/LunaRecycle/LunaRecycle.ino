@@ -1410,6 +1410,21 @@ void handleBlastGateCommand(const String& cmd) {
 // ============================================================================
 
 void printAllStatus() {
+  // While the conveyor stepper is moving, keep the reply tiny (<64 bytes) so
+  // it fits entirely in the UART TX ring buffer and Serial.print returns
+  // immediately instead of blocking. A full status is ~200 bytes; at 9600 baud
+  // the overflow stalls the loop for ~150 ms, starving AccelStepper.run() and
+  // making homing / moves visibly stutter. Live position is preserved; the
+  // remaining fields resume the moment the stepper parks.
+  if (TC_stepper.isRunning()) {
+    Serial.print(F("[STATUS] tc_state="));
+    Serial.print(tcStateName());
+    Serial.print(F(" tc_pos_mm="));
+    Serial.println(tcStepsToMm(TC_stepper.currentPosition()), 1);
+    Serial.println(F("[ENERGY]"));   // terminal tag so the host reply completes
+    return;
+  }
+
   Serial.print(F("[STATUS] gate="));
   Serial.print(gateOpen ? F("OPEN") : F("CLOSED"));
   Serial.print(F(" motor_pwm="));

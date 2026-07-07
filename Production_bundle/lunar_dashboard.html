@@ -1333,18 +1333,22 @@
         S.doorA_max  = d.door_A_max  !== undefined ? d.door_A_max  : "—";
         S.doorB_min  = d.door_B_min  !== undefined ? d.door_B_min  : "—";
         S.doorB_max  = d.door_B_max  !== undefined ? d.door_B_max  : "—";
-        S.gateState  = d.gate        || "—";
-        S.tcState    = d.tc_state    || "—";
-        S.tcPosMm    = d.tc_pos_mm   !== undefined ? d.tc_pos_mm : "—";
-        S.tcBag      = d.tc_bag      || "—";
-        S.tcPump     = d.tc_pump     || "—";
-        S.shredder   = d.shredder    || "—";
-        S.shredderDir = d.shredder_dir || "—";
-        S.agitatorPct = d.agitator_pct !== undefined ? d.agitator_pct : "—";
-        S.agitatorDir = d.agitator_dir || "—";
-        S.vacuumPct  = d.vacuum_pct  !== undefined ? d.vacuum_pct : "—";
-        S.bgLeft     = d.bg_left     !== undefined ? d.bg_left  : "—";
-        S.bgRight    = d.bg_right    !== undefined ? d.bg_right : "—";
+        // Only overwrite when the key is present. During a conveyor move the
+        // firmware sends a compact status (tc_state + tc_pos_mm only) to avoid
+        // blocking the stepper, so the other fields are absent — keep their
+        // last values instead of blanking the chips to "—".
+        if(d.gate         !== undefined) S.gateState   = d.gate;
+        if(d.tc_state     !== undefined) S.tcState     = d.tc_state;
+        if(d.tc_pos_mm    !== undefined) S.tcPosMm     = d.tc_pos_mm;
+        if(d.tc_bag       !== undefined) S.tcBag       = d.tc_bag;
+        if(d.tc_pump      !== undefined) S.tcPump      = d.tc_pump;
+        if(d.shredder     !== undefined) S.shredder    = d.shredder;
+        if(d.shredder_dir !== undefined) S.shredderDir = d.shredder_dir;
+        if(d.agitator_pct !== undefined) S.agitatorPct = d.agitator_pct;
+        if(d.agitator_dir !== undefined) S.agitatorDir = d.agitator_dir;
+        if(d.vacuum_pct   !== undefined) S.vacuumPct   = d.vacuum_pct;
+        if(d.bg_left      !== undefined) S.bgLeft      = d.bg_left;
+        if(d.bg_right     !== undefined) S.bgRight     = d.bg_right;
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");

@@ -1009,6 +1009,7 @@ FEED_METER_ON_SECONDS     = int(os.environ.get("LUNA_FEED_METER_ON_SEC", "3"))
 FEED_METER_PERIOD_SECONDS = int(os.environ.get("LUNA_FEED_METER_PERIOD_SEC", "20"))
 FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", "40"))
 FEED_AGITATOR_PCT         = int(os.environ.get("LUNA_FEED_AGITATOR_PCT", "50"))
+FEED_AGITATOR_DIR         = os.environ.get("LUNA_FEED_AGITATOR_DIR", "REV").upper()
 
 
 class ProcessOrchestrator:
@@ -1229,7 +1230,7 @@ class FeedController:
                 self.agitator_pct = agitator_pct
                 self.message = "Priming crammer (vacuum + agitator)."
             self._arduino(f"VACUUM_SET {vacuum_pct}")
-            self._arduino(f"AGITATOR_SET {agitator_pct} FWD")
+            self._arduino(f"AGITATOR_SET {agitator_pct} {FEED_AGITATOR_DIR}")
             with self._lock:
                 self.agitator_on = True
             end = time.monotonic() + prime_sec
@@ -1250,7 +1251,7 @@ class FeedController:
                 with self._lock:
                     on = self.agitator_on
                 if want and not on:
-                    self._arduino(f"AGITATOR_SET {agitator_pct} FWD")
+                    self._arduino(f"AGITATOR_SET {agitator_pct} {FEED_AGITATOR_DIR}")
                     with self._lock:
                         self.agitator_on = True
                 elif not want and on:

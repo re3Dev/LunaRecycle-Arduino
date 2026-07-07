@@ -150,10 +150,15 @@ const int GATE_CLOSE_DEG = 0;
 
 const unsigned long ENERGY_PRINT_INTERVAL_MS = 500;
 
-// Mixer screw RPM: how often to recompute the rate, and the number of hall
-// pulses per full revolution (magnets on the shaft).
-const unsigned long RPM_CALC_INTERVAL_MS = 500;
-const int           MIXER_PULSES_PER_REV = 1;    // magnets per revolution [tune]
+// Mixer screw RPM. RPM is derived from the time between consecutive hall
+// pulses (period method) - far finer than counting pulses per fixed window at
+// low pulse rates. The ISR rejects edges closer than MIXER_MIN_PULSE_US apart
+// (contact / slow-edge bounce that would otherwise double the count), an EMA
+// filter steadies the readout, and a stall timeout zeroes it when stopped.
+const int           MIXER_PULSES_PER_REV   = 1;          // magnets per revolution [tune]
+const unsigned long MIXER_MIN_PULSE_US     = 3000UL;     // ignore edges <3 ms apart (caps ~20000 RPM)
+const unsigned long MIXER_STALL_TIMEOUT_US = 2000000UL;  // no pulse for 2 s -> RPM 0 (min ~30 RPM)
+const float         MIXER_RPM_ALPHA        = 0.30f;      // EMA weight 0..1 (lower = smoother)
 
 // ── Trash conveyor tunables ────────────────────────────────────────────────
 // Picker servo angles (deg) for a 270-degree servo driven by pulse width.
@@ -278,10 +283,13 @@ bool inaOk     = false;
 String cmdBuffer;
 unsigned long lastEnergyPrint = 0;
 
-// Mixer screw RPM (hall effect). pulseCount is written from the ISR only.
-volatile unsigned long mixerPulseCount = 0;
-unsigned long mixerLastCalcMs = 0;
-float         mixerRpm        = 0.0;
+// Mixer screw RPM (hall effect). The volatile fields are written by the ISR
+// only and read via a brief noInterrupts() snapshot. mixerRpm is the filtered
+// value the rest of the firmware reports.
+volatile unsigned long mixerLastEdgeUs = 0;   // micros() of last accepted pulse
+volatile unsigned long mixerPeriodUs   = 0;   // last accepted inter-pulse interval
+volatile bool          mixerNewPeriod  = false;
+float                  mixerRpm        = 0.0;
 
 // Trash conveyor state machine.
 enum TCState {
@@ -419,23 +427,35 @@ void motorStatus() {
 // ============================================================================
 
 void mixerOnPulse() {
-  mixerPulseCount++;
+  unsigned long nowUs = micros();
+  unsigned long dt = nowUs - mixerLastEdgeUs;
+  if (dt < MIXER_MIN_PULSE_US) return;   // glitch / contact bounce - ignore
+  mixerLastEdgeUs = nowUs;
+  mixerPeriodUs   = dt;
+  mixerNewPeriod  = true;
 }
 
 void mixerUpdateRpm() {
-  unsigned long nowMs = millis();
-  if (nowMs - mixerLastCalcMs < RPM_CALC_INTERVAL_MS) return;
-
-  // Snapshot and reset the ISR counter atomically.
+  // Atomically snapshot the ISR-owned values.
   noInterrupts();
-  unsigned long pulses = mixerPulseCount;
-  mixerPulseCount = 0;
+  unsigned long periodUs   = mixerPeriodUs;
+  unsigned long lastEdgeUs = mixerLastEdgeUs;
+  bool          hasNew     = mixerNewPeriod;
+  mixerNewPeriod = false;
   interrupts();
 
-  float elapsedSec = (nowMs - mixerLastCalcMs) / 1000.0f;
-  mixerLastCalcMs = nowMs;
-  if (elapsedSec > 0.0f) {
-    mixerRpm = (pulses / (float)MIXER_PULSES_PER_REV) / elapsedSec * 60.0f;
+  // No pulse for a while -> the screw is stopped.
+  if (periodUs == 0 || (micros() - lastEdgeUs) > MIXER_STALL_TIMEOUT_US) {
+    mixerRpm = 0.0f;
+    return;
+  }
+
+  // Fold a fresh reading into the EMA only when a new pulse period arrived.
+  if (hasNew) {
+    float rpmRaw = 60000000.0f / ((float)periodUs * (float)MIXER_PULSES_PER_REV);
+    mixerRpm = (mixerRpm <= 0.0f)
+                 ? rpmRaw
+                 : mixerRpm + MIXER_RPM_ALPHA * (rpmRaw - mixerRpm);
   }
 }
 
@@ -1763,7 +1783,6 @@ void setup() {
   // Mixer screw RPM - hall-effect sensor on D2 (INT0), FALLING-edge pulses
   pinMode(Mixer_screwRotationSensor, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
-  mixerLastCalcMs = millis();
 
   // INA219
   Wire.begin();

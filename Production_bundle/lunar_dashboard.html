@@ -975,19 +975,33 @@
             <div class="title">
               <div class="sicon" aria-hidden="true">⚙</div>
               <div style="min-width:0">
-                <h2>Automation — Size Reduction</h2>
-                <div class="hint">auto-shred PE + PA bags on a cadence</div>
+                <h2>Process Automation</h2>
+                <div class="hint">size reduction → drying &amp; mixing → print feed</div>
               </div>
             </div>
-            <span class="statechip" id="automationChip">IDLE</span>
+            <span class="statechip" id="procChip">IDLE</span>
           </div>
           <div class="bd">
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
+
+            <!-- Gates driven by the automation -->
+            <div class="split" style="margin-bottom:6px;">
+              <div class="kv">
+                <div class="k">Shredder gate</div><div class="v" id="autoShredGateText">—</div>
+              </div>
+              <div class="kv">
+                <div class="k">Blast gates (lower)</div><div class="v" id="autoBlastGateText">—</div>
+              </div>
+            </div>
+
+            <!-- Step 1 · Size Reduction -->
+            <div style="display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--border); margin-top:12px; padding-top:12px;">
+              <span style="font-size:12px; font-weight:600; letter-spacing:.04em; color:var(--muted2); text-transform:uppercase;">1 · Size Reduction</span>
+              <span class="statechip" id="automationChip">IDLE</span>
+            </div>
+            <div class="row" style="gap:8px; align-items:center; margin:8px 0;">
               <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">PE units (bag&nbsp;1&nbsp;/&nbsp;LEFT)</label>
               <input type="number" id="srPeUnits" min="0" step="1" value="0"
                 style="width:80px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-            </div>
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
               <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">PA units (bag&nbsp;2&nbsp;/&nbsp;RIGHT)</label>
               <input type="number" id="srPaUnits" min="0" step="1" value="0"
                 style="width:80px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
@@ -1017,27 +1031,16 @@
                 <div class="k">Shredded</div><div class="v" id="srShreddedText">—</div>
               </div>
             </div>
-          </div>
-        </section>
 
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">♨</div>
-              <div style="min-width:0">
-                <h2>Automation — Drying &amp; Mixing</h2>
-                <div class="hint">dry + mix on a cadence, then discharge</div>
-              </div>
+            <!-- Step 2 · Drying & Mixing -->
+            <div style="display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--border); margin-top:14px; padding-top:12px;">
+              <span style="font-size:12px; font-weight:600; letter-spacing:.04em; color:var(--muted2); text-transform:uppercase;">2 · Drying &amp; Mixing</span>
+              <span class="statechip" id="dryChip">IDLE</span>
             </div>
-            <span class="statechip" id="dryChip">IDLE</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
+            <div class="row" style="gap:8px; align-items:center; margin:8px 0;">
               <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Duration (min)</label>
               <input type="number" id="dryMinutes" min="1" step="1" value="60"
                 style="width:80px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-            </div>
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
               <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Temp (°C)</label>
               <input type="number" id="dryTempC" min="1" max="250" step="1" value="70"
                 style="width:80px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
@@ -1068,22 +1071,13 @@
               </div>
             </div>
             <div class="hint" id="dryMsgText" style="margin-top:8px;">—</div>
-          </div>
-        </section>
 
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">⏚</div>
-              <div style="min-width:0">
-                <h2>Automation — Feedstock / Print Feed</h2>
-                <div class="hint">prime crammer, then meter material to the printer</div>
-              </div>
+            <!-- Step 3 · Feedstock / Print Feed -->
+            <div style="display:flex; align-items:center; justify-content:space-between; border-top:1px solid var(--border); margin-top:14px; padding-top:12px;">
+              <span style="font-size:12px; font-weight:600; letter-spacing:.04em; color:var(--muted2); text-transform:uppercase;">3 · Feedstock / Print Feed</span>
+              <span class="statechip" id="feedChip">IDLE</span>
             </div>
-            <span class="statechip" id="feedChip">IDLE</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
+            <div class="row" style="gap:8px; align-items:center; margin:8px 0;">
               <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Prime (s)</label>
               <input type="number" id="feedPrimeSec" min="0" step="1" value="10"
                 style="width:64px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
@@ -1496,6 +1490,22 @@
       if(fchip){
         fchip.textContent = S.feedRunning ? String(S.feedPhase).toUpperCase() : "IDLE";
         fchip.className = "statechip" + (S.feedRunning ? " good" : "");
+      }
+
+      // Automation — gates driven by the sequence
+      setText("autoShredGateText", S.gateState || "—");
+      const abg = document.getElementById("autoBlastGateText");
+      if(abg){
+        abg.textContent = (S.bgLeft === "—" && S.bgRight === "—")
+          ? "—" : `L ${S.bgLeft}% · R ${S.bgRight}%`;
+      }
+
+      // Overall process chip: RUNNING if any step is active
+      const procRunning = running || S.dryRunning || S.feedRunning;
+      const pchip = document.getElementById("procChip");
+      if(pchip){
+        pchip.textContent = procRunning ? "RUNNING" : "IDLE";
+        pchip.className = "statechip" + (procRunning ? " good" : "");
       }
     }
 

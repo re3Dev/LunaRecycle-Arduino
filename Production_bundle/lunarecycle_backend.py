@@ -958,6 +958,13 @@ def api_sr_start():
         pa = int(body.get("pa_units", 0))
         if pe < 0 or pa < 0 or (pe + pa) <= 0:
             return jsonify({"ok": False, "error": "pe_units/pa_units must be >= 0 and not both zero"}), 400
+        # Close the lower blast gates first so shredded material collects in the
+        # mixer barrel instead of falling straight through. (Firmware SR_START
+        # opens the shredder gates so shred can drop from the chute.)
+        try:
+            arduino.send(BLASTGATE_CLOSE_CMD)
+        except Exception:
+            pass
         lines = arduino.send(f"SR_START {pe} {pa}")
         return jsonify({"ok": True, "response": lines, "data": _parse_sizered(lines)})
     except Exception as exc:
@@ -1080,6 +1087,7 @@ class ProcessOrchestrator:
     def _run(self, total_seconds: int, temp_c: int):
         try:
             self._arduino("GATE_CLOSE")           # trap dried air in the barrel
+            self._arduino(BLASTGATE_CLOSE_CMD)    # keep material in until discharge
             self._dryer_on(temp_c)
 
             now = time.monotonic()

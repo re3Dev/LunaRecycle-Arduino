@@ -311,6 +311,7 @@ unsigned long          mixerPeriodSum   = 0;
 int                    mixerPeriodCount = 0;
 int                    mixerPeriodHead  = 0;
 bool                   mixerRawDebug   = true;   // stream raw readings (RPM_DEBUG_ON/OFF)
+bool                   mixerIsrActive  = true;   // hall interrupt armed? paused during stepper moves
 
 // Trash conveyor state machine.
 enum TCState {
@@ -457,6 +458,26 @@ void mixerOnPulse() {
 }
 
 void mixerUpdateRpm() {
+  // Pause hall sensing while the conveyor stepper is moving. The vacuum pump and
+  // other motors inject EMI on the D2 sensor lead; each spurious interrupt
+  // preempts AccelStepper's polled step-pulse train and makes that move stutter
+  // (pump-on carry-to-shredder moves stutter; pump-off moves stay smooth). RPM
+  // is not reported during a move, so detach the interrupt while the stepper
+  // runs and re-arm it - with a fresh edge reference - the instant it parks.
+  if (TC_stepper.isRunning()) {
+    if (mixerIsrActive) {
+      detachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor));
+      mixerIsrActive = false;
+    }
+    return;   // hold the last RPM; resume measuring once parked
+  }
+  if (!mixerIsrActive) {
+    mixerLastEdgeUs = micros();   // avoid a huge bogus first period on re-arm
+    mixerNewPeriod  = false;
+    attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
+    mixerIsrActive = true;
+  }
+
   // Atomically snapshot the ISR-owned values.
   noInterrupts();
   unsigned long periodUs   = mixerPeriodUs;

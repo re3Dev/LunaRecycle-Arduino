@@ -1042,8 +1042,12 @@
       dryerIoLive: false,
       dryerApiConnected: false,
       dryerLastPollOk: false,
+      dryerFailCount: 0,
+      dryerPolling: false,
 
       arduinoConnected: false,
+      arduinoFailCount: 0,
+      arduinoPolling: false,
       doorState: "IDLE",
       doorA_min: "—", doorA_max: "—",
       doorB_min: "—", doorB_max: "—",
@@ -1166,16 +1170,29 @@
       render();
     }
 
-    async function apiArduino(path, opts={}){
-      const res = await fetch(`${ARDUINO_BASE}${path}`, {
-        headers: { "Content-Type": "application/json" },
-        ...opts,
-      });
-      const data = await res.json();
-      if(!res.ok || data.ok === false){
-        throw new Error(data.error || `HTTP ${res.status}`);
+    // Single hardened fetch wrapper: aborts on timeout so a stuck request can
+    // never pile up and wedge the dashboard. Throws on HTTP error or {ok:false}.
+    async function fetchJSON(url, opts={}, timeoutMs=8000){
+      const ctrl = new AbortController();
+      const id = setTimeout(()=>ctrl.abort(), timeoutMs);
+      try{
+        const res = await fetch(url, {
+          signal: ctrl.signal,
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+        });
+        const data = await res.json();
+        if(!res.ok || data.ok === false){
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        return data;
+      }finally{
+        clearTimeout(id);
       }
-      return data;
+    }
+
+    async function apiArduino(path, opts={}, timeoutMs=8000){
+      return fetchJSON(`${ARDUINO_BASE}${path}`, opts, timeoutMs);
     }
 
     async function arduinoConnect(){
@@ -1205,9 +1222,10 @@
       renderArduino();
     }
 
-    async function arduinoRefreshStatus(){
+    async function arduinoRefreshStatus(silent=false){
       try{
         const res = await apiArduino("/arduino/status");
+        S.arduinoFailCount = 0;
         S.arduinoConnected = !!res.connected;
         const d = res.data || {};
         S.doorState  = d.door_state  || "IDLE";
@@ -1232,10 +1250,20 @@
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
         }
       }catch(err){
-        S.arduinoConnected = false;
-        log(`Arduino status failed: ${err.message}`, "bad");
+        // Tolerate transient failures: only declare a disconnect after several
+        // consecutive misses so one slow poll can't flap the UI to DISCONNECTED.
+        S.arduinoFailCount = (S.arduinoFailCount || 0) + 1;
+        if(S.arduinoFailCount >= 3){ S.arduinoConnected = false; }
+        if(!silent){ log(`Arduino status failed: ${err.message}`, "bad"); }
       }
       renderArduino();
+    }
+
+    async function pollArduino(){
+      if(S.arduinoPolling) return;   // never let background polls overlap
+      S.arduinoPolling = true;
+      try{ await arduinoRefreshStatus(true); }
+      finally{ S.arduinoPolling = false; }
     }
 
     function renderArduino(){
@@ -1371,7 +1399,8 @@
       try{
         const opts = { method: "POST" };
         if(body){ opts.body = JSON.stringify(body); }
-        const res = await apiArduino(endpoint, opts);
+        // Blast-gate moves block on the Mega for several seconds; allow extra time.
+        const res = await apiArduino(endpoint, opts, 15000);
         const msg = (res.response || []).join(" | ") || label;
         log(`Blast Gate: ${msg}`, "info");
         await arduinoRefreshStatus();
@@ -1442,16 +1471,8 @@
       }catch(err){ log(`Motor status failed: ${err.message}`, "bad"); }
     }
 
-    async function api(path, opts={}){
-      const res = await fetch(`${API_BASE}${path}`, {
-        headers: { "Content-Type": "application/json" },
-        ...opts,
-      });
-      const data = await res.json();
-      if(!res.ok || data.ok === false){
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-      return data;
+    async function api(path, opts={}, timeoutMs=6000){
+      return fetchJSON(`${API_BASE}${path}`, opts, timeoutMs);
     }
 
     async function dryerConnect(){
@@ -1484,10 +1505,13 @@
 
     async function dryerRefresh(silent=false){
       if(!S.dryerIoLive) return;
+      if(silent && S.dryerPolling) return;   // don't stack background polls
+      S.dryerPolling = true;
 
       try{
         const res = await api("/status");
         const d = res.data;
+        S.dryerFailCount = 0;
         S.dryerApiConnected = !!d.connected;
         S.dryerLastPollOk = true;
         S.dryerData = d;
@@ -1506,11 +1530,16 @@
           log("Dryer data refreshed.", "info");
         }
       }catch(err){
+        // Same grace policy as the Arduino: a single missed poll must not flip
+        // the card to DISCONNECTED.
+        S.dryerFailCount = (S.dryerFailCount || 0) + 1;
         S.dryerLastPollOk = false;
-        S.dryerApiConnected = false;
+        if(S.dryerFailCount >= 3){ S.dryerApiConnected = false; }
         if(!silent){
           log(`Dryer refresh failed: ${err.message}`, "bad");
         }
+      }finally{
+        S.dryerPolling = false;
       }
       render();
     }
@@ -1574,28 +1603,12 @@
     }
 
     function tickConnection(dt){
-      if(!S.sim) return;
-
-      if(!S.connected && S.uptimeSec > 1){
-        S.connected = true;
-        S.latencyMs = 18 + Math.random()*35;
-      }
-
-      if(S.connected && Math.random() < 0.002){
-        S.latencyMs = 120 + Math.random()*220;
-      } else {
-        S.latencyMs += (22 + Math.random()*24 - S.latencyMs) * 0.05;
-      }
-
-      if(S.connected && Math.random() < 0.0008){
-        S.connected = false;
-        S.latencyMs = 0;
-      }
-
-      if(!S.connected && Math.random() < 0.06){
-        S.connected = true;
-        S.latencyMs = 18 + Math.random()*40;
-      }
+      // Connection state reflects the REAL backend links now, not a simulation.
+      // (The old random-flap demo code was removed so the UI never shows a
+      // phantom disconnect while the hardware is actually fine.)
+      S.connected = S.arduinoConnected || S.dryerApiConnected;
+      const target = S.connected ? 25 : 0;
+      S.latencyMs += (target - S.latencyMs) * 0.1;
     }
 
     function tickProcess(dt){
@@ -2192,6 +2205,7 @@
 
     let last = performance.now();
     let dryerPollTimer = 0;
+    let arduinoPollTimer = 0;
 
     function loop(now){
       const dt = Math.min(0.05, (now-last)/1000);
@@ -2199,6 +2213,7 @@
 
       S.uptimeSec += dt;
       dryerPollTimer += dt;
+      arduinoPollTimer += dt;
 
       tickConnection(dt);
       tickProcess(dt);
@@ -2207,6 +2222,14 @@
       if(S.dryerIoLive && dryerPollTimer >= 1.0){
         dryerPollTimer = 0;
         dryerRefresh(true);
+      }
+
+      // Continuous, resilient Arduino heartbeat. Polling always runs (even when
+      // currently shown as disconnected) so the UI auto-recovers as soon as the
+      // backend supervisor re-establishes the serial link.
+      if(arduinoPollTimer >= 1.5){
+        arduinoPollTimer = 0;
+        pollArduino();
       }
 
       render();

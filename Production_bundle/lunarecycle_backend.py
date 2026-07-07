@@ -40,6 +40,8 @@ ARDUINO_PORT     = os.environ.get("LUNA_ARDUINO_PORT", "/dev/ttyACM0")
 ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "9600"))
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
 BLASTGATE_TIMEOUT = 12.0  # blast gate moves are blocking and can take seconds
+# How often the background supervisor retries a dropped Arduino connection.
+RECONNECT_INTERVAL = float(os.environ.get("LUNA_RECONNECT_INTERVAL", "3.0"))
 
 DRYER_PORT      = os.environ.get("LUNA_DRYER_PORT", "/dev/ttyUSB0")
 DRYER_BAUDRATE  = int(os.environ.get("LUNA_DRYER_BAUD", "57600"))
@@ -91,12 +93,25 @@ class ArduinoBridge:
         self._lock = threading.Lock()
         self.connected = False
         self._response_lines: list[str] = []
+        # Remember the last-used port so the supervisor can auto-reconnect.
+        self._port = ARDUINO_PORT
+        self._baud = ARDUINO_BAUDRATE
+        # When True the background supervisor keeps trying to (re)connect.
+        self._want_connected = True
+        # Cache of the last good STATUS so the API can answer instantly even
+        # while the serial line is busy with a blocking command (blast gate).
+        self._last_status: dict = {}
+        self._last_status_ts = 0.0
 
     # ── Connection ────────────────────────────────────────────────────────────
 
     def connect(self, port: str = ARDUINO_PORT, baudrate: int = ARDUINO_BAUDRATE) -> bool:
         with self._lock:
+            self._port = port
+            self._baud = baudrate
+            self._want_connected = True
             if self._ser and self._ser.is_open:
+                self.connected = True
                 return True
             try:
                 self._ser = serial.Serial(port, baudrate, timeout=ARDUINO_TIMEOUT)
@@ -104,16 +119,38 @@ class ArduinoBridge:
                 self._ser.reset_input_buffer()
                 self.connected = True
                 return True
-            except serial.SerialException as exc:
+            except (serial.SerialException, OSError) as exc:
+                self._ser = None
                 self.connected = False
                 raise RuntimeError(str(exc)) from exc
 
     def disconnect(self) -> None:
         with self._lock:
+            self._want_connected = False
+            self._reset_serial_locked()
+
+    def _reset_serial_locked(self) -> None:
+        """Close and drop the serial handle. Caller must hold self._lock."""
+        try:
             if self._ser and self._ser.is_open:
                 self._ser.close()
-            self._ser = None
-            self.connected = False
+        except Exception:
+            pass
+        self._ser = None
+        self.connected = False
+
+    def start_supervisor(self) -> None:
+        threading.Thread(target=self._supervise, daemon=True).start()
+
+    def _supervise(self) -> None:
+        while True:
+            if self._want_connected and not self.connected:
+                try:
+                    self.connect(self._port, self._baud)
+                    print(f"[arduino] connected on {self._port}")
+                except Exception:
+                    pass   # keep retrying quietly
+            time.sleep(RECONNECT_INTERVAL)
 
     # ── Low-level I/O ─────────────────────────────────────────────────────────
 
@@ -175,7 +212,13 @@ class ArduinoBridge:
 
     def send(self, cmd: str) -> list[str]:
         with self._lock:
-            return self._send_command(cmd)
+            try:
+                return self._send_command(cmd)
+            except (serial.SerialException, OSError) as exc:
+                # Drop the handle so the supervisor reconnects rather than
+                # leaving a half-dead port that fails every future command.
+                self._reset_serial_locked()
+                raise RuntimeError(f"Serial I/O error: {exc}") from exc
 
     # ── Status parsing ────────────────────────────────────────────────────────
 
@@ -210,15 +253,48 @@ class ArduinoBridge:
                     result[k] = v
         return result
 
-    def get_status(self) -> dict:
-        lines = self.send("STATUS")
+    def _lines_to_status(self, lines: list[str]) -> dict:
         result: dict = {}
         for line in lines:
             if line.startswith("[STATUS]"):
                 result.update(self._parse_status_line(line))
             elif line.startswith("[ENERGY]"):
                 result["energy"] = self._parse_energy_line(line)
-        return result if result else {"raw": lines}
+        return result
+
+    def get_status(self) -> dict:
+        lines = self.send("STATUS")
+        result = self._lines_to_status(lines)
+        if result:
+            self._last_status = result
+            self._last_status_ts = time.monotonic()
+            return result
+        return {"raw": lines}
+
+    def status_for_api(self) -> dict:
+        """Return status for the HTTP layer without ever blocking for long.
+
+        If the serial line is busy (e.g. a multi-second blast-gate move) or the
+        Arduino is momentarily down, serve the last cached STATUS with
+        cached=True instead of erroring, so the dashboard stays 'connected'.
+        """
+        if not self.connected:
+            return {"connected": False, "data": dict(self._last_status), "cached": True}
+        if not self._lock.acquire(timeout=0.3):
+            return {"connected": True, "data": dict(self._last_status), "cached": True}
+        try:
+            result = self._lines_to_status(self._send_command("STATUS"))
+            if result:
+                self._last_status = result
+                self._last_status_ts = time.monotonic()
+            return {"connected": True, "data": result or dict(self._last_status),
+                    "cached": not bool(result)}
+        except (serial.SerialException, OSError) as exc:
+            self._reset_serial_locked()
+            return {"connected": False, "data": dict(self._last_status),
+                    "cached": True, "error": str(exc)}
+        finally:
+            self._lock.release()
 
 
 arduino = ArduinoBridge()
@@ -508,11 +584,16 @@ def api_arduino_disconnect():
 
 @app.route("/api/arduino/status", methods=["GET"])
 def api_arduino_status():
-    try:
-        data = arduino.get_status()
-        return jsonify({"ok": True, "connected": arduino.connected, "data": data})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+    # Always answers ok:True (with a connected flag) so a transient serial
+    # hiccup or an in-progress blast-gate move never trips the dashboard's
+    # error handling — the connected flag alone drives the UI state.
+    snap = arduino.status_for_api()
+    return jsonify({
+        "ok": True,
+        "connected": snap["connected"],
+        "cached": snap.get("cached", False),
+        "data": snap.get("data", {}),
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -873,6 +954,14 @@ def api_energy_snapshot():
 # ─────────────────────────────────────────────────────────────────────────────
 #  Routes — System
 # ─────────────────────────────────────────────────────────────────────────────
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """Fast, serial-free health probe for the dashboard connection watchdog."""
+    return jsonify({
+        "ok": True,
+        "arduino_connected": arduino.connected,
+        "dryer_connected": dryer.connected,
+    })
 
 @app.route("/api/estop", methods=["POST"])
 def api_estop():
@@ -907,4 +996,15 @@ if __name__ == "__main__":
     print(f"LunaRecycle backend starting on http://{SERVER_HOST}:{SERVER_PORT}")
     print(f"  Arduino: {ARDUINO_PORT} @ {ARDUINO_BAUDRATE} baud  (Gate servos, DC motor, INA219)")
     print(f"  Dryer  : {DRYER_PORT}   @ {DRYER_BAUDRATE} baud, ID {DRYER_DEVICE_ID}")
+
+    # Best-effort auto-connect at boot; the supervisor keeps retrying if the
+    # Arduino is unplugged or resets, so the dashboard never needs a manual
+    # reconnect for a transient USB glitch.
+    try:
+        arduino.connect(ARDUINO_PORT, ARDUINO_BAUDRATE)
+        print(f"  Arduino connected on {ARDUINO_PORT}")
+    except Exception as exc:
+        print(f"  Arduino not connected yet ({exc}); supervisor will retry")
+    arduino.start_supervisor()
+
     app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, threaded=True)

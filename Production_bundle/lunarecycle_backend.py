@@ -37,7 +37,7 @@ from pymodbus.client import ModbusSerialClient
 # On Windows override with e.g. LUNA_ARDUINO_PORT=COM4.
 
 ARDUINO_PORT     = os.environ.get("LUNA_ARDUINO_PORT", "/dev/ttyACM0")
-ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "9600"))
+ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "115200"))
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
 BLASTGATE_TIMEOUT = 12.0  # blast gate moves are blocking and can take seconds
 # How often the background supervisor retries a dropped Arduino connection.

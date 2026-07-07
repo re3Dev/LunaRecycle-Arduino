@@ -10,7 +10,7 @@
  *   - Energy Monitor  : INA219 current / voltage / power sensor
  *   - Trash Conveyor  : stepper pick-and-place (bag stack -> shredder)
  *
- * -- Serial protocol (9600 baud, newline-terminated) -------------------------
+ * -- Serial protocol (115200 baud, newline-terminated) -----------------------
  *
  *   GATE_OPEN              Move both servos to open position (55 deg)
  *   GATE_CLOSE             Move both servos to closed position (0 deg)
@@ -229,7 +229,12 @@ const int  TC_bagSensorEmptyConfirmCount = 4;
 const unsigned long TC_bagSensorConfirmDelayMs = 20;
 
 // Stepper motion: speed in mm/s, accel in mm/s^2.
-const float TC_maxSpeed  = 600.0;
+// AccelStepper calls step() at most once per run(), and run() is called once
+// per loop. On a 16 MHz AVR that caps reliable stepping at ~4000 steps/s;
+// past that the motor stutters, stalls and silently drops steps (open-loop,
+// so the lost count shows up later as the carriage crashing into the home
+// stop). At 14.8 steps/mm, 250 mm/s = ~3700 steps/s keeps a safe margin.
+const float TC_maxSpeed  = 250.0;
 const float TC_accel     = 700.0;
 const float TC_homeSpeed = 50.0;
 const int   TC_minPulseWidthUs = 2;
@@ -1537,10 +1542,10 @@ void handleBlastGateCommand(const String& cmd) {
 void printAllStatus() {
   // While the conveyor stepper is moving, keep the reply tiny (<64 bytes) so
   // it fits entirely in the UART TX ring buffer and Serial.print returns
-  // immediately instead of blocking. A full status is ~200 bytes; at 9600 baud
-  // the overflow stalls the loop for ~150 ms, starving AccelStepper.run() and
-  // making homing / moves visibly stutter. Live position is preserved; the
-  // remaining fields resume the moment the stepper parks.
+  // immediately instead of blocking. A full status is ~200 bytes; even at
+  // 115200 baud the overflow stalls the loop long enough to starve
+  // AccelStepper.run() and make homing / moves stutter. Live position is
+  // preserved; the remaining fields resume the moment the stepper parks.
   if (TC_stepper.isRunning()) {
     Serial.print(F("[STATUS] tc_state="));
     Serial.print(tcStateName());
@@ -1834,7 +1839,8 @@ void readSerial() {
 // ============================================================================
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);   // fast link: a status/[TC] print drains ~12x quicker,
+                          // so it no longer stalls AccelStepper.run() mid-move
 
   // Gate servos - start closed
   Mixer_shredderGateLeftServoMotor.attach(Mixer_shredderGateLeftServoMotor_pin);

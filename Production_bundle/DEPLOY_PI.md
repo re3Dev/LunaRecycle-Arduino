@@ -60,7 +60,7 @@ sudo systemctl restart lunarecycle-backend
 | Variable             | Default          | Purpose                              |
 | -------------------- | ---------------- | ------------------------------------ |
 | `LUNA_ARDUINO_PORT`  | `/dev/ttyACM0`   | Arduino serial port                  |
-| `LUNA_ARDUINO_BAUD`  | `9600`           | Arduino baud rate                    |
+| `LUNA_ARDUINO_BAUD`  | `115200`         | Arduino baud rate                    |
 | `LUNA_DRYER_PORT`    | `/dev/ttyUSB0`   | Dryer RS485 adapter port             |
 | `LUNA_DRYER_BAUD`    | `57600`          | Dryer Modbus baud rate               |
 | `LUNA_DRYER_ID`      | `1`              | Dryer Modbus device ID               |

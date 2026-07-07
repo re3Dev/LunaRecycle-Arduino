@@ -1751,9 +1751,16 @@ void loop() {
   // Drive the trash-conveyor stepper / pick-place state machine
   tcUpdate();
 
-  // Stream energy readings automatically every 500 ms
+  // Stream energy readings automatically every 500 ms — but NEVER while the
+  // conveyor stepper is actively moving. The INA219 reads are blocking I2C
+  // transactions (a few ms each, up to the 3 ms Wire timeout under motor EMI,
+  // times four per print). Any gap between AccelStepper.run() calls starves the
+  // step-pulse train and makes the motion visibly jittery. Pausing the reads
+  // during moves keeps the step timing smooth; they resume the instant the
+  // stepper is parked (including during shredding / mixing dwell).
   unsigned long now = millis();
-  if (now - lastEnergyPrint >= ENERGY_PRINT_INTERVAL_MS) {
+  if (!TC_stepper.isRunning() &&
+      now - lastEnergyPrint >= ENERGY_PRINT_INTERVAL_MS) {
     lastEnergyPrint = now;
     printEnergy();
   }

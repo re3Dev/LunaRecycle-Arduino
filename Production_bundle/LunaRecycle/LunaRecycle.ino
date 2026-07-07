@@ -238,6 +238,13 @@ const float TC_maxSpeed  = 250.0;
 const float TC_accel     = 700.0;
 const float TC_homeSpeed = 50.0;
 const int   TC_minPulseWidthUs = 2;
+// The vacuum pump (brushed DC motor) loads the shared supply while it holds a
+// bag, sagging the stepper driver's rail and cutting torque headroom - the
+// carry-to-shredder move then stutters / skips while pump-off moves stay
+// smooth. Cap the speed during pump-on moves so the reduced torque can still
+// follow the step train. Raise toward TC_maxSpeed once the power issue is
+// fixed in hardware (separate pump supply / bulk cap on VMOT).
+const float TC_maxSpeedPumpOn = 120.0;
 
 // 3GT belt with 18T pulley.
 const float TC_beltPitchMm = 3.0;
@@ -692,6 +699,9 @@ void tcReturnServoToUp() {
 
 void tcMoveTo(float targetMm, TCState nextState) {
   TC_stepper.enableOutputs();
+  // Slow down while the vacuum pump is running: it sags the shared rail and
+  // steals torque headroom, so a full-speed move would skip/stutter.
+  TC_stepper.setMaxSpeed(tcMmToSteps(tcPumpRunning ? TC_maxSpeedPumpOn : TC_maxSpeed));
   TC_stepper.moveTo(tcMmToSteps(targetMm));
   tcState = nextState;
 }

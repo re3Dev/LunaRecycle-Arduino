@@ -64,7 +64,7 @@
  *
  * Raw hall-effect RPM readings stream when enabled (ON by default):
  *   RPM_DEBUG_ON / RPM_DEBUG_OFF    toggle the [RPM_RAW] stream
- *   [RPM_RAW] period_us=98765 rpm_raw=486 rpm_filt=490
+ *   [RPM_RAW] period_us=98765 rpm_raw=486 rpm_avg=490
  *
  * -- Pin map (Mega 2560) ------------------------------------------------------
  *
@@ -158,13 +158,14 @@ const unsigned long ENERGY_PRINT_INTERVAL_MS = 500;
 // Mixer screw RPM. RPM is derived from the time between consecutive hall
 // pulses (period method) - far finer than counting pulses per fixed window at
 // low pulse rates. The ISR rejects edges closer than MIXER_MIN_PULSE_US apart
-// (contact / slow-edge bounce that would otherwise double the count), an EMA
-// filter steadies the readout, and a stall timeout zeroes it when stopped.
+// (contact / slow-edge bounce that would otherwise double the count), the
+// reported value is a moving average of the last MIXER_RPM_WINDOW pulse periods
+// (steady + accurate), and a stall timeout zeroes it when stopped.
 const int           MIXER_PULSES_PER_REV   = 1;          // magnets per revolution [tune]
 const unsigned long MIXER_MIN_PULSE_US     = 20000UL;    // ignore edges <20 ms apart - kills spurious double-edges (caps ~3000 RPM)
 const unsigned long MIXER_STALL_TIMEOUT_US = 2000000UL;  // no pulse for 2 s -> RPM 0 (min ~30 RPM)
-const float         MIXER_RPM_ALPHA        = 0.30f;      // EMA weight 0..1 (lower = smoother)
-const float         MIXER_RPM_SPIKE_RATIO  = 2.5f;       // backup gate: drop raw > 2.5x the filtered value
+const int           MIXER_RPM_WINDOW       = 8;          // pulses averaged for the reported RPM (higher = smoother, more lag)
+const float         MIXER_RPM_SPIKE_RATIO  = 2.5f;       // backup gate: drop raw > 2.5x the averaged value
 const float         MIXER_RPM_MIN_VALID    = 60.0f;      // only apply the spike gate once a real speed is established
 
 // ── Trash conveyor tunables ────────────────────────────────────────────────
@@ -298,6 +299,12 @@ volatile unsigned long mixerLastEdgeUs = 0;   // micros() of last accepted pulse
 volatile unsigned long mixerPeriodUs   = 0;   // last accepted inter-pulse interval
 volatile bool          mixerNewPeriod  = false;
 float                  mixerRpm        = 0.0;
+// Moving average of the last MIXER_RPM_WINDOW pulse periods. Averaging periods
+// (not instantaneous RPMs) yields the true mean speed over the window.
+unsigned long          mixerPeriodBuf[MIXER_RPM_WINDOW] = { 0 };
+unsigned long          mixerPeriodSum   = 0;
+int                    mixerPeriodCount = 0;
+int                    mixerPeriodHead  = 0;
 bool                   mixerRawDebug   = true;   // stream raw readings (RPM_DEBUG_ON/OFF)
 
 // Trash conveyor state machine.
@@ -453,36 +460,50 @@ void mixerUpdateRpm() {
   mixerNewPeriod = false;
   interrupts();
 
-  // No pulse for a while -> the screw is stopped.
+  // No pulse for a while -> the screw is stopped. Clear the averaging window so
+  // a restart rebuilds cleanly from fresh periods.
   if (periodUs == 0 || (micros() - lastEdgeUs) > MIXER_STALL_TIMEOUT_US) {
     mixerRpm = 0.0f;
+    mixerPeriodSum   = 0;
+    mixerPeriodCount = 0;
+    mixerPeriodHead  = 0;
     return;
   }
 
-  // Fold a fresh reading into the EMA only when a new pulse period arrived.
+  // Fold a fresh reading into the average only when a new pulse period arrived.
   if (hasNew) {
     float rpmRaw = 60000000.0f / ((float)periodUs * (float)MIXER_PULSES_PER_REV);
 
     // Backup outlier gate: once a real speed is established, a raw sample far
     // above the running average is almost always a spurious hall double-edge
     // (a physical screw can't jump several-fold in one pulse). Drop it so it
-    // never spikes the filter.
+    // never pollutes the average.
     bool rejected = (mixerRpm > MIXER_RPM_MIN_VALID) &&
                     (rpmRaw > mixerRpm * MIXER_RPM_SPIKE_RATIO);
     if (!rejected) {
-      mixerRpm = (mixerRpm <= 0.0f)
-                   ? rpmRaw
-                   : mixerRpm + MIXER_RPM_ALPHA * (rpmRaw - mixerRpm);
+      // Maintain a moving sum of the last MIXER_RPM_WINDOW periods, then report
+      // the mean speed over that window (N revolutions / total elapsed time).
+      if (mixerPeriodCount == MIXER_RPM_WINDOW) {
+        mixerPeriodSum -= mixerPeriodBuf[mixerPeriodHead];
+      } else {
+        mixerPeriodCount++;
+      }
+      mixerPeriodBuf[mixerPeriodHead] = periodUs;
+      mixerPeriodSum += periodUs;
+      mixerPeriodHead = (mixerPeriodHead + 1) % MIXER_RPM_WINDOW;
+
+      float avgPeriodUs = (float)mixerPeriodSum / (float)mixerPeriodCount;
+      mixerRpm = 60000000.0f / (avgPeriodUs * (float)MIXER_PULSES_PER_REV);
     }
 
-    // Stream the raw + filtered reading for tuning. Skipped while the conveyor
+    // Stream the raw + averaged reading for tuning. Skipped while the conveyor
     // stepper is moving so the print never blocks the step-pulse train.
     if (mixerRawDebug && !TC_stepper.isRunning()) {
       Serial.print(F("[RPM_RAW] period_us="));
       Serial.print(periodUs);
       Serial.print(F(" rpm_raw="));
       Serial.print(rpmRaw, 0);
-      Serial.print(F(" rpm_filt="));
+      Serial.print(F(" rpm_avg="));
       Serial.print(mixerRpm, 0);
       if (rejected) Serial.print(F(" REJECTED"));
       Serial.println();

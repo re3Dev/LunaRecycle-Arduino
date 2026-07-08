@@ -596,6 +596,26 @@ def api_arduino_status():
     })
 
 
+@app.route("/api/arduino/command", methods=["POST"])
+def api_arduino_command():
+    """Send a raw serial command to the Arduino and return the reply lines.
+
+    Powers the dashboard's manual command console — equivalent to typing a
+    command in the Arduino Serial Monitor (e.g. STATUS, GATE_OPEN, MOTOR 128 FWD).
+    """
+    cmd = (request.json or {}).get("cmd", "")
+    cmd = str(cmd).strip()
+    if not cmd:
+        return jsonify({"ok": False, "error": "empty command"}), 400
+    if not arduino.connected:
+        return jsonify({"ok": False, "error": "Arduino not connected."}), 409
+    try:
+        lines = arduino.send(cmd)
+        return jsonify({"ok": True, "command": cmd, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Routes — Shredder Gate
 # ─────────────────────────────────────────────────────────────────────────────

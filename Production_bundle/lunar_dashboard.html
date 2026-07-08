@@ -510,7 +510,7 @@
       <div class="logo" aria-hidden="true"></div>
       <div>
         <h1>LunaBotXS • Operator Console</h1>
-        <div class="sub">LunaRecycle operator console — Dryer • Gate • Dryer Screw</div>
+        <div class="sub">LunaRecycle operator console — automation &amp; manual command console</div>
       </div>
     </div>
 
@@ -536,14 +536,15 @@
 
   <div class="wrap">
     <div class="grid">
-      <div class="stack" style="grid-template-rows: 1fr;">
+      <div class="stack" style="grid-template-rows: auto 1fr;">
+        <!-- ── Dryer (minimal feedback) ──────────────────────────────── -->
         <section class="card">
           <div class="hd">
             <div class="title">
               <div class="sicon" aria-hidden="true">≈</div>
               <div style="min-width:0">
                 <h2>Dryer</h2>
-                <div class="hint">live Modbus status + setpoints + command pulse</div>
+                <div class="hint">live Modbus feedback</div>
               </div>
             </div>
             <div class="pill">
@@ -557,114 +558,70 @@
           </div>
 
           <div class="bd">
-            <div class="row" style="margin-bottom:10px; flex-wrap:wrap;">
+            <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:8px; align-items:center;">
               <div class="pill">
                 <span class="dot" id="dryerConnDot"></span>
                 <span>Dryer API: <strong id="dryerConnState">DISCONNECTED</strong></span>
               </div>
-              <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                <button class="btn mini" id="btnDryerConnect">Connect</button>
-                <button class="btn mini" id="btnDryerDisconnect">Disconnect</button>
-                <button class="btn mini" id="btnDryerRefresh">Refresh</button>
-                <button class="btn primary mini" id="btnDryerToggle">Toggle On/Off</button>
-              </div>
+              <button class="btn mini" id="btnDryerConnect">Connect</button>
+              <button class="btn mini" id="btnDryerDisconnect">Disconnect</button>
+              <button class="btn mini" id="btnDryerRefresh">Refresh</button>
+              <button class="btn primary mini" id="btnDryerToggle">Toggle On/Off</button>
             </div>
 
-            <div class="dryer-grid-3" style="margin-bottom:10px;">
-              <div class="kv">
-                <div class="k">Mode State (30001)</div>
-                <div class="v"><span id="dryer_mode_state">—</span></div>
-              </div>
-              <div class="kv">
-                <div class="k">Run State (30007)</div>
-                <div class="v"><span id="dryer_run_state">—</span></div>
-              </div>
-              <div class="kv">
-                <div class="k">Dryer State Guess</div>
-                <div class="v"><span id="dryer_state_guess">—</span></div>
-              </div>
-            </div>
-
-            <div class="dryer-grid-3" style="margin-bottom:10px;">
+            <div class="dryer-grid-3">
               <div class="kv">
                 <div class="k">Process Temp</div>
                 <div class="v"><span id="dryer_process_temp">—</span><small> °C</small></div>
               </div>
               <div class="kv">
-                <div class="k">Regen Temp</div>
-                <div class="v"><span id="dryer_regen_temp">—</span><small> °C</small></div>
-              </div>
-              <div class="kv">
-                <div class="k">Regen Outlet</div>
-                <div class="v"><span id="dryer_regen_outlet_temp">—</span><small> °C</small></div>
-              </div>
-            </div>
-
-            <div class="dryer-grid-3" style="margin-bottom:10px;">
-              <div class="kv">
-                <div class="k">Blower Inlet</div>
-                <div class="v"><span id="dryer_blower_inlet_temp">—</span><small> °C</small></div>
-              </div>
-              <div class="kv">
-                <div class="k">Aux Temp</div>
-                <div class="v"><span id="dryer_aux_temp">—</span><small> °C</small></div>
+                <div class="k">Setpoint</div>
+                <div class="v"><span id="heater_set_lbl">—</span><small> °C</small></div>
               </div>
               <div class="kv">
                 <div class="k">Actual Dew Point</div>
                 <div class="v"><span id="dryer_actual_dp">—</span></div>
               </div>
-            </div>
-
-            <div class="split" style="margin-bottom:10px;">
               <div class="kv">
-                <div class="k">Process Setpoint (40022)</div>
-                <div class="v" style="margin-bottom:8px;">
-                  <span id="heater_set_lbl">—</span><small> °C</small>
-                </div>
-                <div class="row">
-                  <input type="number" id="dryerProcessSpInput" value="60" />
-                  <button class="btn mini" id="btnWriteProcessSp">Write</button>
-                </div>
-              </div>
-
-              <div class="kv">
-                <div class="k">Dew Point Setpoint (40024)</div>
-                <div class="v" style="margin-bottom:8px;">
-                  <span id="dryer_dew_sp_lbl">—</span>
-                </div>
-                <div class="row">
-                  <input type="number" id="dryerDewSpInput" value="-20" />
-                  <button class="btn mini" id="btnWriteDewSp">Write</button>
-                </div>
-              </div>
-            </div>
-
-            <div class="split" style="margin-bottom:10px;">
-              <div class="kv">
-                <div class="k">Status Word (30021)</div>
-                <div class="v"><span id="dryer_status_word">—</span></div>
+                <div class="k">Run State</div>
+                <div class="v"><span id="dryer_run_state">—</span></div>
               </div>
               <div class="kv">
-                <div class="k">Output Word (30026)</div>
-                <div class="v"><span id="dryer_output_word">—</span></div>
+                <div class="k">State</div>
+                <div class="v"><span id="dryer_state_guess">—</span></div>
               </div>
-            </div>
-
-            <div class="kv">
-              <div class="k">Status Bits Set</div>
-              <div class="v"><span id="dryer_status_bits">—</span></div>
-              <div class="meter"><span id="heater_stability_bar" style="width:0%"></span></div>
+              <div class="kv">
+                <div class="k">Mode</div>
+                <div class="v"><strong id="dryerMode">OFFLINE</strong></div>
+              </div>
             </div>
           </div>
+        </section>
 
-          <div class="ft">
-            <div class="pill"><span class="dot good"></span><span>Mode: <strong id="dryerMode">STANDARD</strong></span></div>
-            <div class="pill"><span class="dot warn"></span><span>Toggle uses <strong>40018 bit 0 pulse</strong></span></div>
+        <!-- ── Manual Command Console ────────────────────────────────── -->
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">›_</div>
+              <div style="min-width:0">
+                <h2>Command Console</h2>
+                <div class="hint">raw Arduino serial commands — e.g. STATUS, GATE_OPEN, MOTOR 128 FWD</div>
+              </div>
+            </div>
+            <button class="btn mini" id="btnConsoleClear">Clear</button>
+          </div>
+          <div class="bd" style="display:flex; flex-direction:column; gap:8px; min-height:0;">
+            <div class="log" id="consoleOut" style="flex:1 1 auto; max-height:none;" aria-label="Command console output"></div>
+            <div class="row" style="gap:6px;">
+              <input type="text" id="consoleInput" placeholder="Type a command and press Enter…" autocomplete="off" spellcheck="false"
+                style="flex:1 1 auto; font-family:var(--mono);" />
+              <button class="btn mini primary" id="btnConsoleSend">Send</button>
+            </div>
           </div>
         </section>
       </div>
 
-      <div class="stack" style="grid-template-rows: auto auto auto auto auto auto 1fr;">
+      <div class="stack" style="grid-template-rows: auto minmax(0,1fr) auto;">
         <!-- ── Arduino connection ───────────────────────────────────── -->
         <section class="card">
           <div class="hd">
@@ -688,288 +645,6 @@
               <button class="btn mini" id="btnArduinoRefresh">Status</button>
             </div>
             <div id="arduinoStatusText" class="kv" style="font-size:10px; font-family:var(--mono); color:var(--muted); min-height:24px;">—</div>
-          </div>
-        </section>
-
-        <!-- ── Doors ──────────────────────────────────────────────────── -->
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">⊟</div>
-              <div style="min-width:0">
-                <h2>Doors</h2>
-                <div class="hint">2 linear actuators • limit switches</div>
-              </div>
-            </div>
-            <span class="statechip" id="doorChip">IDLE</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
-              <button class="btn mini" id="btnDoorOpen">Open</button>
-              <button class="btn mini" id="btnDoorClose">Close</button>
-              <button class="btn mini danger" id="btnDoorStop">Stop</button>
-              <button class="btn mini" id="btnDoorStatus">Status</button>
-            </div>
-            <div class="split">
-              <div class="kv">
-                <div class="k">A – MIN / MAX</div>
-                <div class="v"><span id="doorA_min">—</span> / <span id="doorA_max">—</span></div>
-              </div>
-              <div class="kv">
-                <div class="k">B – MIN / MAX</div>
-                <div class="v"><span id="doorB_min">—</span> / <span id="doorB_max">—</span></div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Shredder gate ───────────────────────────────────────────── -->
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">⊞</div>
-              <div style="min-width:0">
-                <h2>Shredder Gate</h2>
-                <div class="hint">2 RC servos • open / close</div>
-              </div>
-            </div>
-            <span class="statechip" id="gateChip">CLOSED</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="flex-wrap:wrap; gap:6px;">
-              <button class="btn mini" id="btnGateOpen">Open</button>
-              <button class="btn mini" id="btnGateClose">Close</button>
-              <button class="btn mini" id="btnGateStatus">Status</button>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Trash Conveyor (Pick & Place) ───────────────────────────── -->
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">⇅</div>
-              <div style="min-width:0">
-                <h2>Trash Conveyor</h2>
-                <div class="hint">stepper pick &amp; place • bag stack → shredder</div>
-              </div>
-            </div>
-            <span class="statechip" id="tcChip">—</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
-              <button class="btn mini"         id="btnTcHome">Home</button>
-              <button class="btn mini primary" id="btnTcPick">Pick</button>
-              <button class="btn mini danger"  id="btnTcStop">Stop</button>
-              <button class="btn mini"         id="btnTcStatus">Status</button>
-            </div>
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
-              <button class="btn mini" id="btnTcPumpOn">Pump On</button>
-              <button class="btn mini" id="btnTcPumpOff">Pump Off</button>
-            </div>
-            <div class="split">
-              <div class="kv">
-                <div class="k">Position</div>
-                <div class="v"><span id="tcPosText">—</span> mm</div>
-              </div>
-              <div class="kv">
-                <div class="k">Bag Stack</div>
-                <div class="v" id="tcBagText">—</div>
-              </div>
-            </div>
-            <div class="kv" style="margin-top:8px;">
-              <div class="k">Vacuum Pump</div><div class="v" id="tcPumpText">—</div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Dryer Screw ─────────────────────────────────────────────── -->
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">↺</div>
-              <div style="min-width:0">
-                <h2>Dryer Screw</h2>
-                <div class="hint">DC motor · H-bridge · PWM speed</div>
-              </div>
-            </div>
-            <span class="statechip" id="motorChip">STOPPED</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
-              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Speed (0–255)</label>
-              <input type="number" id="motorSpeed" min="0" max="255" value="128"
-                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-              <select id="motorDir"
-                style="padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-                <option value="FWD">FWD</option>
-                <option value="REV">REV</option>
-              </select>
-            </div>
-            <div class="row" style="flex-wrap:wrap; gap:6px;">
-              <button class="btn mini primary" id="btnMotorSet">Set Speed</button>
-              <button class="btn mini danger"  id="btnMotorStop">Stop</button>
-              <button class="btn mini"         id="btnMotorStatus">Status</button>
-            </div>
-            <div class="kv" style="margin-top:10px;">
-              <div class="k">PWM</div><div class="v" id="motorPwmText">0</div>
-            </div>
-            <div class="kv">
-              <div class="k">Direction</div><div class="v" id="motorDirText">—</div>
-            </div>
-            <div class="kv">
-              <div class="k">Screw RPM</div><div class="v" id="motorRpmText">—</div>
-            </div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">⟲</div>
-              <div style="min-width:0">
-                <h2>Shredder</h2>
-                <div class="hint">motor relay on/off</div>
-              </div>
-            </div>
-            <span class="statechip" id="shredderChip">—</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
-              <button class="btn mini primary" id="btnShredderOn">Shredder On</button>
-              <button class="btn mini danger"  id="btnShredderOff">Shredder Off</button>
-            </div>
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:10px;">
-              <button class="btn mini" id="btnShredderFwd">Forward</button>
-              <button class="btn mini" id="btnShredderRev">Reverse</button>
-            </div>
-            <div class="split">
-              <div class="kv">
-                <div class="k">Motor</div><div class="v" id="shredderText">—</div>
-              </div>
-              <div class="kv">
-                <div class="k">Direction</div><div class="v" id="shredderDirText">—</div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Mixer agitator ──────────────────────────────────────────── -->
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">✳</div>
-              <div style="min-width:0">
-                <h2>Agitator</h2>
-                <div class="hint">bottom agitator · power capped at 50%</div>
-              </div>
-            </div>
-            <span class="statechip" id="agitatorChip">—</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
-              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Power %</label>
-              <input type="number" id="agitatorPct" min="0" max="50" value="25"
-                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-              <select id="agitatorDir"
-                style="padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-                <option value="REV" selected>REV</option>
-                <option value="FWD">FWD</option>
-              </select>
-            </div>
-            <div class="row" style="flex-wrap:wrap; gap:6px;">
-              <button class="btn mini primary" id="btnAgitatorSet">Set</button>
-              <button class="btn mini danger"  id="btnAgitatorStop">Stop</button>
-            </div>
-            <div class="split" style="margin-top:10px;">
-              <div class="kv">
-                <div class="k">Power</div><div class="v"><span id="agitatorPctText">—</span> %</div>
-              </div>
-              <div class="kv">
-                <div class="k">Direction</div><div class="v" id="agitatorDirText">—</div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Mixer vacuum motor ──────────────────────────────────────── -->
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">🌀</div>
-              <div style="min-width:0">
-                <h2>Vacuum Motor</h2>
-                <div class="hint">DS3502 digipot · variable speed</div>
-              </div>
-            </div>
-            <span class="statechip" id="vacuumChip">—</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
-              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Speed %</label>
-              <input type="number" id="vacuumPct" min="0" max="100" value="50"
-                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-            </div>
-            <div class="row" style="flex-wrap:wrap; gap:6px;">
-              <button class="btn mini primary" id="btnVacuumSet">Set</button>
-              <button class="btn mini danger"  id="btnVacuumStop">Stop</button>
-            </div>
-            <div class="split" style="margin-top:10px;">
-              <div class="kv">
-                <div class="k">Speed</div><div class="v"><span id="vacuumPctText">—</span> %</div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- ── Mixer blast gates ───────────────────────────────────────── -->
-        <section class="card">
-          <div class="hd">
-            <div class="title">
-              <div class="sicon" aria-hidden="true">⇅</div>
-              <div style="min-width:0">
-                <h2>Blast Gates</h2>
-                <div class="hint">RoboClaw linear actuators · L / R</div>
-              </div>
-            </div>
-            <span class="statechip" id="blastGateChip">—</span>
-          </div>
-          <div class="bd">
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
-              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Gate</label>
-              <select id="blastGateSel"
-                style="padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-                <option value="ALL">Both</option>
-                <option value="L">Left</option>
-                <option value="R">Right</option>
-              </select>
-            </div>
-            <div class="row" style="flex-wrap:wrap; gap:6px; margin-bottom:8px;">
-              <button class="btn mini"         id="btnBgHome">Home (MIN)</button>
-              <button class="btn mini"         id="btnBgHomeMax">Home (MAX)</button>
-              <button class="btn mini primary" id="btnBgCal">Calibrate</button>
-              <button class="btn mini danger"  id="btnBgStop">Stop</button>
-            </div>
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:8px;">
-              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Position %</label>
-              <input type="number" id="blastGatePos" min="0" max="100" value="50"
-                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-              <button class="btn mini primary" id="btnBgPos">Move</button>
-            </div>
-            <div class="row" style="gap:8px; align-items:center; margin-bottom:10px;">
-              <label style="font-size:12px; color:var(--muted2); white-space:nowrap;">Speed %</label>
-              <input type="number" id="blastGateSpeed" min="1" max="100" value="100"
-                style="width:70px; padding:4px 6px; background:var(--bg2); border:1px solid var(--border); color:var(--fg); border-radius:4px; font-size:13px;">
-              <button class="btn mini" id="btnBgSpeed">Set</button>
-            </div>
-            <div class="split">
-              <div class="kv">
-                <div class="k">Left</div><div class="v"><span id="bgLeftText">—</span> %</div>
-              </div>
-              <div class="kv">
-                <div class="k">Right</div><div class="v"><span id="bgRightText">—</span> %</div>
-              </div>
-            </div>
           </div>
         </section>
 
@@ -1391,79 +1066,6 @@
         $("#arduinoState").textContent = "DISCONNECTED";
         $("#btnArduinoMode").classList.remove("primary");
       }
-      // Doors
-      $("#doorA_min").textContent = S.doorA_min;
-      $("#doorA_max").textContent = S.doorA_max;
-      $("#doorB_min").textContent = S.doorB_min;
-      $("#doorB_max").textContent = S.doorB_max;
-      const dc = $("#doorChip");
-      dc.textContent = S.doorState || "IDLE";
-      dc.className = "statechip" + (S.doorState==="OPENING"||S.doorState==="CLOSING" ? " warn" : " good");
-      // Gate
-      const gc = $("#gateChip");
-      gc.textContent = S.gateState || "—";
-      gc.className = "statechip" + (S.gateState==="OPEN" ? " good" : "");
-      // Motor
-      const mc = $("#motorChip");
-      mc.textContent = S.motorPwm > 0 ? "RUNNING" : "STOPPED";
-      mc.className = "statechip" + (S.motorPwm > 0 ? " good" : "");
-      $("#motorPwmText").textContent = S.motorPwm;
-      $("#motorDirText").textContent = S.motorDir || "—";
-      $("#motorRpmText").textContent = (S.mixerRpm === "—" || S.mixerRpm === undefined) ? "—" : `${S.mixerRpm} RPM`;
-      // Trash conveyor
-      const tc = $("#tcChip");
-      tc.textContent = S.tcState || "—";
-      tc.className = "statechip" + (
-        S.tcState === "PICKING" || S.tcState === "READY" ? " good" :
-        S.tcState === "HOMING"  || S.tcState === "WAIT_HOME" ? " warn" : ""
-      );
-      $("#tcPosText").textContent = S.tcPosMm;
-      $("#tcBagText").textContent = S.tcBag;
-      $("#tcPumpText").textContent = S.tcPump;
-      // Shredder (motor relay)
-      const sc = $("#shredderChip");
-      if(sc){
-        sc.textContent = S.shredder === "ON" ? "RUNNING" : (S.shredder || "—");
-        sc.className = "statechip" + (S.shredder === "ON" ? " good" : "");
-      }
-      const st = $("#shredderText");
-      if(st){ st.textContent = S.shredder; }
-      const sdt = $("#shredderDirText");
-      if(sdt){ sdt.textContent = S.shredderDir; }
-      // Agitator (2nd H-bridge channel)
-      const apt = $("#agitatorPctText");
-      if(apt){ apt.textContent = S.agitatorPct; }
-      const adt = $("#agitatorDirText");
-      if(adt){ adt.textContent = S.agitatorDir; }
-      const agc = $("#agitatorChip");
-      if(agc){
-        const p = parseFloat(S.agitatorPct);
-        const running = !isNaN(p) && p > 0;
-        agc.textContent = running ? `${S.agitatorPct}% ${S.agitatorDir}` : (S.agitatorPct === "—" ? "—" : "STOPPED");
-        agc.className = "statechip" + (running ? " good" : "");
-      }
-      // Vacuum motor (DS3502 digipot)
-      const vpt = $("#vacuumPctText");
-      if(vpt){ vpt.textContent = S.vacuumPct; }
-      const vgc = $("#vacuumChip");
-      if(vgc){
-        const vp = parseFloat(S.vacuumPct);
-        const vrunning = !isNaN(vp) && vp > 0;
-        vgc.textContent = vrunning ? `${S.vacuumPct}%` : (S.vacuumPct === "—" ? "—" : "STOPPED");
-        vgc.className = "statechip" + (vrunning ? " good" : "");
-      }
-      // Blast gates (linear actuators)
-      const blt = $("#bgLeftText");
-      if(blt){ blt.textContent = S.bgLeft; }
-      const brt = $("#bgRightText");
-      if(brt){ brt.textContent = S.bgRight; }
-      const bgc = $("#blastGateChip");
-      if(bgc){
-        const l = parseFloat(S.bgLeft), r = parseFloat(S.bgRight);
-        const moving = (!isNaN(l) && l > 0) || (!isNaN(r) && r > 0);
-        bgc.textContent = (S.bgLeft === "—" && S.bgRight === "—") ? "—" : `L ${S.bgLeft}% · R ${S.bgRight}%`;
-        bgc.className = "statechip" + (moving ? " good" : "");
-      }
       // Automation — Size Reduction
       const running = String(S.srRun).toUpperCase() === "YES";
       setText("srRunText", running ? "RUNNING" : (S.srRun === "—" ? "—" : "IDLE"));
@@ -1686,121 +1288,57 @@
       }catch(err){ log(`Feed stop failed: ${err.message}`, "bad"); }
     }
 
-    async function doorCmd(endpoint){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const res = await apiArduino(endpoint, { method: "POST" });
-        const msg = (res.response || []).join(" | ") || endpoint.split("/").pop();
-        log(`Door: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`Door cmd failed: ${err.message}`, "bad"); }
+    // ── Manual command console ───────────────────────────────────────────────
+    const consoleHistory = [];
+    let consoleHistoryIdx = -1;
+
+    function consolePrint(text, color=""){
+      const out = $("#consoleOut");
+      if(!out) return;
+      const line = document.createElement("div");
+      if(color){ line.style.color = color; }
+      line.textContent = text;
+      out.appendChild(line);
+      out.scrollTop = out.scrollHeight;
     }
 
-    async function gateCmd(endpoint){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const res = await apiArduino(endpoint, { method: "POST" });
-        const msg = (res.response || []).join(" | ") || endpoint.split("/").pop();
-        log(`Gate: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`Gate cmd failed: ${err.message}`, "bad"); }
-    }
-
-    async function tcCmd(endpoint, label){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const res = await apiArduino(endpoint, { method: "POST" });
-        const msg = (res.response || []).join(" | ") || label;
-        log(`Trash Conveyor: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`Conveyor cmd failed: ${err.message}`, "bad"); }
-    }
-
-    async function shredderCmd(endpoint, label){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const res = await apiArduino(endpoint, { method: "POST" });
-        const msg = (res.response || []).join(" | ") || label;
-        log(`Shredder: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`Shredder cmd failed: ${err.message}`, "bad"); }
-    }
-
-    async function blastGateCmd(endpoint, body, label){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const opts = { method: "POST" };
-        if(body){ opts.body = JSON.stringify(body); }
-        // Blast-gate moves block on the Mega for several seconds; allow extra time.
-        const res = await apiArduino(endpoint, opts, 15000);
-        const msg = (res.response || []).join(" | ") || label;
-        log(`Blast Gate: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`Blast Gate cmd failed: ${err.message}`, "bad"); }
-    }
-
-    async function agitatorCmd(endpoint, body, label){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const opts = { method: "POST" };
-        if(body){ opts.body = JSON.stringify(body); }
-        const res = await apiArduino(endpoint, opts);
-        const msg = (res.response || []).join(" | ") || label;
-        log(`Agitator: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`Agitator cmd failed: ${err.message}`, "bad"); }
-    }
-
-    async function vacuumCmd(endpoint, body, label){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const opts = { method: "POST" };
-        if(body){ opts.body = JSON.stringify(body); }
-        const res = await apiArduino(endpoint, opts);
-        const msg = (res.response || []).join(" | ") || label;
-        log(`Vacuum: ${msg}`, "info");
-        await arduinoRefreshStatus();
-      }catch(err){ log(`Vacuum cmd failed: ${err.message}`, "bad"); }
-    }
-
-    async function motorSet(){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      const speed = parseInt(document.getElementById("motorSpeed").value, 10);
-      const dir   = document.getElementById("motorDir").value;
-      if(isNaN(speed) || speed < 0 || speed > 255){
-        log("Speed must be 0–255.", "bad"); return;
+    async function sendConsoleCommand(){
+      const input = $("#consoleInput");
+      if(!input) return;
+      const cmd = input.value.trim();
+      if(!cmd) return;
+      consoleHistory.unshift(cmd);
+      consoleHistoryIdx = -1;
+      input.value = "";
+      consolePrint(`> ${cmd}`, "var(--info)");
+      if(!S.arduinoConnected){
+        consolePrint("Arduino not connected — use the Arduino panel to connect.", "var(--bad)");
+        return;
       }
       try{
-        const res = await apiArduino("/motor/set", {
+        // Some firmware commands (e.g. blast-gate moves) block for several
+        // seconds, so give the request a generous timeout.
+        const res = await apiArduino("/arduino/command", {
           method: "POST",
-          body: JSON.stringify({ speed, dir }),
-        });
-        S.motorPwm = speed;
-        S.motorDir = dir;
-        const msg = (res.response || []).join(" | ") || `SET ${speed} ${dir}`;
-        log(`Dryer Screw: ${msg}`, "info");
-        render();
-      }catch(err){ log(`Motor set failed: ${err.message}`, "bad"); }
+          body: JSON.stringify({ cmd }),
+        }, 16000);
+        const lines = res.response || [];
+        if(lines.length){
+          lines.forEach(l => consolePrint(l));
+        }else{
+          consolePrint("(no response)", "var(--muted2)");
+        }
+      }catch(err){
+        consolePrint(`Error: ${err.message}`, "var(--bad)");
+      }
     }
 
-    async function motorStop(){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const res = await apiArduino("/motor/stop", { method: "POST" });
-        S.motorPwm = 0;
-        const msg = (res.response || []).join(" | ") || "STOPPED";
-        log(`Dryer Screw: ${msg}`, "info");
-        render();
-      }catch(err){ log(`Motor stop failed: ${err.message}`, "bad"); }
-    }
-
-    async function motorStatus(){
-      if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      try{
-        const res = await apiArduino("/motor/status");
-        const msg = (res.response || []).join(" | ") || "—";
-        log(`Dryer Screw status: ${msg}`, "info");
-      }catch(err){ log(`Motor status failed: ${err.message}`, "bad"); }
+    function consoleHistoryNav(dir){
+      const input = $("#consoleInput");
+      if(!input || !consoleHistory.length) return;
+      consoleHistoryIdx = clamp(consoleHistoryIdx + dir, -1, consoleHistory.length - 1);
+      input.value = consoleHistoryIdx < 0 ? "" : consoleHistory[consoleHistoryIdx];
+      input.setSelectionRange(input.value.length, input.value.length);
     }
 
     async function api(path, opts={}, timeoutMs=6000){
@@ -1854,8 +1392,10 @@
         S.screw_on = run === 100;
         S.heater_on = run === 100;
 
-        $("#dryerProcessSpInput").value = d.process_setpoint ?? "";
-        $("#dryerDewSpInput").value = d.dewpoint_setpoint ?? "";
+        const spInput = $("#dryerProcessSpInput");
+        if(spInput){ spInput.value = d.process_setpoint ?? ""; }
+        const dewInput = $("#dryerDewSpInput");
+        if(dewInput){ dewInput.value = d.dewpoint_setpoint ?? ""; }
 
         if(!silent){
           log("Dryer data refreshed.", "info");
@@ -1889,50 +1429,6 @@
       }
     }
 
-    async function writeProcessSp(){
-      if(!S.dryerIoLive){
-        log("Dryer IO is in SIM mode. Switch to LIVE first.", "warn");
-        return;
-      }
-      const value = parseInt($("#dryerProcessSpInput").value, 10);
-      if(Number.isNaN(value)){
-        log("Invalid process setpoint.", "bad");
-        return;
-      }
-      try{
-        await api("/set_process_sp", {
-          method: "POST",
-          body: JSON.stringify({ value })
-        });
-        log(`Wrote process setpoint ${value} to 40022.`, "good");
-        await dryerRefresh(true);
-      }catch(err){
-        log(`Process setpoint write failed: ${err.message}`, "bad");
-      }
-    }
-
-    async function writeDewSp(){
-      if(!S.dryerIoLive){
-        log("Dryer IO is in SIM mode. Switch to LIVE first.", "warn");
-        return;
-      }
-      const value = parseInt($("#dryerDewSpInput").value, 10);
-      if(Number.isNaN(value)){
-        log("Invalid dew point setpoint.", "bad");
-        return;
-      }
-      try{
-        await api("/set_dewpoint_sp", {
-          method: "POST",
-          body: JSON.stringify({ value })
-        });
-        log(`Wrote dew point setpoint ${value} to 40024.`, "good");
-        await dryerRefresh(true);
-      }catch(err){
-        log(`Dew point write failed: ${err.message}`, "bad");
-      }
-    }
-
     function tickConnection(dt){
       // Connection state reflects the REAL backend links now, not a simulation.
       // (The old random-flap demo code was removed so the UI never shows a
@@ -1958,59 +1454,47 @@
 
       const d = S.dryerData;
 
-      $("#dryer_temp").textContent = d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—";
-      $("#dryer_set").textContent = d.process_setpoint ?? "—";
-      $("#dryer_dp").textContent = d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—";
+      setText("dryer_temp", d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—");
+      setText("dryer_set", d.process_setpoint ?? "—");
+      setText("dryer_dp", d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—");
 
-      $("#dryer_process_temp").textContent = d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—";
-      $("#dryer_regen_temp").textContent = d.regen_temp != null ? (d.regen_temp / 10).toFixed(1) : "—";
-      $("#dryer_regen_outlet_temp").textContent = d.regen_outlet_temp != null ? (d.regen_outlet_temp / 10).toFixed(1) : "—";
-      $("#dryer_blower_inlet_temp").textContent = d.blower_inlet_temp != null ? (d.blower_inlet_temp / 10).toFixed(1) : "—";
-      $("#dryer_aux_temp").textContent = d.aux_temp != null ? (d.aux_temp / 10).toFixed(1) : "—";
-      $("#dryer_actual_dp").textContent = d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—";
+      setText("dryer_process_temp", d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—");
+      setText("dryer_actual_dp", d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—");
 
-      $("#dryer_mode_state").textContent = d.mode_state != null ? `${d.mode_state} (0x${Number(d.mode_state).toString(16).toUpperCase().padStart(4,"0")})` : "—";
-      $("#dryer_run_state").textContent = d.run_state != null ? `${d.run_state} (0x${Number(d.run_state).toString(16).toUpperCase().padStart(4,"0")})` : "—";
-      $("#dryer_state_guess").textContent = d.dryer_state_guess ?? "—";
+      setText("dryer_run_state", d.run_state != null ? `${d.run_state} (0x${Number(d.run_state).toString(16).toUpperCase().padStart(4,"0")})` : "—");
+      setText("dryer_state_guess", d.dryer_state_guess ?? "—");
 
-      $("#heater_set_lbl").textContent = d.process_setpoint ?? "—";
-      $("#dryer_dew_sp_lbl").textContent = d.dewpoint_setpoint ?? "—";
+      setText("heater_set_lbl", d.process_setpoint ?? "—");
 
-      $("#dryer_status_word").textContent = d.status_word != null ? `${d.status_word} (${d.status_word_hex})` : "—";
-      $("#dryer_output_word").textContent = d.output_word != null ? `${d.output_word} (${d.output_word_hex})` : "—";
-      $("#dryer_status_bits").textContent = Array.isArray(d.status_bits_set) ? JSON.stringify(d.status_bits_set) : "—";
-
-      $("#dryerMode").textContent = S.dryerIoLive ? "LIVE MODBUS" : "OFFLINE";
+      setText("dryerMode", S.dryerIoLive ? "LIVE MODBUS" : "OFFLINE");
 
       safeSetChip("chipScrew", S.screw_on);
       safeSetChip("chipHeater", S.heater_on, (S.heater_on && !S.screw_on), false);
 
       const dryerDot = $("#dryerDot");
-      if(S.dryerIoLive){
-        if(S.dryerLastPollOk && d.run_state === 100) dryerDot.className = "dot good";
-        else if(S.dryerApiConnected) dryerDot.className = "dot warn";
-        else dryerDot.className = "dot bad";
-      }else{
-        dryerDot.className = "dot";
+      if(dryerDot){
+        if(S.dryerIoLive){
+          if(S.dryerLastPollOk && d.run_state === 100) dryerDot.className = "dot good";
+          else if(S.dryerApiConnected) dryerDot.className = "dot warn";
+          else dryerDot.className = "dot bad";
+        }else{
+          dryerDot.className = "dot";
+        }
       }
 
       const dryerConnDot = $("#dryerConnDot");
-      if(S.dryerApiConnected && S.dryerLastPollOk){
-        dryerConnDot.className = "dot good";
-        $("#dryerConnState").textContent = "CONNECTED";
-      }else if(S.dryerIoLive){
-        dryerConnDot.className = "dot warn";
-        $("#dryerConnState").textContent = "TRYING";
-      }else{
-        dryerConnDot.className = "dot";
-        $("#dryerConnState").textContent = "DISCONNECTED";
+      if(dryerConnDot){
+        if(S.dryerApiConnected && S.dryerLastPollOk){
+          dryerConnDot.className = "dot good";
+          setText("dryerConnState", "CONNECTED");
+        }else if(S.dryerIoLive){
+          dryerConnDot.className = "dot warn";
+          setText("dryerConnState", "TRYING");
+        }else{
+          dryerConnDot.className = "dot";
+          setText("dryerConnState", "DISCONNECTED");
+        }
       }
-
-      const stab = (() => {
-        if(d.process_temp == null || d.process_setpoint == null) return 0;
-        return clamp(100 - Math.abs(d.process_temp / 10 - d.process_setpoint) * 6, 0, 100);
-      })();
-      $("#heater_stability_bar").style.width = `${stab}%`;
 
       setText("dryerIoState", S.dryerIoLive ? "LIVE" : "OFFLINE");
       toggleClass("btnDryerMode", "primary", S.dryerIoLive);
@@ -2069,8 +1553,6 @@
       on("btnDryerDisconnect", "click", dryerDisconnect);
       on("btnDryerRefresh",    "click", ()=>dryerRefresh(false));
       on("btnDryerToggle",     "click", dryerToggle);
-      on("btnWriteProcessSp",  "click", writeProcessSp);
-      on("btnWriteDewSp",      "click", writeDewSp);
 
       // Arduino connection
       on("btnArduinoMode", "click", async ()=>{
@@ -2080,71 +1562,14 @@
       on("btnArduinoDisconnect", "click", arduinoDisconnect);
       on("btnArduinoRefresh",    "click", ()=>arduinoRefreshStatus());
 
-      // Doors
-      on("btnDoorOpen",   "click", ()=>doorCmd("/door/open"));
-      on("btnDoorClose",  "click", ()=>doorCmd("/door/close"));
-      on("btnDoorStop",   "click", ()=>doorCmd("/door/stop"));
-      on("btnDoorStatus", "click", ()=>{
-        if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-        arduinoRefreshStatus();
+      // Manual command console
+      on("btnConsoleSend",  "click", sendConsoleCommand);
+      on("btnConsoleClear", "click", ()=>{ const o = $("#consoleOut"); if(o){ o.textContent = ""; } });
+      on("consoleInput", "keydown", (e)=>{
+        if(e.key === "Enter"){ e.preventDefault(); sendConsoleCommand(); }
+        else if(e.key === "ArrowUp"){ e.preventDefault(); consoleHistoryNav(1); }
+        else if(e.key === "ArrowDown"){ e.preventDefault(); consoleHistoryNav(-1); }
       });
-
-      // Gate
-      on("btnGateOpen",   "click", ()=>gateCmd("/gate/open"));
-      on("btnGateClose",  "click", ()=>gateCmd("/gate/close"));
-      on("btnGateStatus", "click", ()=>arduinoRefreshStatus());
-
-      // Trash conveyor (pick & place)
-      on("btnTcHome",   "click", ()=>tcCmd("/tc/home", "HOME"));
-      on("btnTcPick",   "click", ()=>tcCmd("/tc/pick", "PICK"));
-      on("btnTcStop",   "click", ()=>tcCmd("/tc/stop", "STOP"));
-      on("btnTcStatus", "click", ()=>arduinoRefreshStatus());
-      on("btnTcPumpOn",  "click", ()=>tcCmd("/tc/pump/on",  "PUMP ON"));
-      on("btnTcPumpOff", "click", ()=>tcCmd("/tc/pump/off", "PUMP OFF"));
-      on("btnShredderOn",  "click", ()=>shredderCmd("/shredder/on",  "SHREDDER ON"));
-      on("btnShredderOff", "click", ()=>shredderCmd("/shredder/off", "SHREDDER OFF"));
-      on("btnShredderFwd", "click", ()=>shredderCmd("/shredder/fwd", "SHREDDER FWD"));
-      on("btnShredderRev", "click", ()=>shredderCmd("/shredder/rev", "SHREDDER REV"));
-
-      // Mixer agitator (capped at 50% power)
-      on("btnAgitatorSet", "click", ()=>{
-        const percent = parseInt($("#agitatorPct").value, 10);
-        if(isNaN(percent) || percent < 0 || percent > 50){ log("Agitator power must be 0–50%.", "bad"); return; }
-        const dir = $("#agitatorDir").value;
-        agitatorCmd("/agitator/set", { percent, dir }, `SET ${percent}% ${dir}`);
-      });
-      on("btnAgitatorStop", "click", ()=>agitatorCmd("/agitator/stop", null, "STOP"));
-
-      // Mixer vacuum motor (DS3502 digipot, variable speed 0–100%)
-      on("btnVacuumSet", "click", ()=>{
-        const percent = parseInt($("#vacuumPct").value, 10);
-        if(isNaN(percent) || percent < 0 || percent > 100){ log("Vacuum speed must be 0–100%.", "bad"); return; }
-        vacuumCmd("/vacuum/set", { percent }, `SET ${percent}%`);
-      });
-      on("btnVacuumStop", "click", ()=>vacuumCmd("/vacuum/stop", null, "STOP"));
-
-      // Mixer blast gates
-      on("btnBgHome",    "click", ()=>blastGateCmd("/blastgate/home",    { gate: $("#blastGateSel").value }, "HOME"));
-      on("btnBgHomeMax", "click", ()=>blastGateCmd("/blastgate/homemax", { gate: $("#blastGateSel").value }, "HOMEMAX"));
-      on("btnBgCal",     "click", ()=>blastGateCmd("/blastgate/cal",     { gate: $("#blastGateSel").value }, "CAL"));
-      on("btnBgStop",    "click", ()=>blastGateCmd("/blastgate/stop",    null, "STOP"));
-      on("btnBgPos",     "click", ()=>{
-        const gate = $("#blastGateSel").value;
-        if(gate === "ALL"){ log("Select Left or Right for a position move.", "bad"); return; }
-        const percent = parseFloat($("#blastGatePos").value);
-        if(isNaN(percent) || percent < 0 || percent > 100){ log("Position must be 0–100.", "bad"); return; }
-        blastGateCmd("/blastgate/pos", { gate, percent }, `POS ${gate} ${percent}`);
-      });
-      on("btnBgSpeed",   "click", ()=>{
-        const percent = parseInt($("#blastGateSpeed").value, 10);
-        if(isNaN(percent) || percent < 1 || percent > 100){ log("Speed must be 1–100.", "bad"); return; }
-        blastGateCmd("/blastgate/speed", { percent }, `SPEED ${percent}`);
-      });
-
-      // Dryer Screw motor
-      on("btnMotorSet",    "click", ()=>motorSet());
-      on("btnMotorStop",   "click", ()=>motorStop());
-      on("btnMotorStatus", "click", ()=>motorStatus());
 
       on("btnEStop", "click", async ()=>{
         S.estop = !S.estop;
@@ -2206,6 +1631,7 @@
       log("Console initialized.", "good");
       log("Dryer card: switch to LIVE to poll the local Modbus API.", "info");
       log("Arduino: connect via the Arduino panel (/dev/ttyACM0 default on the Pi).", "info");
+      log("Command console: type raw serial commands once the Arduino is connected.", "info");
 
       S.connected = false;
       S.heater_set = 60;

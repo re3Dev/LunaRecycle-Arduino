@@ -38,7 +38,7 @@
  *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
  *   SHREDDER_FWD / _REV    Set shredder motor direction
  *
- *   AGITATOR_SET <0-100> <FWD|REV>  Run bottom agitator (capped at 50% power)
+ *   AGITATOR_SET <0-100> <FWD|REV>  Run bottom agitator (capped at 75% power)
  *   AGITATOR_STOP                   Stop the agitator
  *   AGITATOR_STATUS                 Print agitator power / direction
  *
@@ -80,7 +80,7 @@
  *     US5881 sensor    ->  D2 (INT0)   [FALLING-edge pulse count]
  *
  *   Mixer agitator (2nd H-bridge channel):
- *     ENB / IN3 / IN4  ->  D3 / D12 / D13   (power capped at 50%)
+ *     ENB / IN3 / IN4  ->  D3 / D12 / D13   (power capped at 75%)
  *
  *   Mixer vacuum motor:
  *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
@@ -210,7 +210,7 @@ const unsigned long ShredderDirSettleMs = 1000;   // [tune]
 
 // Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
 // this are clamped so the agitator never exceeds this duty.
-const int AGITATOR_MAX_PERCENT = 50;
+const int AGITATOR_MAX_PERCENT = 75;
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -1277,7 +1277,7 @@ void shredderSetDirection(bool fwd) {
 }
 
 // ============================================================================
-//  Mixer Agitator - second H-bridge channel (power capped at 50%)
+//  Mixer Agitator - second H-bridge channel (power capped at 75%)
 // ============================================================================
 
 void agitatorApply() {

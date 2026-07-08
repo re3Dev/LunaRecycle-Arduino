@@ -821,7 +821,7 @@ def api_shredder_rev():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-# ─────────────────────────────────────────────────────────────────────────────#  Routes — Mixer agitator (2nd H-bridge channel, capped at 50%)
+# ─────────────────────────────────────────────────────────────────────────────#  Routes — Mixer agitator (2nd H-bridge channel, capped at 75%)
 # ──────────────────────────────────────────────────────────────────
 
 @app.route("/api/agitator/set", methods=["POST"])
@@ -1076,7 +1076,7 @@ FEED_PRIME_SECONDS        = int(os.environ.get("LUNA_FEED_PRIME_SEC", "10"))
 FEED_METER_ON_SECONDS     = int(os.environ.get("LUNA_FEED_METER_ON_SEC", "3"))
 FEED_METER_PERIOD_SECONDS = int(os.environ.get("LUNA_FEED_METER_PERIOD_SEC", "20"))
 FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", "40"))
-FEED_AGITATOR_PCT         = int(os.environ.get("LUNA_FEED_AGITATOR_PCT", "50"))
+FEED_AGITATOR_PCT         = int(os.environ.get("LUNA_FEED_AGITATOR_PCT", "75"))
 FEED_AGITATOR_DIR         = os.environ.get("LUNA_FEED_AGITATOR_DIR", "REV").upper()
 
 
@@ -1440,8 +1440,8 @@ def api_feed_start():
         agitator_pct = int(body.get("agitator_pct", FEED_AGITATOR_PCT))
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
-        if not (0 <= agitator_pct <= 50):
-            return jsonify({"ok": False, "error": "agitator_pct must be 0-50"}), 400
+        if not (0 <= agitator_pct <= 75):
+            return jsonify({"ok": False, "error": "agitator_pct must be 0-75"}), 400
         if meter_period <= 0 or meter_on < 0 or meter_on > meter_period:
             return jsonify({"ok": False, "error": "meter timing invalid"}), 400
         feeder.start(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct)

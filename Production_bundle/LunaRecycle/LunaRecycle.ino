@@ -66,6 +66,9 @@
  *   RPM_DEBUG_ON / RPM_DEBUG_OFF    toggle the [RPM_RAW] stream
  *   [RPM_RAW] period_us=98765 rpm_raw=486 rpm_avg=490
  *
+ * Hall RPM sensing master switch (default OFF while chasing motor EMI):
+ *   HALL_ON / HALL_OFF              attach / detach the D2 hall interrupt
+ *
  * -- Pin map (Mega 2560) ------------------------------------------------------
  *
  *   Gate servo L / R   ->  D9  / D10
@@ -331,7 +334,11 @@ unsigned long          mixerPeriodSum   = 0;
 int                    mixerPeriodCount = 0;
 int                    mixerPeriodHead  = 0;
 bool                   mixerRawDebug   = true;   // stream raw readings (RPM_DEBUG_ON/OFF)
-bool                   mixerHallAttached   = true;   // false while the noise guard has it paused
+// Hall RPM measurement master switch. Disabled by default while we chase an EMI
+// issue where the mixer motor's noise on the D2 interrupt drops the serial link.
+// Toggle live with HALL_ON / HALL_OFF (no re-flash needed).
+bool                   mixerHallEnabled    = false;  // false = interrupt never attached
+bool                   mixerHallAttached   = false;  // false while disabled or noise-paused
 unsigned long          mixerNoiseWindowMs  = 0;      // start of the current supervision window
 unsigned long          mixerHallReattachMs = 0;      // when to re-arm after a noise pause
 
@@ -486,6 +493,7 @@ void mixerOnPulse() {
 // commands work again), then re-arms. Real signals never trip it because the
 // threshold is ~40x the fastest physically possible pulse rate.
 void mixerGuardHall() {
+  if (!mixerHallEnabled) return;   // RPM measurement turned off (HALL_OFF)
   unsigned long nowMs = millis();
 
   if (!mixerHallAttached) {
@@ -519,6 +527,7 @@ void mixerGuardHall() {
 }
 
 void mixerUpdateRpm() {
+  if (!mixerHallEnabled) { mixerRpm = 0.0f; return; }   // RPM measurement off (HALL_OFF)
   // Atomically snapshot the ISR-owned values.
   noInterrupts();
   unsigned long periodUs   = mixerPeriodUs;
@@ -580,7 +589,39 @@ void mixerUpdateRpm() {
 
 void mixerRpmStatus() {
   Serial.print(F("[RPM] mixer_rpm="));
-  Serial.println(mixerRpm, 0);
+  Serial.print(mixerRpm, 0);
+  Serial.println(mixerHallEnabled ? F("") : F(" (hall OFF)"));
+}
+
+// Attach / detach the hall-effect interrupt at runtime so RPM sensing can be
+// turned off entirely (e.g. to rule the D2 interrupt out as an EMI / serial-drop
+// culprit) without re-flashing.
+void mixerHallEnable() {
+  mixerHallEnabled = true;
+  if (!mixerHallAttached) {
+    noInterrupts();
+    mixerEdgeCount = 0;
+    mixerNewPeriod = false;
+    interrupts();
+    mixerLastEdgeUs = micros();
+    attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
+    mixerHallAttached = true;
+  }
+  mixerNoiseWindowMs = millis();
+  Serial.println(F("[RPM] hall sensor ENABLED"));
+}
+
+void mixerHallDisable() {
+  if (mixerHallAttached) {
+    detachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor));
+    mixerHallAttached = false;
+  }
+  mixerHallEnabled = false;
+  mixerRpm = 0.0f;
+  mixerPeriodSum   = 0;
+  mixerPeriodCount = 0;
+  mixerPeriodHead  = 0;
+  Serial.println(F("[RPM] hall sensor DISABLED"));
 }
 
 // ============================================================================
@@ -1742,6 +1783,12 @@ void handleCommand(const String& cmd) {
     mixerRawDebug = false;
     Serial.println(F("[RPM] raw debug OFF"));
 
+  } else if (cmd == "HALL_ON") {
+    mixerHallEnable();
+
+  } else if (cmd == "HALL_OFF") {
+    mixerHallDisable();
+
   } else if (cmd == "ENERGY_ON") {
     energyStreamEnabled = true;
     Serial.println(F("[ENERGY] stream ON"));
@@ -1947,9 +1994,13 @@ void setup() {
   pinMode(Mixer_motorController_IN2, OUTPUT);
   motorStop();
 
-  // Mixer screw RPM - hall-effect sensor on D2 (INT0), FALLING-edge pulses
+  // Mixer screw RPM - hall-effect sensor on D2 (INT0), FALLING-edge pulses.
+  // Only arm the interrupt if RPM sensing is enabled (default off; HALL_ON/OFF).
   pinMode(Mixer_screwRotationSensor, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
+  if (mixerHallEnabled) {
+    attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
+    mixerHallAttached = true;
+  }
 
   // INA219
   Wire.begin();

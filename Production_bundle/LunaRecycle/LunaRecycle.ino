@@ -186,6 +186,11 @@ const bool TC_pumpRelayActiveHigh = true;
 const bool ShredderOnOffActiveHigh = true;   // true: HIGH runs the motor
 const bool ShredderDirFwdIsHigh    = true;   // true: HIGH = forward
 
+// When changing direction while the shredder is spinning, stop the motor and
+// let the blades spin down for this long before re-energizing in the new
+// direction. Slamming a spinning shredder into reverse hammers the drivetrain.
+const unsigned long ShredderReversePauseMs = 1000;
+
 // Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
 // this are clamped so the agitator never exceeds this duty.
 const int AGITATOR_MAX_PERCENT = 50;
@@ -1138,8 +1143,17 @@ void shredderOff() {
 }
 
 void shredderSetDirection(bool fwd) {
-  shredderFwd = fwd;
-  shredderApply();
+  // If the motor is spinning and the direction actually changes, stop first,
+  // wait for the blades to spin down, then apply the new direction and restart.
+  if (shredderRunning && fwd != shredderFwd) {
+    shredderOff();
+    delay(ShredderReversePauseMs);
+    shredderFwd = fwd;
+    shredderOn();
+  } else {
+    shredderFwd = fwd;
+    shredderApply();
+  }
 }
 
 // ============================================================================

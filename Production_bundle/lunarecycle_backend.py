@@ -1434,6 +1434,19 @@ def api_estop():
     """Send ESTOP to Arduino and toggle off the dryer if connected."""
     errors: list[str] = []
 
+    # Stop the background automation threads FIRST. Otherwise the drying
+    # orchestrator / feed controller keep re-issuing MOTOR_SET (and other)
+    # commands every second, overriding the ESTOP within ~1 s so the operator
+    # "can't control anything" and the mixer keeps spinning.
+    try:
+        orchestrator.stop()
+    except Exception as exc:
+        errors.append(f"Drying stop: {exc}")
+    try:
+        feeder.stop()
+    except Exception as exc:
+        errors.append(f"Feed stop: {exc}")
+
     try:
         arduino.send("ESTOP")
     except Exception as exc:

@@ -168,6 +168,16 @@ const int           MIXER_RPM_WINDOW       = 8;          // pulses averaged for 
 const float         MIXER_RPM_SPIKE_RATIO  = 2.5f;       // backup gate: drop raw > 2.5x the averaged value
 const float         MIXER_RPM_MIN_VALID    = 60.0f;      // only apply the spike gate once a real speed is established
 
+// Hall interrupt noise guard. A brushed DC motor's EMI can flood the D2 edge
+// line with far more interrupts than any real speed produces (real pulses are
+// gated to <=50 Hz), starving loop() until the board appears frozen and can't
+// even be told to stop. If the raw edge rate in a supervision window is
+// impossibly high we treat it as electrical noise, pause the interrupt for a
+// short cooldown, then re-arm — so the firmware stays responsive throughout.
+const unsigned long MIXER_NOISE_WINDOW_MS   = 50;    // supervision window
+const unsigned long MIXER_NOISE_MAX_EDGES   = 100;   // >100 edges / 50 ms (2 kHz) = noise
+const unsigned long MIXER_NOISE_COOLDOWN_MS = 500;   // interrupt-off cooldown
+
 // ── Trash conveyor tunables ────────────────────────────────────────────────
 // Picker servo angles (deg) for a 270-degree servo driven by pulse width.
 const int TC_servoMinDeg  = 0;
@@ -184,12 +194,16 @@ const bool TC_pumpRelayActiveHigh = true;
 // Shredder motor controller (D25 = ON/OFF, D26 = direction). Adjust these to
 // match the drive's logic levels.
 const bool ShredderOnOffActiveHigh = true;   // true: HIGH runs the motor
-const bool ShredderDirFwdIsHigh    = true;   // true: HIGH = forward
+const bool ShredderDirFwdIsHigh    = false;   // true: HIGH = forward
 
 // When changing direction while the shredder is spinning, stop the motor and
 // let the blades spin down for this long before re-energizing in the new
 // direction. Slamming a spinning shredder into reverse hammers the drivetrain.
-const unsigned long ShredderReversePauseMs = 1000;
+const unsigned long ShredderReversePauseMs = 5000;
+
+// Delay between setting the shredder direction pin and switching the motor ON,
+// so the drive latches a stable direction signal before it energizes.
+const unsigned long ShredderDirSettleMs = 1000;   // [tune]
 
 // Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
 // this are clamped so the agitator never exceeds this duty.
@@ -308,6 +322,7 @@ bool energyStreamEnabled = false;   // auto 500 ms [ENERGY] telemetry (ENERGY_ON
 volatile unsigned long mixerLastEdgeUs = 0;   // micros() of last accepted pulse
 volatile unsigned long mixerPeriodUs   = 0;   // last accepted inter-pulse interval
 volatile bool          mixerNewPeriod  = false;
+volatile unsigned long mixerEdgeCount  = 0;   // raw edges (incl. noise) for the storm guard
 float                  mixerRpm        = 0.0;
 // Moving average of the last MIXER_RPM_WINDOW pulse periods. Averaging periods
 // (not instantaneous RPMs) yields the true mean speed over the window.
@@ -316,6 +331,9 @@ unsigned long          mixerPeriodSum   = 0;
 int                    mixerPeriodCount = 0;
 int                    mixerPeriodHead  = 0;
 bool                   mixerRawDebug   = true;   // stream raw readings (RPM_DEBUG_ON/OFF)
+bool                   mixerHallAttached   = true;   // false while the noise guard has it paused
+unsigned long          mixerNoiseWindowMs  = 0;      // start of the current supervision window
+unsigned long          mixerHallReattachMs = 0;      // when to re-arm after a noise pause
 
 // Trash conveyor state machine.
 enum TCState {
@@ -453,12 +471,51 @@ void motorStatus() {
 // ============================================================================
 
 void mixerOnPulse() {
+  mixerEdgeCount++;   // count every edge (real or noise) for the storm guard
   unsigned long nowUs = micros();
   unsigned long dt = nowUs - mixerLastEdgeUs;
   if (dt < MIXER_MIN_PULSE_US) return;   // glitch / contact bounce - ignore
   mixerLastEdgeUs = nowUs;
   mixerPeriodUs   = dt;
   mixerNewPeriod  = true;
+}
+
+// Detect and ride out an EMI-driven interrupt storm on the hall pin. Called
+// every loop; if the ISR is firing far faster than any real screw speed could,
+// it detaches the interrupt for a cooldown (freeing the CPU so serial / motor
+// commands work again), then re-arms. Real signals never trip it because the
+// threshold is ~40x the fastest physically possible pulse rate.
+void mixerGuardHall() {
+  unsigned long nowMs = millis();
+
+  if (!mixerHallAttached) {
+    // Paused for noise: re-arm once the cooldown has elapsed.
+    if ((long)(nowMs - mixerHallReattachMs) >= 0) {
+      noInterrupts();
+      mixerEdgeCount = 0;
+      interrupts();
+      attachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor), mixerOnPulse, FALLING);
+      mixerHallAttached  = true;
+      mixerNoiseWindowMs = nowMs;
+    }
+    return;
+  }
+
+  if (nowMs - mixerNoiseWindowMs >= MIXER_NOISE_WINDOW_MS) {
+    noInterrupts();
+    unsigned long edges = mixerEdgeCount;
+    mixerEdgeCount = 0;
+    interrupts();
+    mixerNoiseWindowMs = nowMs;
+
+    if (edges > MIXER_NOISE_MAX_EDGES) {
+      detachInterrupt(digitalPinToInterrupt(Mixer_screwRotationSensor));
+      mixerHallAttached   = false;
+      mixerHallReattachMs = nowMs + MIXER_NOISE_COOLDOWN_MS;
+      mixerRpm = 0.0f;
+      Serial.println(F("[RPM] hall noise storm detected - interrupt paused"));
+    }
+  }
 }
 
 void mixerUpdateRpm() {
@@ -1146,6 +1203,11 @@ void shredderApply() {
   bool onLevel  = ShredderOnOffActiveHigh ? shredderRunning : !shredderRunning;
   // Set direction before enabling so the drive sees a stable dir signal.
   digitalWrite(Shredder_motorController_direction, dirLevel ? HIGH : LOW);
+  // When energizing, give the direction input time to settle before the ON
+  // edge; skipped when turning off (no need to stall the loop).
+  if (shredderRunning) {
+    delay(ShredderDirSettleMs);
+  }
   digitalWrite(Shredder_motorController_onOff, onLevel ? HIGH : LOW);
 }
 
@@ -1948,6 +2010,10 @@ void setup() {
 }
 
 void loop() {
+  // Watch the hall-sensor interrupt for an EMI-driven edge storm and pause it if
+  // it fires impossibly fast, so mixer-motor noise can never freeze the board.
+  mixerGuardHall();
+
   readSerial();
 
   // Service the stepper immediately after any serial handling so a command

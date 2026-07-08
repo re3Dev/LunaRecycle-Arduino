@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import glob
 import os
+import termios
 import threading
 import time
 from typing import Optional
@@ -88,6 +89,8 @@ def serve_model():
 
 class ArduinoBridge:
     """Thread-safe serial bridge to the Arduino running LunaRecycle.ino."""
+
+    SERIAL_IO_EXCEPTIONS = (serial.SerialException, OSError, termios.error)
 
     def __init__(self) -> None:
         self._ser: Optional[serial.Serial] = None
@@ -250,7 +253,7 @@ class ArduinoBridge:
         with self._lock:
             try:
                 return self._send_command(cmd)
-            except (serial.SerialException, OSError) as exc:
+            except self.SERIAL_IO_EXCEPTIONS as exc:
                 # Drop the handle so the supervisor reconnects rather than
                 # leaving a half-dead port that fails every future command.
                 self._reset_serial_locked()
@@ -325,7 +328,7 @@ class ArduinoBridge:
                 self._last_status_ts = time.monotonic()
             return {"connected": True, "data": result or dict(self._last_status),
                     "cached": not bool(result)}
-        except (serial.SerialException, OSError) as exc:
+        except self.SERIAL_IO_EXCEPTIONS as exc:
             self._reset_serial_locked()
             return {"connected": False, "data": dict(self._last_status),
                     "cached": True, "error": str(exc)}

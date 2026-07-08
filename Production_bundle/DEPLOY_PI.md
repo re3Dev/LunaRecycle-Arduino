@@ -59,7 +59,7 @@ sudo systemctl restart lunarecycle-backend
 
 | Variable             | Default          | Purpose                              |
 | -------------------- | ---------------- | ------------------------------------ |
-| `LUNA_ARDUINO_PORT`  | `/dev/ttyACM0`   | Arduino serial port                  |
+| `LUNA_ARDUINO_PORT`  | `/dev/ttyACM0` or `/dev/serial/by-id/...` | Arduino serial port |
 | `LUNA_ARDUINO_BAUD`  | `115200`         | Arduino baud rate                    |
 | `LUNA_DRYER_PORT`    | `/dev/ttyUSB0`   | Dryer RS485 adapter port             |
 | `LUNA_DRYER_BAUD`    | `57600`          | Dryer Modbus baud rate               |
@@ -89,6 +89,14 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 Then set `LUNA_ARDUINO_PORT=/dev/lunarecycle-arduino` and
 `LUNA_DRYER_PORT=/dev/lunarecycle-dryer`.
+
+If the Mega already has a stable `/dev/serial/by-id/...` node, you can skip the
+udev rule for the Arduino entirely and point `LUNA_ARDUINO_PORT` straight at
+that by-id path. Example from the LunaRecycle bench:
+
+```bash
+LUNA_ARDUINO_PORT=/dev/serial/by-id/usb-Arduino__www.arduino.cc__0042_145323030323517080D0-if00
+```
 
 ## Service management
 

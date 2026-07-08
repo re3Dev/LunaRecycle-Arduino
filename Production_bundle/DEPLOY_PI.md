@@ -64,6 +64,8 @@ sudo systemctl restart lunarecycle-backend
 | `LUNA_DRYER_PORT`    | `/dev/ttyUSB0`   | Dryer RS485 adapter port             |
 | `LUNA_DRYER_BAUD`    | `57600`          | Dryer Modbus baud rate               |
 | `LUNA_DRYER_ID`      | `1`              | Dryer Modbus device ID               |
+| `LUNA_MIX_RAMP_STEPS`| `5`              | Mixer soft-start step count          |
+| `LUNA_MIX_RAMP_STEP_SEC` | `0.20`       | Delay between mixer ramp steps (s)   |
 | `LUNA_HOST`          | `0.0.0.0`        | Bind address (`127.0.0.1` = Pi only) |
 | `LUNA_PORT`          | `5055`           | HTTP port                            |
 

@@ -1023,6 +1023,8 @@ def api_sr_status():
 MIX_ON_SECONDS       = int(os.environ.get("LUNA_MIX_ON_SEC", "120"))       # mix 2 min
 MIX_PERIOD_SECONDS   = int(os.environ.get("LUNA_MIX_PERIOD_SEC", "600"))   # every 10 min
 MIX_PWM              = int(os.environ.get("LUNA_MIX_PWM", "150"))          # 0-255 mixer speed
+MIX_RAMP_STEPS       = int(os.environ.get("LUNA_MIX_RAMP_STEPS", "5"))     # soft-start increments
+MIX_RAMP_STEP_SEC    = float(os.environ.get("LUNA_MIX_RAMP_STEP_SEC", "0.20"))  # delay between increments
 MIX_UP_DIR           = os.environ.get("LUNA_MIX_UP_DIR", "FWD").upper()    # upward mixing dir
 MIX_DOWN_DIR         = "REV" if MIX_UP_DIR == "FWD" else "FWD"
 DISCHARGE_SECONDS    = int(os.environ.get("LUNA_DISCHARGE_SEC", "60"))     # downward mix time
@@ -1081,6 +1083,29 @@ class ProcessOrchestrator:
             self._note(f"arduino '{cmd}' failed: {exc}")
             return []
 
+    def _motor_ramp(self, target_pwm: int, direction: str):
+        """Soft-start the mixer instead of slamming straight to the target PWM.
+
+        The screw motor is the remaining likely USB-drop trigger. Ramping in a
+        few small steps reduces both startup current and brush EMI versus a
+        single abrupt MOTOR_SET 150 FWD/REV.
+        """
+        target_pwm = max(0, min(255, int(target_pwm)))
+        steps = max(1, int(MIX_RAMP_STEPS))
+        step_delay = max(0.0, float(MIX_RAMP_STEP_SEC))
+
+        if target_pwm == 0:
+            self._arduino("MOTOR_STOP")
+            return
+
+        for idx in range(1, steps + 1):
+            if self._stop.is_set():
+                return
+            pwm = max(1, int(round(target_pwm * idx / steps)))
+            self._arduino(f"MOTOR_SET {pwm} {direction}")
+            if idx < steps:
+                self._stop.wait(step_delay)
+
     def _dryer_on(self, temp_c: int):
         try:
             if not dryer.connected:
@@ -1129,7 +1154,7 @@ class ProcessOrchestrator:
                 phase_t = (now - cycle_start) % MIX_PERIOD_SECONDS
                 want_mix = phase_t < MIX_ON_SECONDS
                 if want_mix and not mixing:
-                    self._arduino(f"MOTOR_SET {MIX_PWM} {MIX_UP_DIR}")
+                    self._motor_ramp(MIX_PWM, MIX_UP_DIR)
                     mixing = True
                     with self._lock:
                         self.mixing = True
@@ -1158,7 +1183,7 @@ class ProcessOrchestrator:
                 self.message = "Discharging: gates open, mixer reversing down."
             self._dryer_off()
             self._arduino(BLASTGATE_OPEN_CMD)
-            self._arduino(f"MOTOR_SET {MIX_PWM} {MIX_DOWN_DIR}")
+            self._motor_ramp(MIX_PWM, MIX_DOWN_DIR)
             with self._lock:
                 self.mixing = True
             end = time.monotonic() + DISCHARGE_SECONDS

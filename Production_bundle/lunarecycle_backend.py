@@ -16,6 +16,7 @@ All endpoints return JSON:  { "ok": true, ... }  or  { "ok": false, "error": "..
 
 from __future__ import annotations
 
+import glob
 import os
 import threading
 import time
@@ -105,6 +106,33 @@ class ArduinoBridge:
 
     # ── Connection ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _port_candidates(port: str) -> list[str]:
+        """Return connection candidates, resilient to ttyACM re-enumeration.
+
+        On the Pi the Mega can disappear as /dev/ttyACM0 and come back as
+        /dev/ttyACM1 after EMI / USB hiccups. If that happens, retrying only the
+        stale path wedges the backend until a manual restart or env edit. Try
+        the requested path first, then sibling ACM nodes and stable by-id names.
+        """
+        candidates: list[str] = []
+
+        def add(path: str) -> None:
+            if path and path not in candidates:
+                candidates.append(path)
+
+        add(port)
+
+        base = os.path.basename(port)
+        if base.startswith("ttyACM"):
+            for path in sorted(glob.glob("/dev/ttyACM*")):
+                add(path)
+
+        for path in sorted(glob.glob("/dev/serial/by-id/*")):
+            add(path)
+
+        return candidates
+
     def connect(self, port: str = ARDUINO_PORT, baudrate: int = ARDUINO_BAUDRATE) -> bool:
         with self._lock:
             self._port = port
@@ -113,16 +141,24 @@ class ArduinoBridge:
             if self._ser and self._ser.is_open:
                 self.connected = True
                 return True
-            try:
-                self._ser = serial.Serial(port, baudrate, timeout=ARDUINO_TIMEOUT)
-                time.sleep(2.0)          # wait for Arduino reset after DTR pulse
-                self._ser.reset_input_buffer()
-                self.connected = True
-                return True
-            except (serial.SerialException, OSError) as exc:
-                self._ser = None
-                self.connected = False
-                raise RuntimeError(str(exc)) from exc
+
+            last_exc: Exception | None = None
+            for candidate in self._port_candidates(port):
+                try:
+                    self._ser = serial.Serial(candidate, baudrate, timeout=ARDUINO_TIMEOUT)
+                    time.sleep(2.0)          # wait for Arduino reset after DTR pulse
+                    self._ser.reset_input_buffer()
+                    self.connected = True
+                    self._port = candidate   # remember the working node for next reconnect
+                    return True
+                except (serial.SerialException, OSError) as exc:
+                    self._ser = None
+                    self.connected = False
+                    last_exc = exc
+
+            if last_exc is None:
+                last_exc = RuntimeError(f"No serial candidates found for {port}")
+            raise RuntimeError(str(last_exc)) from last_exc
 
     def disconnect(self) -> None:
         with self._lock:

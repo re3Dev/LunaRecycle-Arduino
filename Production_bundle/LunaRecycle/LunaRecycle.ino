@@ -1071,6 +1071,23 @@ void tcUpdate() {
   tcRunState();
 }
 
+// Advance the conveyor stepper an extra time each loop, right after serial
+// handling, so a serial-heavy pass still emits step pulses and the motion stays
+// smooth. Only runs in the moveTo-driven states; homing uses runSpeed() and the
+// SR phases keep the stepper parked, so calling run() there would fight them.
+void tcServiceStepper() {
+  switch (tcState) {
+    case TC_BACK_TO_BAG1:
+    case TC_MOVE_TO_BAG:
+    case TC_BAG_TO_SHREDDER:
+    case TC_MANUAL_MOVE:
+      TC_stepper.run();
+      break;
+    default:
+      break;
+  }
+}
+
 const __FlashStringHelper* tcStateName() {
   switch (tcState) {
     case TC_HOMING:
@@ -1557,10 +1574,10 @@ void handleBlastGateCommand(const String& cmd) {
 void printAllStatus() {
   // While the conveyor stepper is moving, keep the reply tiny (<64 bytes) so
   // it fits entirely in the UART TX ring buffer and Serial.print returns
-  // immediately instead of blocking. A full status is ~200 bytes; at 9600 baud
-  // the overflow stalls the loop for ~150 ms, starving AccelStepper.run() and
-  // making homing / moves visibly stutter. Live position is preserved; the
-  // remaining fields resume the moment the stepper parks.
+  // immediately instead of blocking. A full status is ~200 bytes; if it
+  // overflows the buffer the loop stalls while it drains, starving
+  // AccelStepper.run() and making homing / moves visibly stutter. Live position
+  // is preserved; the remaining fields resume the moment the stepper parks.
   if (TC_stepper.isRunning()) {
     Serial.print(F("[STATUS] tc_state="));
     Serial.print(tcStateName());
@@ -1854,7 +1871,7 @@ void readSerial() {
 // ============================================================================
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   // Gate servos - start closed
   Mixer_shredderGateLeftServoMotor.attach(Mixer_shredderGateLeftServoMotor_pin);
@@ -1932,6 +1949,10 @@ void setup() {
 
 void loop() {
   readSerial();
+
+  // Service the stepper immediately after any serial handling so a command
+  // that arrives mid-move doesn't leave a gap in the step-pulse train.
+  tcServiceStepper();
 
   // Drive the trash-conveyor stepper / pick-place state machine
   tcUpdate();

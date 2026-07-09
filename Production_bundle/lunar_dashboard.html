@@ -538,7 +538,7 @@
     <div class="grid">
       <div class="stack" style="grid-template-rows: auto 1fr;">
         <!-- ── Dryer (minimal feedback) ──────────────────────────────── -->
-        <section class="card">
+        <section class="card" id="commandConsoleCard">
           <div class="hd">
             <div class="title">
               <div class="sicon" aria-hidden="true">≈</div>
@@ -599,7 +599,7 @@
         </section>
 
         <!-- ── Manual Command Console ────────────────────────────────── -->
-        <section class="card">
+        <section class="card" id="processAutomationCard">
           <div class="hd">
             <div class="title">
               <div class="sicon" aria-hidden="true">›_</div>
@@ -1507,6 +1507,21 @@
       if(el) el.addEventListener(evt, fn);
     }
 
+    function swapAutomationAndConsoleCards(){
+      const consoleCard = document.getElementById("commandConsoleCard");
+      const processCard = document.getElementById("processAutomationCard");
+      if(!consoleCard || !processCard) return;
+
+      const consoleParent = consoleCard.parentNode;
+      const processParent = processCard.parentNode;
+      if(!consoleParent || !processParent || consoleParent === processParent) return;
+
+      const consoleNext = consoleCard.nextSibling;
+      const processNext = processCard.nextSibling;
+      consoleParent.insertBefore(processCard, consoleNext);
+      processParent.insertBefore(consoleCard, processNext);
+    }
+
     // Safe wrappers used in render() to tolerate missing PLANNED-card elements
     function setText(id, val){ const el = document.getElementById(id); if(el) el.textContent = val; }
     function setStyle(id, prop, val){ const el = document.getElementById(id); if(el) el.style[prop] = val; }
@@ -1627,6 +1642,10 @@
     }
 
     function init(){
+      // Layout preference: show Process Automation where the console card was,
+      // and move the Command Console into the former automation slot.
+      swapAutomationAndConsoleCards();
+
       $("#log").textContent = "";
       log("Console initialized.", "good");
       log("Dryer card: switch to LIVE to poll the local Modbus API.", "info");

@@ -517,6 +517,7 @@
       overflow:hidden;
       text-overflow:ellipsis;
     }
+    .wf-hidden{display:none !important;}
 
     /* 1080p desktop density pass: keep the dashboard on one screen while
        preserving card readability and interaction targets. */
@@ -925,12 +926,27 @@
           <div class="bd">
             <div class="workflow-grid">
               <div class="cell">
+                <label for="wfSrMode">SR mode</label>
+                <select id="wfSrMode">
+                  <option value="units" selected>Units</option>
+                  <option value="ratio">Ratio (until empty)</option>
+                </select>
+              </div>
+              <div class="cell">
                 <label for="wfPeUnits">PE units</label>
                 <input type="number" id="wfPeUnits" min="0" step="1" value="0" />
               </div>
               <div class="cell">
                 <label for="wfPaUnits">PA units</label>
                 <input type="number" id="wfPaUnits" min="0" step="1" value="0" />
+              </div>
+              <div class="cell wf-hidden" id="wfRatioPeCell">
+                <label for="wfRatioPe">Ratio PE part</label>
+                <input type="number" id="wfRatioPe" min="1" step="1" value="4" />
+              </div>
+              <div class="cell wf-hidden" id="wfRatioPaCell">
+                <label for="wfRatioPa">Ratio PA part</label>
+                <input type="number" id="wfRatioPa" min="1" step="1" value="1" />
               </div>
               <div class="cell">
                 <label for="wfDryMinutes">Dry min</label>
@@ -961,6 +977,7 @@
               <button class="btn mini primary" id="btnWorkflowStart">Start Workflow</button>
               <button class="btn mini danger" id="btnWorkflowStop">Stop Workflow</button>
             </div>
+            <div class="hint" id="workflowModeHint">SR uses fixed PE/PA unit counts.</div>
             <div class="hint" id="workflowStatusText">Ready.</div>
             <div class="log" id="workflowLog" style="margin-top:6px; max-height:110px;" aria-label="Workflow log"></div>
           </div>
@@ -1516,10 +1533,29 @@
       await feedRefreshStatus(true);
     }
 
+    function workflowUpdateModeUI(){
+      const mode = String($("#wfSrMode")?.value || "units").toLowerCase();
+      const ratio = mode === "ratio";
+      const ratioPeCell = $("#wfRatioPeCell");
+      const ratioPaCell = $("#wfRatioPaCell");
+      if(ratioPeCell) ratioPeCell.classList.toggle("wf-hidden", !ratio);
+      if(ratioPaCell) ratioPaCell.classList.toggle("wf-hidden", !ratio);
+      const hint = $("#workflowModeHint");
+      if(hint){
+        hint.textContent = ratio
+          ? "SR uses PE:PA ratio and runs until IR no longer detects bags."
+          : "SR uses fixed PE/PA unit counts.";
+      }
+    }
+
     function readWorkflowConfig(){
+      const srMode = String($("#wfSrMode")?.value || "units").toLowerCase();
       const cfg = {
+        srMode,
         pe: parseInt($("#wfPeUnits")?.value || "0", 10) || 0,
         pa: parseInt($("#wfPaUnits")?.value || "0", 10) || 0,
+        ratioPe: parseInt($("#wfRatioPe")?.value || "0", 10) || 0,
+        ratioPa: parseInt($("#wfRatioPa")?.value || "0", 10) || 0,
         dryMinutes: parseFloat($("#wfDryMinutes")?.value || "0"),
         dryTempC: parseInt($("#wfDryTempC")?.value || "0", 10),
         primeSec: parseInt($("#wfFeedPrimeSec")?.value || "0", 10) || 0,
@@ -1527,9 +1563,24 @@
         meterOnSec: parseInt($("#wfFeedMeterOnSec")?.value || "0", 10) || 0,
         meterPeriodSec: parseInt($("#wfFeedMeterPeriodSec")?.value || "0", 10) || 0,
       };
-      if(cfg.pe < 0 || cfg.pa < 0 || (cfg.pe + cfg.pa) <= 0){
-        throw new Error("Set PE/PA units: at least one must be greater than zero.");
+
+      if(cfg.srMode === "ratio"){
+        if(cfg.ratioPe <= 0 || cfg.ratioPa <= 0){
+          throw new Error("Ratio mode requires PE and PA parts greater than zero.");
+        }
+        // Map ratio mode to large SR targets so firmware cadence follows the
+        // requested ratio while IR-based empty detection ends each stream.
+        const ratioScale = 1000;
+        cfg.pe = cfg.ratioPe * ratioScale;
+        cfg.pa = cfg.ratioPa * ratioScale;
+        cfg.srLabel = `${cfg.ratioPe}:${cfg.ratioPa} ratio until empty`;
+      }else{
+        if(cfg.pe < 0 || cfg.pa < 0 || (cfg.pe + cfg.pa) <= 0){
+          throw new Error("Set PE/PA units: at least one must be greater than zero.");
+        }
+        cfg.srLabel = `${cfg.pe} PE + ${cfg.pa} PA`;
       }
+
       if(!(cfg.dryMinutes > 0)){ throw new Error("Dry minutes must be greater than zero."); }
       if(!(cfg.dryTempC > 0 && cfg.dryTempC <= 250)){ throw new Error("Dry temp must be 1-250 C."); }
       if(cfg.vacPct < 0 || cfg.vacPct > 100){ throw new Error("Vacuum percent must be 0-100."); }
@@ -1612,7 +1663,7 @@
 
       S.workflowStopRequested = false;
       workflowSet("TC HOME", "Running homing before automation...", true);
-      workflowLog(`Starting workflow: SR ${cfg.pe} PE + ${cfg.pa} PA, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed vac ${cfg.vacPct}%`, "info");
+      workflowLog(`Starting workflow: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed vac ${cfg.vacPct}%`, "info");
 
       try{
         await workflowRunTcHome();
@@ -1936,6 +1987,7 @@
       // Unified Workflow
       on("btnWorkflowStart", "click", workflowStart);
       on("btnWorkflowStop",  "click", workflowStop);
+      on("wfSrMode", "change", workflowUpdateModeUI);
 
       on("btnDryerMode", "click", async ()=>{
         S.dryerIoLive = !S.dryerIoLive;
@@ -2041,6 +2093,7 @@
       S.heater_set = 60;
 
       bind();
+      workflowUpdateModeUI();
       render();
       requestAnimationFrame(loop);
     }

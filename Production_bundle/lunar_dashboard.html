@@ -133,8 +133,8 @@
     .btn.mini{padding: 8px 10px; font-size: 11px; border-radius: 11px}
 
     .wrap{
-      height: calc(100vh - 58px);
-      max-width: 1280px;
+      height: calc(100dvh - 58px);
+      max-width: 1720px;
       margin: 0 auto;
       padding: 12px 14px 14px;
     }
@@ -498,6 +498,51 @@
       grid-template-columns: repeat(3, 1fr);
       gap:10px;
     }
+
+    /* 1080p desktop density pass: keep the dashboard on one screen while
+       preserving card readability and interaction targets. */
+    @media (min-width: 1600px) and (min-height: 900px){
+      header{padding: 8px 12px; gap:10px}
+      .brand h1{font-size:13px}
+      .brand .sub{font-size:10px}
+
+      .wrap{
+        height: calc(100dvh - 52px);
+        max-width: 1880px;
+        padding: 8px 10px 10px;
+      }
+
+      .grid{gap:8px; grid-template-columns: 1.08fr 0.92fr}
+      .stack{gap:8px}
+
+      .card .hd{padding: 8px 10px 6px}
+      .card .bd{padding: 8px 10px 10px}
+      .card .ft{padding: 7px 10px 8px}
+
+      .sicon{width:26px; height:26px; border-radius:8px; font-size:12px}
+      .card .hd h2{font-size:11px}
+      .card .hd .hint{font-size:10px}
+
+      .pill{padding: 6px 9px; font-size:10px}
+      .btn{padding: 7px 9px; font-size:10px}
+      .btn.mini{padding: 6px 8px; font-size:10px}
+      input[type="number"], input[type="text"], select{padding: 7px 8px; font-size:10px}
+
+      .kv{padding: 7px 8px; border-radius: 10px}
+      .kv .k{font-size:9px}
+      .kv .v{font-size:11px; margin-top:2px}
+      .statechip{font-size:9px; padding:4px 7px}
+
+      .log{font-size:9px; padding:7px 8px; max-height:120px}
+
+      #processAutomationCard .split{
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap:8px;
+      }
+      #processAutomationCard .row{gap:6px}
+      #processAutomationCard .hint{font-size:10px}
+    }
+
     @media (max-width: 700px){
       .dryer-grid-3{grid-template-columns:1fr}
     }

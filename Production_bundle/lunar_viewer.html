@@ -1223,15 +1223,9 @@
     function isWorkflowLive(){
       const tcState = String(V.auto.tc.state || "").toUpperCase();
       const tcSeq = String(V.auto.tc.seq || "").toUpperCase();
-      const tcActive = tcSeq === "RUN" && ["HOMING","WAIT_HOME","PICKING","MANUAL","SIZERED"].includes(tcState);
+      const tcActive = tcState === "HOMING" || (tcSeq === "RUN" && ["PICKING","MANUAL","SIZERED"].includes(tcState));
       const srRunning = String(V.auto.sr.run || "").toUpperCase() === "YES";
-      const srPhase = String(V.auto.sr.phase || "IDLE").toUpperCase();
-      const srTouched = srPhase !== "IDLE";
-      const dryPhase = String(V.auto.dry.phase || "IDLE").toUpperCase();
-      const dryTouched = dryPhase !== "IDLE";
-      const feedPhase = String(V.auto.feed.phase || "IDLE").toUpperCase();
-      const feedTouched = feedPhase !== "IDLE";
-      return tcActive || srRunning || !!V.auto.dry.running || !!V.auto.feed.running || srTouched || dryTouched || feedTouched;
+      return tcActive || srRunning || !!V.auto.dry.running || !!V.auto.feed.running;
     }
 
     function chipClass(state){
@@ -1480,7 +1474,8 @@
       const feed = V.auto.feed;
 
       const tcState = String(tc.state || "—").toUpperCase();
-      const tcActive = ["HOMING","WAIT_HOME","PICKING","MANUAL"].includes(tcState);
+      const tcSeq = String(tc.seq || "").toUpperCase();
+      const tcActive = tcState === "HOMING" || (tcSeq === "RUN" && ["PICKING","MANUAL","SIZERED"].includes(tcState));
       const tcDone = tcState === "READY";
       const srRunning = String(sr.run || "").toUpperCase() === "YES";
       const srDone = !srRunning && Number(sr.shredded || 0) > 0;
@@ -1679,7 +1674,8 @@
       const printing  = V.printer.state === "PRINTING";
       const arduinoOk = V.arduinoConnected;
       const tcState = String(V.auto.tc.state || "").toUpperCase();
-      const tcActive = ["HOMING","WAIT_HOME","PICKING","MANUAL"].includes(tcState);
+      const tcSeq = String(V.auto.tc.seq || "").toUpperCase();
+      const tcActive = tcState === "HOMING" || (tcSeq === "RUN" && ["PICKING","MANUAL","SIZERED"].includes(tcState));
       const srRunning = String(V.auto.sr.run || "").toUpperCase() === "YES";
       const dryPhase = String(V.auto.dry.phase || "").toUpperCase();
       const dryActive = V.auto.dry.running && dryPhase === "DRYING";

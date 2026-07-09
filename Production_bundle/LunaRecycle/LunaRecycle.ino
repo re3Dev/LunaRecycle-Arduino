@@ -45,6 +45,7 @@
  *   VACUUM_SET <0-100>              Run vacuum motor (DS3502 wiper 0-127)
  *   VACUUM_STOP                     Stop the vacuum motor
  *   VACUUM_STATUS                   Print vacuum motor speed
+ *   VACUUM_REINIT                   Re-scan I2C and re-initialize DS3502
  *
  *   BLASTGATE_HOME <L|R|ALL>     Retract gate to MIN (0%)
  *   BLASTGATE_HOMEMAX <L|R|ALL>  Extend gate to MAX (100%)
@@ -219,6 +220,7 @@ const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir wit
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
 const uint8_t VACUUM_WIPER_FULL = 127;
+const uint8_t VACUUM_ADDR_CANDIDATES[] = { 0x28, 0x29, 0x2A, 0x2B };
 
 // ── Mixer blast gate (RoboClaw) tunables ───────────────────────────────────
 // RC pulse widths: 1500 us neutral; the extremes give full speed. speedPct
@@ -393,6 +395,7 @@ bool agitatorFwd       = true;   // true = FWD, false = REV
 // Mixer vacuum motor state (DS3502 digipot).
 int  vacuumPercent   = 0;        // 0..100
 bool vacuumDigipotOk = false;    // DS3502 present on I2C
+uint8_t vacuumDigipotAddr = 0;   // active DS3502 I2C address (if found)
 
 // Mixer blast gate estimated position state (indexed [LEFT, RIGHT]).
 unsigned long blastGateStrokeMs[2]   = { BG_DEFAULT_STROKE_MS, BG_DEFAULT_STROKE_MS };
@@ -1389,6 +1392,53 @@ void agitatorStatus() {
 //  Mixer Vacuum Motor - DS3502 digital-pot speed control (I2C)
 // ============================================================================
 
+bool i2cDevicePresent(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  return Wire.endTransmission() == 0;
+}
+
+void vacuumPrintI2cDevices() {
+  int found = 0;
+  Serial.print(F("[VACUUM] I2C devices:"));
+  for (uint8_t addr = 1; addr < 127; addr++) {
+    if (i2cDevicePresent(addr)) {
+      Serial.print(F(" 0x"));
+      if (addr < 16) Serial.print('0');
+      Serial.print(addr, HEX);
+      found++;
+    }
+  }
+  if (found == 0) {
+    Serial.print(F(" none"));
+  }
+  Serial.println();
+}
+
+bool vacuumInitDigipot(bool verbose) {
+  vacuumDigipotOk = false;
+  vacuumDigipotAddr = 0;
+
+  for (uint8_t i = 0; i < sizeof(VACUUM_ADDR_CANDIDATES); i++) {
+    uint8_t addr = VACUUM_ADDR_CANDIDATES[i];
+    if (Mixer_vacuumMotorDigipot.begin(addr, &Wire)) {
+      vacuumDigipotOk = true;
+      vacuumDigipotAddr = addr;
+      if (verbose) {
+        Serial.print(F("[VACUUM] DS3502 detected at 0x"));
+        if (addr < 16) Serial.print('0');
+        Serial.println(addr, HEX);
+      }
+      return true;
+    }
+  }
+
+  if (verbose) {
+    Serial.println(F("[VACUUM] DS3502 not detected on expected addresses (0x28-0x2B)"));
+    vacuumPrintI2cDevices();
+  }
+  return false;
+}
+
 void vacuumApply() {
   if (!vacuumDigipotOk) return;
   int percent = constrain(vacuumPercent, 0, 100);
@@ -1408,7 +1458,15 @@ void vacuumStop() {
 
 void vacuumStatus() {
   Serial.print(F("[VACUUM] percent="));
-  Serial.println(vacuumPercent);
+  Serial.print(vacuumPercent);
+  Serial.print(F(" present="));
+  Serial.print(vacuumDigipotOk ? F("YES") : F("NO"));
+  if (vacuumDigipotOk) {
+    Serial.print(F(" addr=0x"));
+    if (vacuumDigipotAddr < 16) Serial.print('0');
+    Serial.print(vacuumDigipotAddr, HEX);
+  }
+  Serial.println();
 }
 
 // ============================================================================
@@ -1946,8 +2004,8 @@ void handleCommand(const String& cmd) {
       Serial.println(F("[VACUUM] ERROR: percent must be 0-100"));
       return;
     }
-    if (!vacuumDigipotOk) {
-      Serial.println(F("[VACUUM] ERROR: DS3502 not found"));
+    if (!vacuumDigipotOk && !vacuumInitDigipot(false)) {
+      Serial.println(F("[VACUUM] ERROR: DS3502 not found (try VACUUM_REINIT)"));
       return;
     }
     vacuumSet(pct);
@@ -1959,6 +2017,15 @@ void handleCommand(const String& cmd) {
 
   } else if (cmd == "VACUUM_STATUS") {
     vacuumStatus();
+
+  } else if (cmd == "VACUUM_REINIT") {
+    bool ok = vacuumInitDigipot(true);
+    if (ok) {
+      vacuumStop();
+      Serial.println(F("[VACUUM] DS3502 re-initialized"));
+    } else {
+      Serial.println(F("[VACUUM] ERROR: DS3502 still not found"));
+    }
 
   } else if (cmd.startsWith("BLASTGATE_")) {
     handleBlastGateCommand(cmd);
@@ -2080,9 +2147,9 @@ void setup() {
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
   }
 
-  // DS3502 digital pot - vacuum motor speed control (shares the I2C bus)
-  vacuumDigipotOk = Mixer_vacuumMotorDigipot.begin();
-  if (!vacuumDigipotOk) {
+  // DS3502 digital pot - vacuum motor speed control (shares the I2C bus).
+  // Probe supported addresses so non-default A0/A1 strap settings still work.
+  if (!vacuumInitDigipot(true)) {
     Serial.println(F("[SYSTEM] WARNING: DS3502 not found - vacuum motor disabled"));
   }
   vacuumStop();

@@ -1069,6 +1069,7 @@ MIX_DOWN_DIR         = "REV" if MIX_UP_DIR == "FWD" else "FWD"
 DISCHARGE_SECONDS    = int(os.environ.get("LUNA_DISCHARGE_SEC", "60"))     # downward mix time
 DISCHARGE_SHAKE      = os.environ.get("LUNA_DISCHARGE_SHAKE", "1").strip().lower() not in ("0", "false", "off", "no")
 DISCHARGE_SHAKE_SEG_SEC = float(os.environ.get("LUNA_DISCHARGE_SHAKE_SEG_SEC", "5"))
+DISCHARGE_SHAKE_STOP_SEC = float(os.environ.get("LUNA_DISCHARGE_SHAKE_STOP_SEC", "1.5"))
 PREHEAT_LEAD_SECONDS = int(os.environ.get("LUNA_PREHEAT_LEAD_SEC", "1500"))  # 25 min printer lead
 BLASTGATE_OPEN_CMD   = os.environ.get("LUNA_BG_OPEN_CMD", "BLASTGATE_HOMEMAX ALL")
 BLASTGATE_CLOSE_CMD  = os.environ.get("LUNA_BG_CLOSE_CMD", "BLASTGATE_HOME ALL")
@@ -1182,17 +1183,32 @@ class ProcessOrchestrator:
             return
 
         seg = max(0.5, float(DISCHARGE_SHAKE_SEG_SEC))
+        stop_pause = max(0.0, float(DISCHARGE_SHAKE_STOP_SEC))
         direction_idx = 0
         directions = (MIX_DOWN_DIR, MIX_UP_DIR)
+        prev_direction = None
 
         while not self._stop.is_set() and time.monotonic() < end:
             direction = directions[direction_idx % 2]
+
+            # Keep the very first segment behavior as-is, but for subsequent
+            # shake reversals follow the same pattern as the initial dry->
+            # discharge transition: stop first, hold briefly at zero, then
+            # soft-ramp into the new direction.
+            if prev_direction is not None and direction != prev_direction:
+                self._arduino("MOTOR_STOP")
+                with self._lock:
+                    self.mixing = False
+                if stop_pause > 0.0:
+                    self._stop.wait(stop_pause)
+
             self._motor_ramp(MIX_PWM, direction)
             with self._lock:
                 self.mixing = True
             phase_end = min(end, time.monotonic() + seg)
             while not self._stop.is_set() and time.monotonic() < phase_end:
                 self._stop.wait(0.25)
+            prev_direction = direction
             direction_idx += 1
 
     # ── background run loop ──────────────────────────────────────────────────

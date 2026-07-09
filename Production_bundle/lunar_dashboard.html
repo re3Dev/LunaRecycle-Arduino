@@ -535,12 +535,46 @@
 
       .log{font-size:9px; padding:7px 8px; max-height:120px}
 
+      #processAutomationCard .bd{
+        padding: 6px 8px 8px;
+      }
       #processAutomationCard .split{
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap:8px;
+        gap:6px;
       }
-      #processAutomationCard .row{gap:6px}
-      #processAutomationCard .hint{font-size:10px}
+      #processAutomationCard .kv{
+        padding: 5px 6px;
+      }
+      #processAutomationCard .kv .k{
+        font-size: 8px;
+      }
+      #processAutomationCard .kv .v{
+        font-size: 10px;
+        margin-top: 1px;
+      }
+      #processAutomationCard .row{
+        gap:5px !important;
+        margin:4px 0 !important;
+      }
+      #processAutomationCard .row label{
+        font-size:10px !important;
+      }
+      #processAutomationCard input[type="number"]{
+        width: 56px !important;
+        padding: 3px 4px !important;
+        font-size: 11px !important;
+      }
+      #processAutomationCard .btn.mini{
+        padding: 5px 7px;
+      }
+      #processAutomationCard div[style*="border-top:1px solid var(--border)"]{
+        margin-top: 8px !important;
+        padding-top: 7px !important;
+      }
+      #processAutomationCard .hint{
+        font-size:9px;
+        margin-top:5px !important;
+      }
     }
 
     @media (max-width: 700px){

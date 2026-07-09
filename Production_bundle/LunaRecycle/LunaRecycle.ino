@@ -382,6 +382,7 @@ long srPaRemaining  = 0;
 int  srRatioPe      = 1;      // PE bags per single PA bag (cadence)
 int  srPeInCadence  = 0;
 long srBagsShredded = 0;
+bool srRequireBothStreams = false;  // true when SR started with both PE and PA targets
 unsigned long srPhaseStart = 0;
 
 // Mixer agitator state.
@@ -942,6 +943,11 @@ void tcMoveStepperTo(float targetMm) {
 bool srSelectNextBag() {
   bool pe = srPeRemaining > 0;
   bool pa = srPaRemaining > 0;
+
+  // In dual-stream SR runs (both targets provided), depleting either cassette
+  // should end SR and move on to the next process step.
+  if (srRequireBothStreams && (!pe || !pa)) return false;
+
   if (!pe && !pa) return false;
   // Pick PE while within the cadence and available; otherwise a single PA.
   if (pe && (!pa || srPeInCadence < srRatioPe)) {
@@ -987,6 +993,7 @@ void srStart(long peUnits, long paUnits) {
   srPaRemaining  = paUnits;
   srPeInCadence  = 0;
   srBagsShredded = 0;
+  srRequireBothStreams = (peUnits > 0 && paUnits > 0);
   if (srPaRemaining > 0)
     srRatioPe = (int)max(1L, lround((double)srPeRemaining / (double)srPaRemaining));
   else
@@ -1031,6 +1038,7 @@ void srFinish(const __FlashStringHelper* why) {
   tcPumpOff();
   TC_stepper.disableOutputs();
   srRunning = false;
+  srRequireBothStreams = false;
   tcState = TC_READY;
   Serial.print(F("[SIZERED] Done - "));
   Serial.println(why);
@@ -1043,6 +1051,7 @@ void srAbort() {
   TC_stepper.stop();
   TC_stepper.disableOutputs();
   srRunning = false;
+  srRequireBothStreams = false;
   tcState = TC_READY;
 }
 

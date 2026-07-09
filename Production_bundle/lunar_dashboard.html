@@ -1528,6 +1528,8 @@
         try{ await apiArduino(path, { method: "POST" }); }
         catch(_){ /* stop path is best-effort */ }
       }
+      try{ await apiArduino("/gate/close", { method: "POST" }); }
+      catch(_){ /* gate close is best-effort */ }
       await srRefreshStatus(true);
       await dryRefreshStatus(true);
       await feedRefreshStatus(true);
@@ -1609,14 +1611,26 @@
       }
     }
 
-    async function workflowWaitSrDone(){
+    async function workflowWaitSrDone(cfg){
       let seenRunning = false;
       while(true){
         if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
         await srRefreshStatus(true);
         const run = String(S.srRun || "").toUpperCase();
         if(run === "YES") seenRunning = true;
-        if(seenRunning && run !== "YES") return;
+
+        // Ratio mode policy: finish SR as soon as either stream empties.
+        if(cfg && cfg.srMode === "ratio" && seenRunning){
+          const peLeft = Number(S.srPeLeft);
+          const paLeft = Number(S.srPaLeft);
+          if(Number.isFinite(peLeft) && Number.isFinite(paLeft) && (peLeft <= 0 || paLeft <= 0)){
+            try{ await apiArduino("/sr/stop", { method: "POST" }); }catch(_){ }
+            await srRefreshStatus(true);
+            return { stoppedByRatio: true, peLeft, paLeft };
+          }
+        }
+
+        if(seenRunning && run !== "YES") return { stoppedByRatio: false };
         await workflowSleep(2000);
       }
     }
@@ -1670,13 +1684,19 @@
         workflowLog("TC_HOME complete (conveyor READY).", "good");
 
         workflowSet("SIZE REDUCTION", "Running Step 1/3...", true);
+        try{ await apiArduino("/gate/open", { method: "POST" }); }catch(_){ }
         await apiArduino("/sr/start", {
           method: "POST",
           body: JSON.stringify({ pe_units: cfg.pe, pa_units: cfg.pa }),
         });
-        workflowLog("Step 1 started: Size Reduction.", "good");
-        await workflowWaitSrDone();
-        workflowLog("Step 1 complete.", "good");
+        workflowLog("Step 1 started: Size Reduction (shredder gates opened).", "good");
+        const srResult = await workflowWaitSrDone(cfg);
+        try{ await apiArduino("/gate/close", { method: "POST" }); }catch(_){ }
+        if(srResult && srResult.stoppedByRatio){
+          workflowLog(`Step 1 complete: ratio mode stopped on empty stream (PE left=${srResult.peLeft}, PA left=${srResult.paLeft}).`, "warn");
+        }else{
+          workflowLog("Step 1 complete (shredder gates closed).", "good");
+        }
 
         workflowSet("DRYING", "Running Step 2/3...", true);
         await apiArduino("/dry/start", {

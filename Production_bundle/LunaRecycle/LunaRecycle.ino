@@ -1035,6 +1035,7 @@ void srFinish(const __FlashStringHelper* why) {
 
 void srAbort() {
   shredderOff();
+  gateCloseCmd();
   tcPumpOff();
   TC_stepper.stop();
   TC_stepper.disableOutputs();

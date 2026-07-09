@@ -1067,6 +1067,8 @@ MIX_RAMP_STEP_SEC    = float(os.environ.get("LUNA_MIX_RAMP_STEP_SEC", "0.20"))  
 MIX_UP_DIR           = os.environ.get("LUNA_MIX_UP_DIR", "FWD").upper()    # upward mixing dir
 MIX_DOWN_DIR         = "REV" if MIX_UP_DIR == "FWD" else "FWD"
 DISCHARGE_SECONDS    = int(os.environ.get("LUNA_DISCHARGE_SEC", "60"))     # downward mix time
+DISCHARGE_SHAKE      = os.environ.get("LUNA_DISCHARGE_SHAKE", "1").strip().lower() not in ("0", "false", "off", "no")
+DISCHARGE_SHAKE_SEG_SEC = float(os.environ.get("LUNA_DISCHARGE_SHAKE_SEG_SEC", "5"))
 PREHEAT_LEAD_SECONDS = int(os.environ.get("LUNA_PREHEAT_LEAD_SEC", "1500"))  # 25 min printer lead
 BLASTGATE_OPEN_CMD   = os.environ.get("LUNA_BG_OPEN_CMD", "BLASTGATE_HOMEMAX ALL")
 BLASTGATE_CLOSE_CMD  = os.environ.get("LUNA_BG_CLOSE_CMD", "BLASTGATE_HOME ALL")
@@ -1167,6 +1169,32 @@ class ProcessOrchestrator:
             with self._lock:
                 self.dryer_on = False
 
+    def _run_discharge_motion(self):
+        """Run discharge motion, optionally alternating directions to shake down material."""
+        end = time.monotonic() + DISCHARGE_SECONDS
+
+        if not DISCHARGE_SHAKE:
+            self._motor_ramp(MIX_PWM, MIX_DOWN_DIR)
+            with self._lock:
+                self.mixing = True
+            while not self._stop.is_set() and time.monotonic() < end:
+                self._stop.wait(0.5)
+            return
+
+        seg = max(0.5, float(DISCHARGE_SHAKE_SEG_SEC))
+        direction_idx = 0
+        directions = (MIX_DOWN_DIR, MIX_UP_DIR)
+
+        while not self._stop.is_set() and time.monotonic() < end:
+            direction = directions[direction_idx % 2]
+            self._motor_ramp(MIX_PWM, direction)
+            with self._lock:
+                self.mixing = True
+            phase_end = min(end, time.monotonic() + seg)
+            while not self._stop.is_set() and time.monotonic() < phase_end:
+                self._stop.wait(0.25)
+            direction_idx += 1
+
     # ── background run loop ──────────────────────────────────────────────────
     def _run(self, total_seconds: int, temp_c: int):
         try:
@@ -1219,15 +1247,13 @@ class ProcessOrchestrator:
             # ── Discharge: dryer off, open gates, run mixer downward ──────────
             with self._lock:
                 self.phase = "DISCHARGE"
-                self.message = "Discharging: gates open, mixer reversing down."
+                if DISCHARGE_SHAKE:
+                    self.message = "Discharging: gates open, shaker alternating mixer direction."
+                else:
+                    self.message = "Discharging: gates open, mixer reversing down."
             self._dryer_off()
             self._arduino(BLASTGATE_OPEN_CMD)
-            self._motor_ramp(MIX_PWM, MIX_DOWN_DIR)
-            with self._lock:
-                self.mixing = True
-            end = time.monotonic() + DISCHARGE_SECONDS
-            while not self._stop.is_set() and time.monotonic() < end:
-                self._stop.wait(0.5)
+            self._run_discharge_motion()
             self._arduino("MOTOR_STOP")
             with self._lock:
                 self.mixing = False

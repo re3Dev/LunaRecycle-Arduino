@@ -66,6 +66,8 @@ sudo systemctl restart lunarecycle-backend
 | `LUNA_DRYER_ID`      | `1`              | Dryer Modbus device ID               |
 | `LUNA_MIX_RAMP_STEPS`| `5`              | Mixer soft-start step count          |
 | `LUNA_MIX_RAMP_STEP_SEC` | `0.20`       | Delay between mixer ramp steps (s)   |
+| `LUNA_DISCHARGE_SHAKE` | `1`            | Alternate mixer direction during discharge (`1`/`0`) |
+| `LUNA_DISCHARGE_SHAKE_SEG_SEC` | `5`     | Seconds per shake direction segment  |
 | `LUNA_FEED_AGITATOR_PCT` | `75`         | Feed automation agitator percent (0-75) |
 | `LUNA_HOST`          | `0.0.0.0`        | Bind address (`127.0.0.1` = Pi only) |
 | `LUNA_PORT`          | `5055`           | HTTP port                            |

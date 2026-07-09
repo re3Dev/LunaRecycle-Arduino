@@ -444,6 +444,67 @@
     }
     .pline-connector.active{ background: rgba(49,208,170,.65); }
     .pline-connector.active::after{ border-left-color: rgba(49,208,170,.65); }
+
+    /* ── Workflow tracker (mirrors automated process sequence) ─────────── */
+    .wf-strip{
+      display:flex; align-items:center; gap:6px;
+      margin: 0 0 8px;
+      overflow-x:auto;
+      padding-bottom:2px;
+    }
+    .wf-step{
+      flex: 0 0 auto;
+      min-width: 100px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      border:1px solid rgba(255,255,255,.08);
+      background: rgba(0,0,0,.12);
+      transition: border-color .25s ease, background .25s ease;
+    }
+    .wf-step .wf-name{
+      font-size:9px; font-weight:800; letter-spacing:.2px;
+      text-transform: uppercase; color: var(--muted2);
+    }
+    .wf-step .wf-val{
+      margin-top:2px;
+      font-size:10px; font-weight:750;
+      color: var(--muted);
+      font-family: var(--mono);
+      white-space:nowrap;
+    }
+    .wf-step.active{
+      border-color: rgba(49,208,170,.40);
+      background: rgba(49,208,170,.10);
+    }
+    .wf-step.active .wf-val{ color: rgba(229,255,247,.92); }
+    .wf-step.done{
+      border-color: rgba(122,167,255,.35);
+      background: rgba(122,167,255,.10);
+    }
+    .wf-step.warn{
+      border-color: rgba(255,207,90,.40);
+      background: rgba(255,207,90,.10);
+    }
+    .wf-arrow{ color: var(--muted2); font-size: 11px; flex:0 0 auto; }
+    .wf-meta{
+      display:grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap:5px;
+      margin: 0 0 8px;
+    }
+    .wf-msg{
+      font-size:10px;
+      color: var(--muted);
+      border:1px solid rgba(255,255,255,.07);
+      background: rgba(0,0,0,.10);
+      border-radius: 8px;
+      padding: 6px 8px;
+      margin-bottom: 8px;
+      min-height: 28px;
+    }
+    @media (max-width: 900px){
+      .wf-meta{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     /* -- Pick & Place visualizer -------------------------------------------- */
     .pp-viz{
       width:72px; height:30px; position:relative;
@@ -868,6 +929,25 @@
           <div class="pill"><span class="dot" id="arduinoDot"></span><span><strong id="arduinoConnState">&mdash;</strong></span></div>
         </div>
         <div class="bd" style="padding-top:10px; padding-bottom:10px;">
+          <div class="wf-strip" id="wfStrip">
+            <div class="wf-step" id="wfStepTc"><div class="wf-name">TC Home</div><div class="wf-val" id="wfTcVal">—</div></div>
+            <div class="wf-arrow">→</div>
+            <div class="wf-step" id="wfStepSr"><div class="wf-name">Size Reduction</div><div class="wf-val" id="wfSrVal">—</div></div>
+            <div class="wf-arrow">→</div>
+            <div class="wf-step" id="wfStepDry"><div class="wf-name">Drying</div><div class="wf-val" id="wfDryVal">—</div></div>
+            <div class="wf-arrow">→</div>
+            <div class="wf-step" id="wfStepDis"><div class="wf-name">Discharge</div><div class="wf-val" id="wfDisVal">—</div></div>
+            <div class="wf-arrow">→</div>
+            <div class="wf-step" id="wfStepFeed"><div class="wf-name">Feed</div><div class="wf-val" id="wfFeedVal">—</div></div>
+          </div>
+          <div class="wf-meta">
+            <div class="kv kv-sm"><div class="k">Current Stage</div><div class="v"><span id="wfCurrentStage">—</span></div></div>
+            <div class="kv kv-sm"><div class="k">Dry Time Left</div><div class="v"><span id="wfDryRemaining">—</span></div></div>
+            <div class="kv kv-sm"><div class="k">SR Remaining</div><div class="v"><span id="wfSrRemaining">—</span></div></div>
+            <div class="kv kv-sm"><div class="k">Feed State</div><div class="v"><span id="wfFeedState">—</span></div></div>
+          </div>
+          <div class="wf-msg" id="wfMessage">Workflow telemetry idle.</div>
+
           <div class="pipeline">
             <!-- 1. Trash Conveyor (pick & place) -->
             <div class="pline-node" id="pnode-conveyor">
@@ -1094,6 +1174,13 @@
         zone3_temp:  null,
         bed_temp:    null,
       },
+
+      auto: {
+        tc: { state: "—", pos_mm: null, seq: "—", trips: null },
+        sr: { run: "NO", phase: "—", pe_left: null, pa_left: null, shredded: null },
+        dry: { phase: "IDLE", running: false, remaining_seconds: 0, message: "" },
+        feed: { phase: "IDLE", running: false, agitator_on: false, message: "", vacuum_pct: null },
+      },
     };
 
     // ── Helpers ───────────────────────────────────────────────
@@ -1102,6 +1189,29 @@
     function set(id, txt){ const el = document.getElementById(id); if (el) el.textContent = txt; }
     function clamp(v, a, b){ return Math.min(b, Math.max(a, v)); }
     function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c])); }
+
+    function parseKvTaggedLine(line){
+      // Parses lines such as: [TC] state=READY pos_mm=-25.0 seq=RUN
+      const out = {};
+      if(!line) return out;
+      const clean = String(line).replace(/^\[[^\]]+\]\s*/, "");
+      for(const token of clean.split(/\s+/)){
+        const idx = token.indexOf("=");
+        if(idx > 0){
+          const k = token.slice(0, idx);
+          const v = token.slice(idx + 1);
+          out[k] = v;
+        }
+      }
+      return out;
+    }
+
+    function fmtDuration(sec){
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return `${m}:${String(r).padStart(2, "0")}`;
+    }
 
     function chipClass(state){
       if (!state || state === "—") return "";
@@ -1268,6 +1378,55 @@
       }
     }
 
+    async function pollWorkflowStatus(){
+      const [tcRes, srRes, dryRes, feedRes] = await Promise.allSettled([
+        fetchJson(`${ARDUINO_BASE}/tc/status`),
+        fetchJson(`${ARDUINO_BASE}/sr/status`),
+        fetchJson(`${ARDUINO_BASE}/dry/status`),
+        fetchJson(`${ARDUINO_BASE}/feed/status`),
+      ]);
+
+      if(tcRes.status === "fulfilled"){
+        const lines = tcRes.value.response || [];
+        const tcLine = lines.find(l => String(l).startsWith("[TC]")) || "";
+        const kv = parseKvTaggedLine(tcLine);
+        V.auto.tc.state = kv.state || V.auto.tc.state || "—";
+        V.auto.tc.pos_mm = kv.pos_mm !== undefined ? Number(kv.pos_mm) : V.auto.tc.pos_mm;
+        V.auto.tc.seq = kv.seq || V.auto.tc.seq || "—";
+        V.auto.tc.trips = kv.trips !== undefined ? Number(kv.trips) : V.auto.tc.trips;
+        V.apiReachable = true;
+      }
+
+      if(srRes.status === "fulfilled"){
+        const d = srRes.value.data || {};
+        V.auto.sr.run = d.run !== undefined ? String(d.run) : V.auto.sr.run;
+        V.auto.sr.phase = d.phase || V.auto.sr.phase || "—";
+        V.auto.sr.pe_left = d.pe_left !== undefined ? Number(d.pe_left) : V.auto.sr.pe_left;
+        V.auto.sr.pa_left = d.pa_left !== undefined ? Number(d.pa_left) : V.auto.sr.pa_left;
+        V.auto.sr.shredded = d.shredded !== undefined ? Number(d.shredded) : V.auto.sr.shredded;
+        V.apiReachable = true;
+      }
+
+      if(dryRes.status === "fulfilled"){
+        const d = dryRes.value.data || {};
+        V.auto.dry.phase = d.phase || "IDLE";
+        V.auto.dry.running = !!d.running;
+        V.auto.dry.remaining_seconds = Number(d.remaining_seconds || 0);
+        V.auto.dry.message = d.message || "";
+        V.apiReachable = true;
+      }
+
+      if(feedRes.status === "fulfilled"){
+        const d = feedRes.value.data || {};
+        V.auto.feed.phase = d.phase || "IDLE";
+        V.auto.feed.running = !!d.running;
+        V.auto.feed.agitator_on = !!d.agitator_on;
+        V.auto.feed.message = d.message || "";
+        V.auto.feed.vacuum_pct = d.vacuum_pct !== undefined ? Number(d.vacuum_pct) : null;
+        V.apiReachable = true;
+      }
+    }
+
     // ── Render ────────────────────────────────────────────────
     function render(){
       const now = new Date();
@@ -1287,9 +1446,62 @@
 
       renderDryer();
       renderArduino();
+      renderWorkflow();
       renderPipeline();
       renderPrinter();
       renderSummary();
+    }
+
+    function renderWorkflow(){
+      const tc = V.auto.tc;
+      const sr = V.auto.sr;
+      const dry = V.auto.dry;
+      const feed = V.auto.feed;
+
+      const tcState = String(tc.state || "—").toUpperCase();
+      const tcActive = ["HOMING","WAIT_HOME","PICKING","MANUAL"].includes(tcState);
+      const tcDone = tcState === "READY";
+      const srRunning = String(sr.run || "").toUpperCase() === "YES";
+      const srDone = !srRunning && Number(sr.shredded || 0) > 0;
+      const dryPhase = String(dry.phase || "IDLE").toUpperCase();
+      const dryActive = dry.running && dryPhase === "DRYING";
+      const disActive = dry.running && dryPhase === "DISCHARGE";
+      const dryDone = !dry.running && (dryPhase === "DONE" || dryPhase === "COMPLETE");
+      const feedActive = !!feed.running;
+
+      const stage = tcActive ? "TC HOME"
+                   : srRunning ? "SIZE REDUCTION"
+                   : dryActive ? "DRYING"
+                   : disActive ? "DISCHARGE"
+                   : feedActive ? "FEED"
+                   : (tcDone || srDone || dryDone) ? "READY / BETWEEN STEPS" : "IDLE";
+
+      set("wfCurrentStage", stage);
+      set("wfDryRemaining", dry.running ? fmtDuration(dry.remaining_seconds) : "—");
+      set("wfSrRemaining", (sr.pe_left != null && sr.pa_left != null) ? `PE ${sr.pe_left} / PA ${sr.pa_left}` : "—");
+      set("wfFeedState", feed.running ? `${feed.phase} · vac ${feed.vacuum_pct ?? "—"}%` : (feed.phase || "IDLE"));
+
+      set("wfTcVal", tc.state || "—");
+      set("wfSrVal", srRunning ? `RUN (${sr.phase || "—"})` : (sr.phase || "IDLE"));
+      set("wfDryVal", dryActive ? `RUN ${fmtDuration(dry.remaining_seconds)}` : (dry.phase || "IDLE"));
+      set("wfDisVal", disActive ? "ACTIVE" : (dryPhase === "DONE" ? "DONE" : "IDLE"));
+      set("wfFeedVal", feed.running ? (feed.phase || "RUN") : (feed.phase || "IDLE"));
+
+      const msg = [dry.message, feed.message].filter(Boolean)[0] || "Watching real-time workflow telemetry.";
+      set("wfMessage", msg);
+
+      function markStep(id, active, done, warn){
+        const el = document.getElementById(id);
+        if(!el) return;
+        el.classList.toggle("active", !!active);
+        el.classList.toggle("done", !!done && !active);
+        el.classList.toggle("warn", !!warn);
+      }
+      markStep("wfStepTc", tcActive, tcDone, false);
+      markStep("wfStepSr", srRunning, srDone, String(sr.phase || "").toUpperCase().includes("ERROR"));
+      markStep("wfStepDry", dryActive, dryDone, dryPhase === "ERROR" || dryPhase === "ABORTED");
+      markStep("wfStepDis", disActive, dryDone && !disActive, false);
+      markStep("wfStepFeed", feedActive, !feedActive && String(feed.phase || "").toUpperCase() === "STOPPED", String(feed.phase || "").toUpperCase() === "ERROR");
     }
 
     function renderDryer(){
@@ -1416,9 +1628,16 @@
       const doorsOpen = String(V.doorState).toUpperCase().includes("OPEN");
       const doorsMove = ["OPENING","CLOSING"].includes(String(V.doorState).toUpperCase());
       const motorRun  = (V.motorPwm || 0) > 0;
-      const dryerRun  = V.dryerConnected;
+      const dryerRun  = !!V.auto.dry.running;
       const printing  = V.printer.state === "PRINTING";
       const arduinoOk = V.arduinoConnected;
+      const tcState = String(V.auto.tc.state || "").toUpperCase();
+      const tcActive = ["HOMING","WAIT_HOME","PICKING","MANUAL"].includes(tcState);
+      const srRunning = String(V.auto.sr.run || "").toUpperCase() === "YES";
+      const dryPhase = String(V.auto.dry.phase || "").toUpperCase();
+      const dryActive = V.auto.dry.running && dryPhase === "DRYING";
+      const disActive = V.auto.dry.running && dryPhase === "DISCHARGE";
+      const feedActive = !!V.auto.feed.running;
 
       function nodeState(id, active, warn){
         const el = document.getElementById(id);
@@ -1431,26 +1650,26 @@
         if (el) el.classList.toggle("active", !!active);
       }
 
-      nodeState("pnode-conveyor", arduinoOk);
+      nodeState("pnode-conveyor", tcActive || (arduinoOk && srRunning));
       arrow("parrow-1", arduinoOk);
-      nodeState("pnode-gate", gateOpen && !gateMove, gateMove);
-      arrow("parrow-2", gateOpen);
-      nodeState("pnode-shredder", gateOpen);
-      arrow("parrow-3", gateOpen && dryerRun);
-      nodeState("pnode-dryer", dryerRun);
-      arrow("parrow-4", dryerRun);
-      nodeState("pnode-doors", doorsOpen && !doorsMove, doorsMove);
-      arrow("parrow-5", doorsOpen && motorRun);
-      nodeState("pnode-vacuum", motorRun);
-      arrow("parrow-6", motorRun);
-      nodeState("pnode-printer", printing);
+      nodeState("pnode-gate", (gateOpen || srRunning) && !gateMove, gateMove);
+      arrow("parrow-2", gateOpen || srRunning);
+      nodeState("pnode-shredder", srRunning || gateOpen);
+      arrow("parrow-3", srRunning || dryActive || disActive);
+      nodeState("pnode-dryer", dryActive || disActive);
+      arrow("parrow-4", disActive || doorsOpen);
+      nodeState("pnode-doors", (doorsOpen || disActive) && !doorsMove, doorsMove);
+      arrow("parrow-5", feedActive || motorRun || doorsOpen);
+      nodeState("pnode-vacuum", feedActive || motorRun);
+      arrow("parrow-6", feedActive || motorRun);
+      nodeState("pnode-printer", printing || feedActive);
 
-      setChip("conveyorChip", arduinoOk ? "ONLINE" : "OFFLINE", arduinoOk ? "good" : "bad");
+      setChip("conveyorChip", tcActive ? (V.auto.tc.state || "ACTIVE") : (arduinoOk ? "READY" : "OFFLINE"), tcActive || arduinoOk ? "good" : "bad");
 
       const procTempC = V.dryer.process_temp != null ? (V.dryer.process_temp / 10).toFixed(1) : null;
       set("dryerFlowTemp", procTempC != null ? procTempC + "°C" : "—");
-      const guess = V.dryer.dryer_state_guess || "—";
-      setChip("dryerFlowChip", guess, chipClass(guess));
+      const dryLabel = V.auto.dry.running ? (V.auto.dry.phase || "RUNNING") : (V.auto.dry.phase || "IDLE");
+      setChip("dryerFlowChip", dryLabel, chipClass(dryLabel));
 
       const p = V.printer;
       setChip("printerFlowChip", p.state || "—", chipClass(p.state));
@@ -1497,7 +1716,7 @@
 
     // ── Poll loop ─────────────────────────────────────────────
     async function poll(){
-      await Promise.allSettled([pollDryer(), pollArduino(), pollPrinter()]);
+      await Promise.allSettled([pollDryer(), pollArduino(), pollWorkflowStatus(), pollPrinter()]);
       render();
     }
 

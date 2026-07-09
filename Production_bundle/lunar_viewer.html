@@ -1222,14 +1222,16 @@
 
     function isWorkflowLive(){
       const tcState = String(V.auto.tc.state || "").toUpperCase();
-      const tcActive = ["HOMING","WAIT_HOME","PICKING","MANUAL"].includes(tcState);
+      const tcSeq = String(V.auto.tc.seq || "").toUpperCase();
+      const tcActive = tcSeq === "RUN" && ["HOMING","WAIT_HOME","PICKING","MANUAL","SIZERED"].includes(tcState);
       const srRunning = String(V.auto.sr.run || "").toUpperCase() === "YES";
-      const srDone = !srRunning && Number(V.auto.sr.shredded || 0) > 0;
+      const srPhase = String(V.auto.sr.phase || "IDLE").toUpperCase();
+      const srTouched = srPhase !== "IDLE";
       const dryPhase = String(V.auto.dry.phase || "IDLE").toUpperCase();
       const dryTouched = dryPhase !== "IDLE";
       const feedPhase = String(V.auto.feed.phase || "IDLE").toUpperCase();
       const feedTouched = feedPhase !== "IDLE";
-      return tcActive || srRunning || !!V.auto.dry.running || !!V.auto.feed.running || srDone || dryTouched || feedTouched;
+      return tcActive || srRunning || !!V.auto.dry.running || !!V.auto.feed.running || srTouched || dryTouched || feedTouched;
     }
 
     function chipClass(state){

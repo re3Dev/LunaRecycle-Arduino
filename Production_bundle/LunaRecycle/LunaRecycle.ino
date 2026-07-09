@@ -211,9 +211,10 @@ const unsigned long ShredderDirSettleMs = 1000;   // [tune]
 // Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
 // this are clamped so the agitator never exceeds this duty.
 const int AGITATOR_MAX_PERCENT = 75;
-const int AGITATOR_RAMP_STEP_PERCENT = 5;             // [tune] duty step size for soft ramps
-const unsigned long AGITATOR_RAMP_STEP_MS = 80;       // [tune] dwell between ramp steps
-const unsigned long AGITATOR_REVERSE_PAUSE_MS = 1000; // [tune] full-stop pause before direction flip
+const int AGITATOR_RAMP_STEP_PERCENT = 3;             // [tune] duty step size for soft ramps
+const unsigned long AGITATOR_RAMP_STEP_MS = 140;      // [tune] dwell between ramp steps
+const unsigned long AGITATOR_REVERSE_PAUSE_MS = 1500; // [tune] full-stop pause before direction flip
+const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -1293,22 +1294,30 @@ void shredderSetDirection(bool fwd) {
 //  Mixer Agitator - second H-bridge channel (power capped at 75%)
 // ============================================================================
 
-void agitatorApply() {
-  int percent = constrain(agitatorPercent, 0, AGITATOR_MAX_PERCENT);
-  if (percent == 0) {
-    // Disable ENB first, then clear direction pins (avoids shoot-through).
-    analogWrite(Mixer_agitatorMotor_ENB, 0);
-    digitalWrite(Mixer_agitatorMotor_IN3, LOW);
-    digitalWrite(Mixer_agitatorMotor_IN4, LOW);
-    return;
-  }
-  if (agitatorFwd) {
+void agitatorNeutral() {
+  analogWrite(Mixer_agitatorMotor_ENB, 0);
+  digitalWrite(Mixer_agitatorMotor_IN3, LOW);
+  digitalWrite(Mixer_agitatorMotor_IN4, LOW);
+}
+
+void agitatorSetDirectionPins(bool fwd) {
+  if (fwd) {
     digitalWrite(Mixer_agitatorMotor_IN3, HIGH);
     digitalWrite(Mixer_agitatorMotor_IN4, LOW);
   } else {
     digitalWrite(Mixer_agitatorMotor_IN3, LOW);
     digitalWrite(Mixer_agitatorMotor_IN4, HIGH);
   }
+}
+
+void agitatorApply() {
+  int percent = constrain(agitatorPercent, 0, AGITATOR_MAX_PERCENT);
+  if (percent == 0) {
+    // Disable ENB first, then clear direction pins (avoids shoot-through).
+    agitatorNeutral();
+    return;
+  }
+  agitatorSetDirectionPins(agitatorFwd);
   int pwm = (int)((long)percent * 255 / 100);   // percent of full duty
   analogWrite(Mixer_agitatorMotor_ENB, pwm);
 }
@@ -1326,8 +1335,15 @@ void agitatorSet(int percent, bool fwd) {
       agitatorApply();
       delay(AGITATOR_RAMP_STEP_MS);
     }
+    agitatorNeutral();
     delay(AGITATOR_REVERSE_PAUSE_MS);
+
+    // Pre-load the new direction while PWM is off, then pause briefly so the
+    // H-bridge direction state is stable before power returns.
     agitatorFwd = fwd;
+    agitatorSetDirectionPins(agitatorFwd);
+    delay(AGITATOR_DIR_SETTLE_MS);
+
     for (int p = 0; p < target; p += step) {
       agitatorPercent = min(target, p + step);
       agitatorApply();

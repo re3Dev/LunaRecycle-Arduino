@@ -499,6 +499,25 @@
       gap:10px;
     }
 
+    .workflow-grid{
+      display:grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .workflow-grid .cell{
+      display:flex;
+      flex-direction:column;
+      gap:4px;
+    }
+    .workflow-grid .cell label{
+      font-size:10px;
+      color:var(--muted2);
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+
     /* 1080p desktop density pass: keep the dashboard on one screen while
        preserving card readability and interaction targets. */
     @media (min-width: 1600px) and (min-height: 900px){
@@ -575,10 +594,32 @@
         font-size:9px;
         margin-top:5px !important;
       }
+
+      #workflowCard .card .bd,
+      #workflowCard .bd{
+        padding: 6px 8px 8px;
+      }
+      #workflowCard .workflow-grid{
+        gap:5px;
+      }
+      #workflowCard .workflow-grid .cell label{
+        font-size:9px;
+      }
+      #workflowCard input[type="number"]{
+        padding:4px 5px;
+        font-size:10px;
+      }
+      #workflowCard .btn.mini{
+        padding:5px 7px;
+      }
+      #workflowLog{
+        max-height:84px;
+      }
     }
 
     @media (max-width: 700px){
       .dryer-grid-3{grid-template-columns:1fr}
+      .workflow-grid{grid-template-columns:1fr 1fr}
     }
   </style>
 </head>
@@ -870,6 +911,61 @@
           </div>
         </section>
 
+        <section class="card" id="workflowCard">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">↻</div>
+              <div style="min-width:0">
+                <h2>Auto Workflow</h2>
+                <div class="hint">single run: size reduction → drying → feed</div>
+              </div>
+            </div>
+            <span class="statechip" id="workflowChip">IDLE</span>
+          </div>
+          <div class="bd">
+            <div class="workflow-grid">
+              <div class="cell">
+                <label for="wfPeUnits">PE units</label>
+                <input type="number" id="wfPeUnits" min="0" step="1" value="0" />
+              </div>
+              <div class="cell">
+                <label for="wfPaUnits">PA units</label>
+                <input type="number" id="wfPaUnits" min="0" step="1" value="0" />
+              </div>
+              <div class="cell">
+                <label for="wfDryMinutes">Dry min</label>
+                <input type="number" id="wfDryMinutes" min="1" step="1" value="60" />
+              </div>
+              <div class="cell">
+                <label for="wfDryTempC">Dry temp C</label>
+                <input type="number" id="wfDryTempC" min="1" max="250" step="1" value="70" />
+              </div>
+              <div class="cell">
+                <label for="wfFeedPrimeSec">Prime s</label>
+                <input type="number" id="wfFeedPrimeSec" min="0" step="1" value="10" />
+              </div>
+              <div class="cell">
+                <label for="wfFeedVacPct">Vacuum %</label>
+                <input type="number" id="wfFeedVacPct" min="0" max="100" step="1" value="40" />
+              </div>
+              <div class="cell">
+                <label for="wfFeedMeterOnSec">Meter on s</label>
+                <input type="number" id="wfFeedMeterOnSec" min="0" step="1" value="3" />
+              </div>
+              <div class="cell">
+                <label for="wfFeedMeterPeriodSec">Meter every s</label>
+                <input type="number" id="wfFeedMeterPeriodSec" min="1" step="1" value="20" />
+              </div>
+            </div>
+            <div class="row" style="justify-content:flex-start; gap:6px; margin-bottom:6px;">
+              <button class="btn mini primary" id="btnWorkflowStart">Start Workflow</button>
+              <button class="btn mini danger" id="btnWorkflowStop">Stop Workflow</button>
+            </div>
+            <div class="hint" id="workflowStatusText">Ready.</div>
+            <div class="log" id="workflowLog" style="margin-top:6px; max-height:110px;" aria-label="Workflow log"></div>
+          </div>
+        </section>
+
         <section class="card">
           <div class="hd">
             <div class="title">
@@ -957,6 +1053,11 @@
       feedAgitatorPct: "—",
       feedMsg: "—",
       srPolling: false,
+
+      workflowRunning: false,
+      workflowStopRequested: false,
+      workflowPhase: "IDLE",
+      workflowMsg: "Ready.",
 
       screw_on: false,
       heater_on: false,
@@ -1197,6 +1298,16 @@
         pchip.textContent = procRunning ? "RUNNING" : "IDLE";
         pchip.className = "statechip" + (procRunning ? " good" : "");
       }
+
+      setText("workflowStatusText", S.workflowMsg || "Ready.");
+      const wchip = document.getElementById("workflowChip");
+      if(wchip){
+        const phase = String(S.workflowPhase || "IDLE");
+        wchip.textContent = S.workflowRunning ? phase.toUpperCase() : phase;
+        const warn = phase === "STOPPING";
+        const bad = phase === "ERROR";
+        wchip.className = "statechip" + (bad ? " bad" : warn ? " warn" : S.workflowRunning ? " good" : "");
+      }
     }
 
     function fmtDuration(sec){
@@ -1362,6 +1473,177 @@
         log("Feed stop requested.", "warn");
         await feedRefreshStatus(true);
       }catch(err){ log(`Feed stop failed: ${err.message}`, "bad"); }
+    }
+
+    function workflowLog(msg, kind="info"){
+      const out = $("#workflowLog");
+      if(!out) return;
+      const time = new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+      const line = document.createElement("div");
+      if(kind === "good") line.style.color = "var(--good)";
+      else if(kind === "warn") line.style.color = "var(--warn)";
+      else if(kind === "bad") line.style.color = "var(--bad)";
+      line.textContent = `[${time}] ${msg}`;
+      out.appendChild(line);
+      out.scrollTop = out.scrollHeight;
+    }
+
+    function workflowSet(phase, msg, running){
+      if(phase !== undefined){ S.workflowPhase = phase; }
+      if(msg !== undefined){ S.workflowMsg = msg; }
+      if(running !== undefined){ S.workflowRunning = !!running; }
+      renderArduino();
+    }
+
+    async function workflowSleep(ms){
+      let remaining = Math.max(0, ms);
+      while(remaining > 0){
+        if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
+        const step = Math.min(200, remaining);
+        await new Promise((resolve)=>setTimeout(resolve, step));
+        remaining -= step;
+      }
+    }
+
+    async function workflowStopAll(){
+      const calls = ["/sr/stop", "/dry/stop", "/feed/stop"];
+      for(const path of calls){
+        try{ await apiArduino(path, { method: "POST" }); }
+        catch(_){ /* stop path is best-effort */ }
+      }
+      await srRefreshStatus(true);
+      await dryRefreshStatus(true);
+      await feedRefreshStatus(true);
+    }
+
+    function readWorkflowConfig(){
+      const cfg = {
+        pe: parseInt($("#wfPeUnits")?.value || "0", 10) || 0,
+        pa: parseInt($("#wfPaUnits")?.value || "0", 10) || 0,
+        dryMinutes: parseFloat($("#wfDryMinutes")?.value || "0"),
+        dryTempC: parseInt($("#wfDryTempC")?.value || "0", 10),
+        primeSec: parseInt($("#wfFeedPrimeSec")?.value || "0", 10) || 0,
+        vacPct: parseInt($("#wfFeedVacPct")?.value || "0", 10) || 0,
+        meterOnSec: parseInt($("#wfFeedMeterOnSec")?.value || "0", 10) || 0,
+        meterPeriodSec: parseInt($("#wfFeedMeterPeriodSec")?.value || "0", 10) || 0,
+      };
+      if(cfg.pe < 0 || cfg.pa < 0 || (cfg.pe + cfg.pa) <= 0){
+        throw new Error("Set PE/PA units: at least one must be greater than zero.");
+      }
+      if(!(cfg.dryMinutes > 0)){ throw new Error("Dry minutes must be greater than zero."); }
+      if(!(cfg.dryTempC > 0 && cfg.dryTempC <= 250)){ throw new Error("Dry temp must be 1-250 C."); }
+      if(cfg.vacPct < 0 || cfg.vacPct > 100){ throw new Error("Vacuum percent must be 0-100."); }
+      if(cfg.meterPeriodSec <= 0 || cfg.meterOnSec < 0 || cfg.meterOnSec > cfg.meterPeriodSec){
+        throw new Error("Feed meter timing is invalid.");
+      }
+      return cfg;
+    }
+
+    async function workflowWaitSrDone(){
+      let seenRunning = false;
+      while(true){
+        if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
+        await srRefreshStatus(true);
+        const run = String(S.srRun || "").toUpperCase();
+        if(run === "YES") seenRunning = true;
+        if(seenRunning && run !== "YES") return;
+        await workflowSleep(2000);
+      }
+    }
+
+    async function workflowWaitDryDone(){
+      let seenRunning = false;
+      while(true){
+        if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
+        await dryRefreshStatus(true);
+        if(S.dryRunning) seenRunning = true;
+        if(seenRunning && !S.dryRunning){
+          const phase = String(S.dryPhase || "").toUpperCase();
+          if(phase === "ERROR" || phase === "ABORTED"){
+            throw new Error(`Drying ended in ${phase}.`);
+          }
+          return;
+        }
+        await workflowSleep(2000);
+      }
+    }
+
+    async function workflowStart(){
+      if(S.workflowRunning){
+        workflowLog("Workflow already running.", "warn");
+        return;
+      }
+      if(!S.arduinoConnected){
+        workflowSet("IDLE", "Arduino is not connected.", false);
+        workflowLog("Arduino is not connected.", "bad");
+        return;
+      }
+
+      let cfg;
+      try{
+        cfg = readWorkflowConfig();
+      }catch(err){
+        workflowSet("IDLE", err.message, false);
+        workflowLog(err.message, "bad");
+        return;
+      }
+
+      const out = $("#workflowLog");
+      if(out) out.textContent = "";
+
+      S.workflowStopRequested = false;
+      workflowSet("SIZE REDUCTION", "Running Step 1/3...", true);
+      workflowLog(`Starting workflow: SR ${cfg.pe} PE + ${cfg.pa} PA, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed vac ${cfg.vacPct}%`, "info");
+
+      try{
+        await apiArduino("/sr/start", {
+          method: "POST",
+          body: JSON.stringify({ pe_units: cfg.pe, pa_units: cfg.pa }),
+        });
+        workflowLog("Step 1 started: Size Reduction.", "good");
+        await workflowWaitSrDone();
+        workflowLog("Step 1 complete.", "good");
+
+        workflowSet("DRYING", "Running Step 2/3...", true);
+        await apiArduino("/dry/start", {
+          method: "POST",
+          body: JSON.stringify({ minutes: cfg.dryMinutes, temp_c: cfg.dryTempC }),
+        });
+        workflowLog("Step 2 started: Drying + Mixing.", "good");
+        await workflowWaitDryDone();
+        workflowLog("Step 2 complete.", "good");
+
+        workflowSet("FEED", "Running Step 3/3...", true);
+        await apiArduino("/feed/start", {
+          method: "POST",
+          body: JSON.stringify({
+            prime_sec: cfg.primeSec,
+            vacuum_pct: cfg.vacPct,
+            meter_on_sec: cfg.meterOnSec,
+            meter_period_sec: cfg.meterPeriodSec,
+          }),
+        });
+        await feedRefreshStatus(true);
+        workflowLog("Step 3 started: Feed is now running.", "good");
+        workflowSet("COMPLETE", "Workflow complete. Feed is active; use Stop Workflow when done.", false);
+      }catch(err){
+        if(S.workflowStopRequested){
+          workflowLog("Workflow stopped by operator.", "warn");
+          workflowSet("STOPPED", "Workflow stopped.", false);
+        }else{
+          workflowLog(`Workflow failed: ${err.message}`, "bad");
+          workflowSet("ERROR", `Workflow failed: ${err.message}`, false);
+          await workflowStopAll();
+        }
+      }
+    }
+
+    async function workflowStop(){
+      S.workflowStopRequested = true;
+      workflowSet("STOPPING", "Stopping all workflow stages...", true);
+      workflowLog("Stop requested. Sending stop commands.", "warn");
+      await workflowStopAll();
+      workflowSet("STOPPED", "Workflow stopped.", false);
     }
 
     // ── Manual command console ───────────────────────────────────────────────
@@ -1627,6 +1909,10 @@
       on("btnFeedStart",  "click", feedStart);
       on("btnFeedStop",   "click", feedStop);
       on("btnFeedStatus", "click", ()=>feedRefreshStatus(false));
+
+      // Unified Workflow
+      on("btnWorkflowStart", "click", workflowStart);
+      on("btnWorkflowStop",  "click", workflowStop);
 
       on("btnDryerMode", "click", async ()=>{
         S.dryerIoLive = !S.dryerIoLive;

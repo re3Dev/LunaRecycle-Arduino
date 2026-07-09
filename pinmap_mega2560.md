@@ -82,9 +82,9 @@
 ### `Mixer_agitatorMotor` — Bottom Agitator (2nd H-Bridge channel)
 | Pin  | Signal                       | Notes                                   |
 |------|------------------------------|-----------------------------------------|
-| D3   | `Mixer_agitatorMotor_ENB`    | PWM enable — power **capped at 50%**    |
-| D12  | `Mixer_agitatorMotor_IN3`    | Direction A                             |
-| D13  | `Mixer_agitatorMotor_IN4`    | Direction B (shares Mega built-in LED)  |
+| D11   | `Mixer_agitatorMotor_ENB`    | PWM enable — power **capped at 50%**    |
+| D42  | `Mixer_agitatorMotor_IN3`    | Direction A                             |
+| D43  | `Mixer_agitatorMotor_IN4`    | Direction B (shares Mega built-in LED)  |
 
 ### `Mixer_vacuumMotor` — Vacuum Motor (DS3502 digital-pot speed control)
 | Bus  | Signal                       | Notes                                   |

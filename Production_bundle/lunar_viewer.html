@@ -317,6 +317,13 @@
     }
 
     .card{ position:relative; }
+    .card.inactive .wf-strip,
+    .card.inactive .wf-meta,
+    .card.inactive .wf-msg,
+    .card.inactive .pipeline{
+      opacity:.58;
+      filter: saturate(.65);
+    }
 
     /* ── Pulse animation on live dot ──────────────────────────── */
     @keyframes pulse-ring{
@@ -1213,6 +1220,18 @@
       return `${m}:${String(r).padStart(2, "0")}`;
     }
 
+    function isWorkflowLive(){
+      const tcState = String(V.auto.tc.state || "").toUpperCase();
+      const tcActive = ["HOMING","WAIT_HOME","PICKING","MANUAL"].includes(tcState);
+      const srRunning = String(V.auto.sr.run || "").toUpperCase() === "YES";
+      const srDone = !srRunning && Number(V.auto.sr.shredded || 0) > 0;
+      const dryPhase = String(V.auto.dry.phase || "IDLE").toUpperCase();
+      const dryTouched = dryPhase !== "IDLE";
+      const feedPhase = String(V.auto.feed.phase || "IDLE").toUpperCase();
+      const feedTouched = feedPhase !== "IDLE";
+      return tcActive || srRunning || !!V.auto.dry.running || !!V.auto.feed.running || srDone || dryTouched || feedTouched;
+    }
+
     function chipClass(state){
       if (!state || state === "—") return "";
       const s = String(state).toUpperCase();
@@ -1468,6 +1487,30 @@
       const disActive = dry.running && dryPhase === "DISCHARGE";
       const dryDone = !dry.running && (dryPhase === "DONE" || dryPhase === "COMPLETE");
       const feedActive = !!feed.running;
+      const workflowLive = isWorkflowLive();
+
+      const card = document.getElementById("cardArduino");
+      if(card) card.classList.toggle("inactive", !workflowLive);
+
+      if(!workflowLive){
+        set("wfCurrentStage", "IDLE");
+        set("wfDryRemaining", "—");
+        set("wfSrRemaining", "—");
+        set("wfFeedState", "—");
+        set("wfTcVal", "—");
+        set("wfSrVal", "—");
+        set("wfDryVal", "—");
+        set("wfDisVal", "—");
+        set("wfFeedVal", "—");
+        set("wfMessage", "Waiting for workflow start from main dashboard.");
+
+        for(const id of ["wfStepTc","wfStepSr","wfStepDry","wfStepDis","wfStepFeed"]){
+          const el = document.getElementById(id);
+          if(!el) continue;
+          el.classList.remove("active", "done", "warn");
+        }
+        return;
+      }
 
       const stage = tcActive ? "TC HOME"
                    : srRunning ? "SIZE REDUCTION"
@@ -1623,6 +1666,8 @@
     }
 
     function renderPipeline(){
+      const workflowLive = isWorkflowLive();
+
       const gateOpen  = String(V.gateState).toUpperCase().includes("OPEN");
       const gateMove  = ["OPENING","CLOSING"].includes(String(V.gateState).toUpperCase());
       const doorsOpen = String(V.doorState).toUpperCase().includes("OPEN");
@@ -1648,6 +1693,27 @@
       function arrow(id, active){
         const el = document.getElementById(id);
         if (el) el.classList.toggle("active", !!active);
+      }
+
+      if(!workflowLive){
+        nodeState("pnode-conveyor", false, false);
+        nodeState("pnode-gate", false, false);
+        nodeState("pnode-shredder", false, false);
+        nodeState("pnode-dryer", false, false);
+        nodeState("pnode-doors", false, false);
+        nodeState("pnode-vacuum", false, false);
+        nodeState("pnode-printer", false, false);
+        arrow("parrow-1", false);
+        arrow("parrow-2", false);
+        arrow("parrow-3", false);
+        arrow("parrow-4", false);
+        arrow("parrow-5", false);
+        arrow("parrow-6", false);
+        setChip("conveyorChip", arduinoOk ? "IDLE" : "OFFLINE", arduinoOk ? "" : "bad");
+        setChip("dryerFlowChip", "IDLE", "");
+        set("dryerFlowTemp", "—");
+        set("printerFlowProgress", "—");
+        return;
       }
 
       nodeState("pnode-conveyor", tcActive || (arduinoOk && srRunning));

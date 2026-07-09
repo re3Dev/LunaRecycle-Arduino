@@ -58,6 +58,11 @@ DRYER_TIMEOUT   = 0.5    # seconds
 SERVER_HOST = os.environ.get("LUNA_HOST", "0.0.0.0")
 SERVER_PORT = int(os.environ.get("LUNA_PORT", "5055"))
 
+# Read-only viewer runtime config (served via /api/viewer/config).
+VIEWER_DRYER_CAM_URL   = os.environ.get("LUNA_VIEWER_DRYER_CAM_URL", "")
+VIEWER_PRINTER_CAM_URL = os.environ.get("LUNA_VIEWER_PRINTER_CAM_URL", "")
+VIEWER_PRINTER_API_URL = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "")
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Flask app
 # ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +87,18 @@ def serve_viewer():
 def serve_model():
     """Serve the spatial model so it runs on http://127.0.0.1:5055/model (same-origin)."""
     return send_from_directory(_BUNDLE_DIR, "lunar_model.html")
+
+@app.route("/api/viewer/config", methods=["GET"])
+def api_viewer_config():
+    """Expose env-driven config for the read-only viewer page."""
+    return jsonify({
+        "ok": True,
+        "data": {
+            "dryer_cam_url": VIEWER_DRYER_CAM_URL,
+            "printer_cam_url": VIEWER_PRINTER_CAM_URL,
+            "printer_api_url": VIEWER_PRINTER_API_URL,
+        },
+    })
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Arduino serial bridge

@@ -1042,11 +1042,11 @@
     // MJPEG stream:  "http://192.168.1.x/webcam/?action=stream"
     // Snapshot URL:  "http://192.168.1.x/webcam/?action=snapshot"
     // Leave empty ("") to display the offline placeholder.
-    const DRYER_CAM_URL   = ""; // dryer MJPEG/snapshot URL
-    const PRINTER_CAM_URL = ""; // printer MJPEG/snapshot URL
+    let DRYER_CAM_URL   = ""; // dryer MJPEG/snapshot URL
+    let PRINTER_CAM_URL = ""; // printer MJPEG/snapshot URL
     // Moonraker API base URL (e.g. "http://192.168.1.x").
     // Leave empty to skip printer status polling.
-    const PRINTER_API_URL = "";
+    let PRINTER_API_URL = "";
     const CAM_RETRY_MS    = 5000; // ms before retrying a failed camera
 
     // ── State ─────────────────────────────────────────────────
@@ -1190,6 +1190,18 @@
       const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
+    }
+
+    async function loadViewerConfig(){
+      try {
+        const res = await fetchJson(`${ARDUINO_BASE}/viewer/config`);
+        const cfg = (res && res.data) ? res.data : {};
+        DRYER_CAM_URL = cfg.dryer_cam_url || "";
+        PRINTER_CAM_URL = cfg.printer_cam_url || "";
+        PRINTER_API_URL = cfg.printer_api_url || "";
+      } catch (_err) {
+        // Keep empty defaults if config endpoint is unavailable.
+      }
     }
 
     // ── Poll dryer ────────────────────────────────────────────
@@ -1492,6 +1504,7 @@
     async function init(){
       log("Viewer initialized — read-only mode.");
       log(`Auto-polling API every ${POLL_MS / 1000}s.`);
+      await loadViewerConfig();
       initCamera("dryerCamImg",   "dryerCamOffline",   "dryerCamDot",   "dryerCamStatus",   "dryerCamChip", "dryerCamUrlLabel",   DRYER_CAM_URL);
       initCamera("printerCamImg", "printerCamOffline", "printerCamDot", "printerCamStatus", "printerChip",  "printerCamUrlLabel", PRINTER_CAM_URL);
       await poll();

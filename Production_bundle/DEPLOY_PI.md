@@ -70,6 +70,9 @@ sudo systemctl restart lunarecycle-backend
 | `LUNA_DISCHARGE_SHAKE_SEG_SEC` | `5`     | Seconds per shake direction segment  |
 | `LUNA_DISCHARGE_SHAKE_STOP_SEC` | `1.5` | Zero-speed pause before each shake direction flip after the first segment |
 | `LUNA_FEED_AGITATOR_PCT` | `75`         | Feed automation agitator percent (0-75) |
+| `LUNA_VIEWER_DRYER_CAM_URL` | ``       | Dryer camera URL shown in `/viewer`  |
+| `LUNA_VIEWER_PRINTER_CAM_URL` | ``     | Printer camera URL shown in `/viewer` |
+| `LUNA_VIEWER_PRINTER_API_URL` | ``     | Moonraker base URL used by `/viewer`  |
 | `LUNA_HOST`          | `0.0.0.0`        | Bind address (`127.0.0.1` = Pi only) |
 | `LUNA_PORT`          | `5055`           | HTTP port                            |
 

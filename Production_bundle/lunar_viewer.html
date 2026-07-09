@@ -444,62 +444,20 @@
     }
     .pline-connector.active{ background: rgba(49,208,170,.65); }
     .pline-connector.active::after{ border-left-color: rgba(49,208,170,.65); }
-    /* -- Simulation -------------------------------------------------------- */
-    :root{
-      --bc0: #31d0aa; /* teal  */
-      --bc1: #7aa7ff; /* blue  */
-      --bc2: #ffcf5a; /* amber */
-      --bc3: #ff8fd0; /* pink  */
-    }
-    .batch-dots{
-      display:flex; gap:3px; flex-wrap:wrap; justify-content:center;
-      min-height:9px; margin-top:3px;
-    }
-    .batch-dot{ width:8px; height:8px; border-radius:50%; flex:0 0 auto; transition:opacity .3s; }
-    .bc0{ background:var(--bc0); box-shadow:0 0 6px rgba(49,208,170,.70);  }
-    .bc1{ background:var(--bc1); box-shadow:0 0 6px rgba(122,167,255,.70); }
-    .bc2{ background:var(--bc2); box-shadow:0 0 6px rgba(255,207,90,.70);  }
-    .bc3{ background:var(--bc3); box-shadow:0 0 6px rgba(255,143,208,.70); }
-    .pline-node.sim-b0{ border-color:rgba(49,208,170,.50);  background:rgba(49,208,170,.09);  }
-    .pline-node.sim-b1{ border-color:rgba(122,167,255,.50); background:rgba(122,167,255,.09); }
-    .pline-node.sim-b2{ border-color:rgba(255,207,90,.50);  background:rgba(255,207,90,.09);  }
-    .pline-node.sim-b3{ border-color:rgba(255,143,208,.50); background:rgba(255,143,208,.09); }
-    @keyframes flow-sweep{
-      0%   { background-position: -150% 0; }
-      100% { background-position:  250% 0; }
-    }
-    .pline-connector.flowing{
-      background: linear-gradient(90deg,
-        transparent 0%, transparent 25%,
-        rgba(255,255,255,.65) 50%,
-        transparent 75%, transparent 100%);
-      background-size: 200% 100%;
-      animation: flow-sweep 1.0s linear infinite;
-    }
-    .pline-connector.flowing::after{ border-left-color: rgba(255,255,255,.55); }
-
     /* -- Pick & Place visualizer -------------------------------------------- */
     .pp-viz{
       width:72px; height:30px; position:relative;
       margin:0 auto 2px;
       opacity:.25; transition:opacity .3s;
     }
-    .pline-node.active .pp-viz,
-    .pline-node.sim-b0 .pp-viz, .pline-node.sim-b1 .pp-viz,
-    .pline-node.sim-b2 .pp-viz, .pline-node.sim-b3 .pp-viz { opacity:1; }
+    .pline-node.active .pp-viz { opacity:1; }
     /* Pause all child animations when node is not active */
     .pp-viz .pp-carriage,
     .pp-viz .pp-rod,
     .pp-viz .pp-item { animation-play-state: paused; }
     .pline-node.active .pp-viz .pp-carriage,
     .pline-node.active .pp-viz .pp-rod,
-    .pline-node.active .pp-viz .pp-item,
-    .pline-node.sim-b0 .pp-viz .pp-carriage, .pline-node.sim-b1 .pp-viz .pp-carriage,
-    .pline-node.sim-b2 .pp-viz .pp-carriage, .pline-node.sim-b3 .pp-viz .pp-carriage,
-    .pline-node.sim-b0 .pp-viz .pp-rod,      .pline-node.sim-b1 .pp-viz .pp-rod,
-    .pline-node.sim-b2 .pp-viz .pp-rod,      .pline-node.sim-b3 .pp-viz .pp-rod,
-    .pline-node.sim-b0 .pp-viz .pp-item,     .pline-node.sim-b1 .pp-viz .pp-item,
-    .pline-node.sim-b2 .pp-viz .pp-item,     .pline-node.sim-b3 .pp-viz .pp-item
+    .pline-node.active .pp-viz .pp-item
     { animation-play-state: running; }
     .pp-rail{
       position:absolute; top:4px; left:6px; right:6px; height:2px;
@@ -561,28 +519,6 @@
       57%      { opacity:0; transform:translateX(-50%) scale(.5); }
       100%     { opacity:0; }
     }
-    .sim-badge{
-      display:inline-flex; align-items:center; gap:4px;
-      padding: 3px 8px; border-radius:999px;
-      background: rgba(255,143,208,.08);
-      border:1px solid rgba(255,143,208,.28);
-      font-size:9px; font-weight:800; letter-spacing:.4px;
-      color:rgba(255,200,235,.80);
-      cursor:pointer; user-select:none;
-      transition: background .2s, border-color .2s;
-    }
-    .sim-badge:hover{ background: rgba(255,143,208,.18); }
-    .sim-badge.on{
-      background: rgba(255,143,208,.20);
-      border-color: rgba(255,143,208,.60);
-      color: rgba(255,220,245,.95);
-    }
-    .sim-badge .sim-dot{
-      width:5px; height:5px; border-radius:50%;
-      background: rgba(255,143,208,.45); flex:0 0 auto;
-    }
-    .sim-badge.on .sim-dot{ background:#ff8fd0; animation: pulse-ring 1.2s ease infinite; }
-
     /* -- Gate / Door mini-visualisers ---------------------------------------- */
     .mini-viz{
       width: 100%; height: 28px;
@@ -624,9 +560,7 @@
       margin:0 auto 2px;
       opacity:.25; transition:opacity .3s;
     }
-    .pline-node.active .shred-viz,
-    .pline-node.sim-b0 .shred-viz, .pline-node.sim-b1 .shred-viz,
-    .pline-node.sim-b2 .shred-viz, .pline-node.sim-b3 .shred-viz { opacity:1; }
+    .pline-node.active .shred-viz { opacity:1; }
     /* Gear groups rotate around their geometric centre */
     .shred-gear{
       transform-box: fill-box;
@@ -635,18 +569,14 @@
     }
     .shred-gear-left  { animation: shred-cw  4.5s linear infinite; animation-play-state: paused; }
     .shred-gear-right { animation: shred-ccw 4.5s linear infinite; animation-play-state: paused; }
-    .pline-node.active  .shred-gear,
-    .pline-node.sim-b0  .shred-gear, .pline-node.sim-b1 .shred-gear,
-    .pline-node.sim-b2  .shred-gear, .pline-node.sim-b3 .shred-gear
+    .pline-node.active  .shred-gear
     { animation-play-state: running; }
     /* Debris dots fall from the nip */
     .shred-debris-dot{
       transform-box: fill-box; transform-origin: 50% 50%;
       animation: shred-fall 1.2s linear infinite; animation-play-state: paused;
     }
-    .pline-node.active  .shred-debris-dot,
-    .pline-node.sim-b0  .shred-debris-dot, .pline-node.sim-b1 .shred-debris-dot,
-    .pline-node.sim-b2  .shred-debris-dot, .pline-node.sim-b3 .shred-debris-dot
+    .pline-node.active  .shred-debris-dot
     { animation-play-state: running; }
     @keyframes shred-cw  { to { transform: rotate( 360deg); } }
     @keyframes shred-ccw { to { transform: rotate(-360deg); } }
@@ -663,9 +593,7 @@
       margin:0 auto 2px;
       opacity:.25; transition:opacity .3s;
     }
-    .pline-node.active .vac-viz,
-    .pline-node.sim-b0 .vac-viz, .pline-node.sim-b1 .vac-viz,
-    .pline-node.sim-b2 .vac-viz, .pline-node.sim-b3 .vac-viz { opacity:1; }
+    .pline-node.active .vac-viz { opacity:1; }
     /* Tube walls */
     .vac-tube{
       position:absolute; top:0; bottom:0; left:50%; transform:translateX(-50%);
@@ -701,9 +629,7 @@
     }
     .vac-pellet:nth-child(4){ animation-delay:.47s; }
     .vac-pellet:nth-child(5){ animation-delay:.93s; }
-    .pline-node.active .vac-pellet,
-    .pline-node.sim-b0 .vac-pellet, .pline-node.sim-b1 .vac-pellet,
-    .pline-node.sim-b2 .vac-pellet, .pline-node.sim-b3 .vac-pellet
+    .pline-node.active .vac-pellet
     { animation-play-state: running; }
     @keyframes vac-rise{
       0%  { bottom:4px;             opacity:0; transform:translateX(-50%) scale(.5); }
@@ -723,9 +649,7 @@
       overflow:hidden; position:relative;
       opacity:.25; transition:opacity .3s;
     }
-    .pline-node.active    .screw-viz,
-    .pline-node.sim-b0    .screw-viz, .pline-node.sim-b1 .screw-viz,
-    .pline-node.sim-b2    .screw-viz, .pline-node.sim-b3 .screw-viz { opacity:1; }
+    .pline-node.active .screw-viz { opacity:1; }
     /* Inner tile: SVG background repeating every 14px (one pitch) */
     .screw-helix-anim{
       position:absolute; inset:0;
@@ -738,9 +662,7 @@
       animation: screw-scroll 0.9s linear infinite;
       animation-play-state: paused;
     }
-    .pline-node.active .screw-helix-anim,
-    .pline-node.sim-b0 .screw-helix-anim, .pline-node.sim-b1 .screw-helix-anim,
-    .pline-node.sim-b2 .screw-helix-anim, .pline-node.sim-b3 .screw-helix-anim
+    .pline-node.active .screw-helix-anim
     { animation-play-state: running; }
     @keyframes screw-scroll{
       from{ background-position: 0 0px;  }
@@ -752,17 +674,13 @@
       margin:0 auto 2px;
       opacity:.25; transition:opacity .3s;
     }
-    .pline-node.active .printer-viz,
-    .pline-node.sim-b0 .printer-viz, .pline-node.sim-b1 .printer-viz,
-    .pline-node.sim-b2 .printer-viz, .pline-node.sim-b3 .printer-viz { opacity:1; }
+    .pline-node.active .printer-viz { opacity:1; }
     /* Nozzle sweeps left→right repeatedly */
     .printer-nozzle-grp{
       animation: nozzle-sweep 2.4s linear infinite;
       animation-play-state: paused;
     }
-    .pline-node.active .printer-nozzle-grp,
-    .pline-node.sim-b0 .printer-nozzle-grp, .pline-node.sim-b1 .printer-nozzle-grp,
-    .pline-node.sim-b2 .printer-nozzle-grp, .pline-node.sim-b3 .printer-nozzle-grp
+    .pline-node.active .printer-nozzle-grp
     { animation-play-state: running; }
     @keyframes nozzle-sweep{
       0%   { transform: translateX(0px);  }
@@ -777,9 +695,7 @@
       animation-play-state: paused;
       transform-origin: left center;
     }
-    .pline-node.active .printer-bead,
-    .pline-node.sim-b0 .printer-bead, .pline-node.sim-b1 .printer-bead,
-    .pline-node.sim-b2 .printer-bead, .pline-node.sim-b3 .printer-bead
+    .pline-node.active .printer-bead
     { animation-play-state: running; }
     @keyframes bead-grow{
       0%   { transform: scaleX(0);  opacity:.85; }
@@ -949,12 +865,7 @@
             <div class="sicon" aria-hidden="true">&#x27A1;</div>
             <div style="min-width:0"><h2>Process Flow</h2><div class="hint">Conveyor &rarr; Shredder &rarr; Mixer/Dryer &rarr; Blast Doors &rarr; Vacuum &rarr; Printer</div></div>
           </div>
-          <div style="display:flex; align-items:center; gap:6px;">
-            <button class="sim-badge" id="simToggle" onclick="toggleSim()" title="Toggle simulation mode">
-              <span class="sim-dot"></span>SIM
-            </button>
-            <div class="pill"><span class="dot" id="arduinoDot"></span><span><strong id="arduinoConnState">&mdash;</strong></span></div>
-          </div>
+          <div class="pill"><span class="dot" id="arduinoDot"></span><span><strong id="arduinoConnState">&mdash;</strong></span></div>
         </div>
         <div class="bd" style="padding-top:10px; padding-bottom:10px;">
           <div class="pipeline">
@@ -1508,21 +1419,19 @@
         if (el) el.classList.toggle("active", !!active);
       }
 
-      if (!SIM.active){
-        nodeState("pnode-conveyor", arduinoOk);
-        arrow("parrow-1", arduinoOk);
-        nodeState("pnode-gate", gateOpen && !gateMove, gateMove);
-        arrow("parrow-2", gateOpen);
-        nodeState("pnode-shredder", gateOpen);
-        arrow("parrow-3", gateOpen && dryerRun);
-        nodeState("pnode-dryer", dryerRun);
-        arrow("parrow-4", dryerRun);
-        nodeState("pnode-doors", doorsOpen && !doorsMove, doorsMove);
-        arrow("parrow-5", doorsOpen && motorRun);
-        nodeState("pnode-vacuum", motorRun);
-        arrow("parrow-6", motorRun);
-        nodeState("pnode-printer", printing);
-      }
+      nodeState("pnode-conveyor", arduinoOk);
+      arrow("parrow-1", arduinoOk);
+      nodeState("pnode-gate", gateOpen && !gateMove, gateMove);
+      arrow("parrow-2", gateOpen);
+      nodeState("pnode-shredder", gateOpen);
+      arrow("parrow-3", gateOpen && dryerRun);
+      nodeState("pnode-dryer", dryerRun);
+      arrow("parrow-4", dryerRun);
+      nodeState("pnode-doors", doorsOpen && !doorsMove, doorsMove);
+      arrow("parrow-5", doorsOpen && motorRun);
+      nodeState("pnode-vacuum", motorRun);
+      arrow("parrow-6", motorRun);
+      nodeState("pnode-printer", printing);
 
       setChip("conveyorChip", arduinoOk ? "ONLINE" : "OFFLINE", arduinoOk ? "good" : "bad");
 
@@ -1534,239 +1443,6 @@
       const p = V.printer;
       setChip("printerFlowChip", p.state || "—", chipClass(p.state));
       set("printerFlowProgress", p.progress != null ? p.progress + "%" : "—");
-    }
-
-    // ── Simulation engine ─────────────────────────────────────
-    // Each batch travels through 13 stages (7 nodes + 6 connectors).
-    // Multiple batches can be active simultaneously, shown as colored dots.
-    const SIM_STAGES = [
-      { type:"node", id:"pnode-conveyor",  dwell:3  },
-      { type:"conn", id:"parrow-1",        dwell:2  },
-      { type:"node", id:"pnode-gate",      dwell:2  },
-      { type:"conn", id:"parrow-2",        dwell:2  },
-      { type:"node", id:"pnode-shredder",  dwell:4  },
-      { type:"conn", id:"parrow-3",        dwell:2  },
-      { type:"node", id:"pnode-dryer",     dwell:10 },
-      { type:"conn", id:"parrow-4",        dwell:2  },
-      { type:"node", id:"pnode-doors",     dwell:2  },
-      { type:"conn", id:"parrow-5",        dwell:2  },
-      { type:"node", id:"pnode-vacuum",    dwell:3  },
-      { type:"conn", id:"parrow-6",        dwell:2  },
-      { type:"node", id:"pnode-printer",   dwell:12 },
-    ];
-    const SIM_COLORS = ["bc0","bc1","bc2","bc3"];
-    const SIM = { active:false, batches:[], nextId:0, globalTick:0, intervalId:null };
-
-    function toggleSim(){
-      SIM.active = !SIM.active;
-      const btn = document.getElementById("simToggle");
-      if (btn) btn.classList.toggle("on", SIM.active);
-      if (SIM.active){
-        SIM.batches = []; SIM.nextId = 0; SIM.globalTick = 0;
-        simSpawn();
-        SIM.intervalId = setInterval(simTick, 700);
-      } else {
-        if (SIM.intervalId){ clearInterval(SIM.intervalId); SIM.intervalId = null; }
-        SIM.batches = [];
-        // Clear all sim classes
-        SIM_STAGES.forEach(s => {
-          const el = document.getElementById(s.id);
-          if (!el) return;
-          if (s.type === "node"){
-            el.classList.remove("sim-b0","sim-b1","sim-b2","sim-b3","active","warn");
-            const dots = el.querySelector(".batch-dots");
-            if (dots) dots.remove();
-          } else {
-            el.classList.remove("flowing","active");
-          }
-        });
-        // Reset sim drift state and restore live data
-        SIM_STATE.dryerTemp = 172.4; SIM_STATE.printerPct = 34; SIM_STATE.motorPwm = 180; SIM_STATE.tick = 0;
-        render();
-      }
-    }
-
-    function simSpawn(){
-      SIM.batches.push({ id: SIM.nextId, stageIdx:0, ticksHere:0,
-                         colorIdx: SIM.nextId % SIM_COLORS.length });
-      SIM.nextId++;
-    }
-
-    // Index of the vacuum feed node in SIM_STAGES
-    const SIM_VACUUM_IDX = SIM_STAGES.findIndex(s => s.id === "pnode-vacuum");
-
-    function simTick(){
-      SIM.globalTick++;
-      // Advance batches and detect first arrival at vacuum feed
-      let spawnNew = false;
-      SIM.batches = SIM.batches.filter(b => {
-        b.ticksHere++;
-        if (b.ticksHere >= SIM_STAGES[b.stageIdx].dwell){
-          b.stageIdx++;
-          b.ticksHere = 0;
-          // Trigger new batch exactly when this one first reaches vacuum feed
-          if (b.stageIdx === SIM_VACUUM_IDX) spawnNew = true;
-        }
-        return b.stageIdx < SIM_STAGES.length;
-      });
-      if (spawnNew){
-        const atStart = SIM.batches.some(b => b.stageIdx === 0 && b.ticksHere < 2);
-        if (!atStart) simSpawn();
-      }
-      renderSim();
-    }
-
-    // Fake sim values that slowly drift to look alive
-    const SIM_STATE = {
-      dryerTemp: 172.4,
-      printerPct: 34,
-      motorPwm: 180,
-      tick: 0,
-    };
-
-    function renderSim(){
-      if (!SIM.active) return;
-      SIM_STATE.tick++;
-      // Slowly drift fake values
-      if (SIM_STATE.tick % 3 === 0){
-        SIM_STATE.dryerTemp  = Math.max(150, Math.min(195, SIM_STATE.dryerTemp + (Math.random() - 0.48) * 0.8));
-        SIM_STATE.printerPct = Math.min(99, SIM_STATE.printerPct + (Math.random() < 0.7 ? 1 : 0));
-        SIM_STATE.motorPwm   = Math.max(120, Math.min(230, SIM_STATE.motorPwm + Math.round((Math.random() - 0.5) * 6)));
-      }
-
-      // Build maps
-      const nodeColors = {}, connSet = new Set();
-      for (const b of SIM.batches){
-        const s = SIM_STAGES[b.stageIdx];
-        if (s.type === "node"){
-          if (!nodeColors[s.id]) nodeColors[s.id] = [];
-          nodeColors[s.id].push(b.colorIdx);
-        } else {
-          connSet.add(s.id);
-        }
-      }
-
-      const occupied = id => (nodeColors[id] || []).length > 0;
-
-      // Apply nodes
-      for (const s of SIM_STAGES){
-        if (s.type !== "node") continue;
-        const el = document.getElementById(s.id);
-        if (!el) continue;
-        const colors = nodeColors[s.id] || [];
-        el.classList.remove("sim-b0","sim-b1","sim-b2","sim-b3","active","warn");
-        if (colors.length > 0) el.classList.add("sim-b" + colors[colors.length - 1]);
-        let dots = el.querySelector(".batch-dots");
-        if (!dots){ dots = document.createElement("div"); dots.className = "batch-dots"; el.appendChild(dots); }
-        dots.innerHTML = colors.map(c => `<span class="batch-dot ${SIM_COLORS[c]}"></span>`).join("");
-      }
-
-      // Apply connectors
-      for (const s of SIM_STAGES){
-        if (s.type !== "conn") continue;
-        const el = document.getElementById(s.id);
-        if (!el) continue;
-        el.classList.toggle("flowing", connSet.has(s.id));
-        el.classList.toggle("active",  connSet.has(s.id));
-      }
-
-      // ── Sample state labels ──────────────────────────────────
-      // Conveyor
-      setChip("conveyorChip", occupied("pnode-conveyor") ? "RUNNING" : "IDLE", occupied("pnode-conveyor") ? "good" : "");
-
-      // Gate — open when batch is at gate, shredder, or downstream
-      const gateActive = occupied("pnode-gate") || occupied("pnode-shredder")
-                      || connSet.has("parrow-2") || connSet.has("parrow-3");
-      setChip("gateChip", gateActive ? "OPEN" : "CLOSED", gateActive ? "good" : "");
-      const gateDotEl = document.getElementById("gateDot");
-      if (gateDotEl) gateDotEl.className = "sr-dot" + (gateActive ? " good" : "");
-      set("gateStateText", gateActive ? "OPEN" : "CLOSED");
-      const gateVizEl = document.getElementById("gateViz");
-      if (gateVizEl) gateVizEl.classList.toggle("open", gateActive);
-
-      // Dryer
-      const dryerOccupied = occupied("pnode-dryer");
-      setChip("dryerFlowChip", dryerOccupied ? "DRYING" : "IDLE", dryerOccupied ? "good" : "");
-      set("dryerFlowTemp", SIM_STATE.dryerTemp.toFixed(1) + "\u00b0C");
-
-      // Blast doors — open when batch is at doors or vacuum
-      const doorsActive = occupied("pnode-doors") || occupied("pnode-vacuum")
-                       || connSet.has("parrow-5") || connSet.has("parrow-6");
-      setChip("doorChip", doorsActive ? "OPEN" : "CLOSED", doorsActive ? "good" : "");
-      const bdoorVizEl = document.getElementById("bdoorViz");
-      if (bdoorVizEl) bdoorVizEl.classList.toggle("open", doorsActive);
-
-      // Vacuum / motor
-      const vacActive = occupied("pnode-vacuum") || connSet.has("parrow-6");
-      setChip("motorChip", vacActive ? "RUNNING" : "IDLE", vacActive ? "good" : "");
-      set("motorPwm", vacActive ? SIM_STATE.motorPwm : 0);
-      const bar = document.getElementById("motorPwmBar");
-      if (bar) bar.style.width = (vacActive ? clamp((SIM_STATE.motorPwm / 255) * 100, 0, 100) : 0) + "%";
-
-      // Printer
-      const printActive = occupied("pnode-printer");
-      setChip("printerFlowChip", printActive ? "PRINTING" : "STANDBY", printActive ? "good" : "");
-      set("printerFlowProgress", printActive ? SIM_STATE.printerPct + "%" : "—");
-
-      // ── Header ──────────────────────────────────────────────
-      const hdDot = document.getElementById("connDot");
-      if (hdDot) hdDot.className = "dot good live-pulse";
-      set("connState", "SIM");
-      set("lastUpdated", new Date().toLocaleTimeString());
-
-      // ── Dryer card ───────────────────────────────────────────
-      set("dryer_process_temp_big", SIM_STATE.dryerTemp.toFixed(1));
-      set("dryer_sp_inline",        "175");
-      const simStab = clamp(100 - Math.abs(SIM_STATE.dryerTemp - 175) * 5, 0, 100);
-      const simStabBar = document.getElementById("stability_bar");
-      if (simStabBar){ simStabBar.style.width = simStab + "%"; simStabBar.className = simStab > 70 ? "" : "warn"; }
-      set("dryer_mode_state",  "1");
-      set("dryer_run_state",   dryerOccupied ? "100" : "0");
-      set("dryer_state_guess", dryerOccupied ? "ON" : "OFF");
-      set("dryer_regen_temp",   (SIM_STATE.dryerTemp + 30 + (Math.random() - 0.5) * 1.5).toFixed(1));
-      set("dryer_regen_outlet", (SIM_STATE.dryerTemp - 8).toFixed(1));
-      set("dryer_blower_inlet", "22.0");
-      set("dryer_aux_temp",     "38.5");
-      set("dryer_status_word",  "256 (0x0100)");
-      set("dryer_output_word",  "3 (0x0003)");
-      set("dryer_process_sp_ft", "175");
-      const simApiDot = document.getElementById("dryerApiDot");
-      if (simApiDot) simApiDot.className = "dot good";
-      set("dryerApiState", "CONNECTED");
-      setChip("dryerStateChip", dryerOccupied ? "ON" : "IDLE", dryerOccupied ? "good" : "");
-
-      // ── Arduino card ─────────────────────────────────────────
-      const simArduDot = document.getElementById("arduinoDot");
-      if (simArduDot) simArduDot.className = "dot good";
-      set("arduinoConnState", "CONNECTED");
-      const simDoorViz = document.getElementById("doorViz");
-      if (simDoorViz) simDoorViz.classList.toggle("open", doorsActive);
-      set("doorVizLabel", doorsActive ? "OPEN" : "CLOSED");
-      set("doorA_min", doorsActive ? "480" : "0");
-      set("doorA_max", doorsActive ? "1024" : "480");
-      set("doorB_min", doorsActive ? "480" : "0");
-      set("doorB_max", doorsActive ? "1024" : "480");
-      set("motorDir", "FWD");
-
-      // ── Printer card ─────────────────────────────────────────
-      setChip("printerChip", printActive ? "PRINTING" : "STANDBY", printActive ? "good" : "warn");
-      set("printer_state",    printActive ? "PRINTING" : "STANDBY");
-      set("printer_progress", printActive ? SIM_STATE.printerPct + "%" : "—");
-      const simPrintBar = document.getElementById("printer_progress_bar");
-      if (simPrintBar) simPrintBar.style.width = (printActive ? SIM_STATE.printerPct : 0) + "%";
-      set("printer_nozzle", "235.0");
-      set("printer_zone2",  "235.0");
-      set("printer_zone3",  "235.0");
-      set("printer_bed",    "60.0");
-
-      // ── Summary bar ──────────────────────────────────────────
-      set("sv_dryer_temp", SIM_STATE.dryerTemp.toFixed(1));
-      setSiChip("sv_dryer_state", dryerOccupied ? "ON" : "IDLE",              dryerOccupied ? "good" : "");
-      setSiChip("sv_doors",       doorsActive   ? "OPEN" : "CLOSED",           doorsActive   ? "good" : "");
-      setSiChip("sv_gate",        gateActive    ? "OPEN" : "CLOSED",           gateActive    ? "good" : "");
-      setSiChip("sv_motor",       vacActive ? `PWM ${SIM_STATE.motorPwm}` : "STOPPED", vacActive ? "good" : "");
-      setSiChip("sv_arduino",     "CONNECTED", "good");
-      setSiChip("sv_printer",     printActive ? "PRINTING" : "STANDBY",        printActive   ? "good" : "warn");
     }
 
     function renderSummary(){
@@ -1810,7 +1486,7 @@
     // ── Poll loop ─────────────────────────────────────────────
     async function poll(){
       await Promise.allSettled([pollDryer(), pollArduino(), pollPrinter()]);
-      if (!SIM.active) render();
+      render();
     }
 
     async function init(){

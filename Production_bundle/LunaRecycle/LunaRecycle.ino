@@ -211,6 +211,9 @@ const unsigned long ShredderDirSettleMs = 1000;   // [tune]
 // Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
 // this are clamped so the agitator never exceeds this duty.
 const int AGITATOR_MAX_PERCENT = 75;
+const int AGITATOR_RAMP_STEP_PERCENT = 5;             // [tune] duty step size for soft ramps
+const unsigned long AGITATOR_RAMP_STEP_MS = 80;       // [tune] dwell between ramp steps
+const unsigned long AGITATOR_REVERSE_PAUSE_MS = 1000; // [tune] full-stop pause before direction flip
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -1302,8 +1305,46 @@ void agitatorApply() {
 }
 
 void agitatorSet(int percent, bool fwd) {
-  agitatorPercent = constrain(percent, 0, AGITATOR_MAX_PERCENT);
+  int target = constrain(percent, 0, AGITATOR_MAX_PERCENT);
+  int step = max(1, AGITATOR_RAMP_STEP_PERCENT);
+
+  // If reversing under load, ramp down first, pause at 0, then ramp up in the
+  // new direction so the drivetrain is not slammed by an instant flip.
+  bool reversingUnderLoad = (agitatorPercent > 0 && target > 0 && agitatorFwd != fwd);
+  if (reversingUnderLoad) {
+    for (int p = agitatorPercent; p > 0; p -= step) {
+      agitatorPercent = max(0, p - step);
+      agitatorApply();
+      delay(AGITATOR_RAMP_STEP_MS);
+    }
+    delay(AGITATOR_REVERSE_PAUSE_MS);
+    agitatorFwd = fwd;
+    for (int p = 0; p < target; p += step) {
+      agitatorPercent = min(target, p + step);
+      agitatorApply();
+      delay(AGITATOR_RAMP_STEP_MS);
+    }
+    agitatorPercent = target;
+    agitatorApply();
+    return;
+  }
+
+  // Same-direction speed changes are softened with the same ramp profile.
   agitatorFwd = fwd;
+  if (target > agitatorPercent) {
+    for (int p = agitatorPercent; p < target; p += step) {
+      agitatorPercent = min(target, p + step);
+      agitatorApply();
+      delay(AGITATOR_RAMP_STEP_MS);
+    }
+  } else if (target < agitatorPercent) {
+    for (int p = agitatorPercent; p > target; p -= step) {
+      agitatorPercent = max(target, p - step);
+      agitatorApply();
+      delay(AGITATOR_RAMP_STEP_MS);
+    }
+  }
+  agitatorPercent = target;
   agitatorApply();
 }
 

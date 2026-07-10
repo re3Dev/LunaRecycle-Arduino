@@ -137,7 +137,7 @@ const int TC_leftFilmSensor                = 35;
 const int TC_rightFilmSensor               = 36;
 const int TC_vacuumSensor                  = A0;
 const int System_statusNeoPixelPin         = 46;
-const int System_statusNeoPixelCount       = 1;
+const int System_statusNeoPixelCount       = 7;
 
 // Shredder (pinmap_mega2560.md).
 const int Shredder_motorController_onOff     = 25;
@@ -433,9 +433,21 @@ bool systemDiagErrorActive() {
 void systemDiagSetColor(uint8_t r, uint8_t g, uint8_t b) {
   uint32_t c = System_statusNeoPixel.Color(r, g, b);
   if (c == systemDiagLastColor) return;
-  System_statusNeoPixel.setPixelColor(0, c);
+  System_statusNeoPixel.fill(c);
   System_statusNeoPixel.show();
   systemDiagLastColor = c;
+}
+
+void systemDiagBootTest() {
+  systemDiagSetColor(255, 0, 0);
+  delay(150);
+  systemDiagSetColor(0, 255, 0);
+  delay(150);
+  systemDiagSetColor(0, 0, 255);
+  delay(150);
+  systemDiagSetColor(255, 255, 255);
+  delay(250);
+  systemDiagSetColor(0, 0, 0);
 }
 
 void systemDiagUpdateLed() {
@@ -472,7 +484,7 @@ void systemDiagUpdateLed() {
   }
 
   // Idle and healthy.
-  systemDiagSetColor(0, 20, 20);      // dim cyan
+  systemDiagSetColor(0, 60, 60);      // visible cyan
 }
 
 // ============================================================================
@@ -2237,8 +2249,9 @@ void setup() {
   Serial.begin(115200);
 
   System_statusNeoPixel.begin();
-  System_statusNeoPixel.setBrightness(40);
+  System_statusNeoPixel.setBrightness(80);
   systemDiagSetColor(0, 0, 0);
+  systemDiagBootTest();
 
   // Gate servos - start closed
   Mixer_shredderGateLeftServoMotor.attach(Mixer_shredderGateLeftServoMotor_pin);
@@ -2316,6 +2329,7 @@ void setup() {
   TC_stepper.disableOutputs();
 
   Serial.println(F("[SYSTEM] LunaRecycle Mega firmware ready"));
+  Serial.println(F("[SYSTEM] NeoPixel status LED initialized on D46"));
   Serial.println(F("[SYSTEM] Commands: GATE_OPEN, GATE_CLOSE, MOTOR_SET <spd> <FWD|REV>, MOTOR_STOP, TC_HOME, TC_PICK, TC_STOP, STATUS, ESTOP"));
   Serial.println(F("[SYSTEM] Auto: SR_START <pe_units> <pa_units>, SR_STOP, SR_STATUS (size reduction)"));
   systemDiagUpdateLed();

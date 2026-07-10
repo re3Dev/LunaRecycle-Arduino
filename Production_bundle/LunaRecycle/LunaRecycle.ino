@@ -103,6 +103,7 @@
 #include <Wire.h>
 #include <Adafruit_INA219.h>
 #include <Adafruit_DS3502.h>
+#include <Adafruit_NeoPixel.h>
 #include <AccelStepper.h>
 
 // ============================================================================
@@ -135,6 +136,8 @@ const int TC_stepperHomeLimit              = 34;
 const int TC_leftFilmSensor                = 35;
 const int TC_rightFilmSensor               = 36;
 const int TC_vacuumSensor                  = A0;
+const int System_statusNeoPixelPin         = 46;
+const int System_statusNeoPixelCount       = 1;
 
 // Shredder (pinmap_mega2560.md).
 const int Shredder_motorController_onOff     = 25;
@@ -304,6 +307,9 @@ Servo Mixer_shredderGateLeftServoMotor;
 Servo Mixer_shredderGateRightServoMotor;
 Adafruit_INA219 Mixer_screwMotorCurrentSensor;
 Adafruit_DS3502 Mixer_vacuumMotorDigipot = Adafruit_DS3502();
+Adafruit_NeoPixel System_statusNeoPixel(System_statusNeoPixelCount,
+                                        System_statusNeoPixelPin,
+                                        NEO_GRB + NEO_KHZ800);
 
 AccelStepper TC_stepper(AccelStepper::DRIVER,
                         TC_stepperMotorController_step,
@@ -389,6 +395,8 @@ bool srRequireBothStreams = false;  // true when SR started with both PE and PA 
 bool srRehomePending = false;        // set when a full PE:PA cadence cycle completes
 bool srResumeAfterHome = false;      // SR requested a precision re-home in progress
 unsigned long srPhaseStart = 0;
+unsigned long systemDiagErrorUntilMs = 0;
+uint32_t      systemDiagLastColor = 0;
 
 // Mixer agitator state.
 int  agitatorPercent   = 0;      // 0..AGITATOR_MAX_PERCENT
@@ -405,6 +413,67 @@ long          blastGatePositionMs[2] = { 0, 0 };   // estimated ms of travel fro
 bool          blastGateCalibrated[2] = { false, false };
 bool          blastGatePrevMin[2]    = { false, false };
 bool          blastGatePrevMax[2]    = { false, false };
+
+// ============================================================================
+//  System status / diagnostics LED (NeoPixel on D46)
+// ============================================================================
+
+void systemDiagFlagError(unsigned long holdMs = 15000UL) {
+  unsigned long now = millis();
+  unsigned long until = now + holdMs;
+  if ((long)(until - systemDiagErrorUntilMs) > 0) {
+    systemDiagErrorUntilMs = until;
+  }
+}
+
+bool systemDiagErrorActive() {
+  return (long)(systemDiagErrorUntilMs - millis()) > 0;
+}
+
+void systemDiagSetColor(uint8_t r, uint8_t g, uint8_t b) {
+  uint32_t c = System_statusNeoPixel.Color(r, g, b);
+  if (c == systemDiagLastColor) return;
+  System_statusNeoPixel.setPixelColor(0, c);
+  System_statusNeoPixel.show();
+  systemDiagLastColor = c;
+}
+
+void systemDiagUpdateLed() {
+  // Error state has highest priority: blinking red.
+  if (systemDiagErrorActive()) {
+    bool on = ((millis() / 200UL) % 2UL) == 0UL;
+    systemDiagSetColor(on ? 255 : 0, 0, 0);
+    return;
+  }
+
+  // Waiting for homing is a setup warning.
+  if (tcState == TC_WAIT_HOME) {
+    systemDiagSetColor(180, 70, 0);   // amber
+    return;
+  }
+
+  // Active homing.
+  if (tcState == TC_HOMING || tcState == TC_BACK_TO_BAG1) {
+    systemDiagSetColor(0, 0, 180);    // blue
+    return;
+  }
+
+  // Size-reduction cycle running.
+  if (srRunning || tcState == TC_SR_SHREDDING || tcState == TC_SR_REVERSING ||
+      tcState == TC_SR_COOLING || tcState == TC_SR_END_REVERSE) {
+    systemDiagSetColor(120, 0, 120);  // purple
+    return;
+  }
+
+  // Any actuator active.
+  if (motorPwm > 0 || tcPumpRunning || shredderRunning || agitatorPercent > 0 || vacuumPercent > 0) {
+    systemDiagSetColor(0, 160, 0);    // green
+    return;
+  }
+
+  // Idle and healthy.
+  systemDiagSetColor(0, 20, 20);      // dim cyan
+}
 
 // ============================================================================
 //  Gate helpers
@@ -531,6 +600,7 @@ void mixerGuardHall() {
       mixerHallAttached   = false;
       mixerHallReattachMs = nowMs + MIXER_NOISE_COOLDOWN_MS;
       mixerRpm = 0.0f;
+      systemDiagFlagError();
       Serial.println(F("[RPM] hall noise storm detected - interrupt paused"));
     }
   }
@@ -1907,6 +1977,7 @@ void handleCommand(const String& cmd) {
     args.trim();
     int spaceIdx = args.indexOf(' ');
     if (spaceIdx < 0) {
+      systemDiagFlagError();
       Serial.println(F("[MOTOR] ERROR: usage MOTOR_SET <0-255> <FWD|REV>"));
       return;
     }
@@ -1915,10 +1986,12 @@ void handleCommand(const String& cmd) {
     dir.trim();
 
     if (spd < 0 || spd > 255) {
+      systemDiagFlagError();
       Serial.println(F("[MOTOR] ERROR: speed must be 0-255"));
       return;
     }
     if (dir != "FWD" && dir != "REV") {
+      systemDiagFlagError();
       Serial.println(F("[MOTOR] ERROR: direction must be FWD or REV"));
       return;
     }
@@ -2010,6 +2083,7 @@ void handleCommand(const String& cmd) {
     args.trim();
     int sp = args.indexOf(' ');
     if (sp < 0) {
+      systemDiagFlagError();
       Serial.println(F("[AGITATOR] ERROR: usage AGITATOR_SET <0-100> <FWD|REV>"));
       return;
     }
@@ -2017,10 +2091,12 @@ void handleCommand(const String& cmd) {
     String dir = args.substring(sp + 1);
     dir.trim();
     if (pct < 0 || pct > 100) {
+      systemDiagFlagError();
       Serial.println(F("[AGITATOR] ERROR: percent must be 0-100"));
       return;
     }
     if (dir != "FWD" && dir != "REV") {
+      systemDiagFlagError();
       Serial.println(F("[AGITATOR] ERROR: direction must be FWD or REV"));
       return;
     }
@@ -2038,10 +2114,12 @@ void handleCommand(const String& cmd) {
     // VACUUM_SET <0-100>
     int pct = cmd.substring(11).toInt();
     if (pct < 0 || pct > 100) {
+      systemDiagFlagError();
       Serial.println(F("[VACUUM] ERROR: percent must be 0-100"));
       return;
     }
     if (!vacuumDigipotOk && !vacuumInitDigipot(false)) {
+      systemDiagFlagError();
       Serial.println(F("[VACUUM] ERROR: DS3502 not found (try VACUUM_REINIT)"));
       return;
     }
@@ -2061,6 +2139,7 @@ void handleCommand(const String& cmd) {
       vacuumStop();
       Serial.println(F("[VACUUM] DS3502 re-initialized"));
     } else {
+      systemDiagFlagError();
       Serial.println(F("[VACUUM] ERROR: DS3502 still not found"));
     }
 
@@ -2077,6 +2156,7 @@ void handleCommand(const String& cmd) {
   } else if (cmd.startsWith("TC_SERVO ")) {
     int deg = cmd.substring(9).toInt();
     if (deg < TC_servoMinDeg || deg > TC_servoMaxDeg) {
+      systemDiagFlagError();
       Serial.println(F("[TC] ERROR: servo angle must be 0-270"));
     } else {
       tcWriteServoAngle(deg);
@@ -2095,6 +2175,7 @@ void handleCommand(const String& cmd) {
     String args = cmd.substring(9); args.trim();
     int sp = args.indexOf(' ');
     if (sp < 0) {
+      systemDiagFlagError();
       Serial.println(F("[SIZERED] usage SR_START <pe_units> <pa_units>"));
       return;
     }
@@ -2113,6 +2194,7 @@ void handleCommand(const String& cmd) {
     printAllStatus();
 
   } else if (cmd == "ESTOP") {
+    systemDiagFlagError(30000UL);
     motorStop();
     gateCloseCmd();
     shredderOff();
@@ -2125,6 +2207,7 @@ void handleCommand(const String& cmd) {
     Serial.println(F("[SYSTEM] ESTOP - all stopped"));
 
   } else if (cmd.length() > 0) {
+    systemDiagFlagError();
     Serial.print(F("[SYSTEM] Unknown: "));
     Serial.println(cmd);
   }
@@ -2152,6 +2235,10 @@ void readSerial() {
 
 void setup() {
   Serial.begin(115200);
+
+  System_statusNeoPixel.begin();
+  System_statusNeoPixel.setBrightness(40);
+  systemDiagSetColor(0, 0, 0);
 
   // Gate servos - start closed
   Mixer_shredderGateLeftServoMotor.attach(Mixer_shredderGateLeftServoMotor_pin);
@@ -2181,12 +2268,14 @@ void setup() {
   Wire.setWireTimeout(3000, true);
   inaOk = Mixer_screwMotorCurrentSensor.begin();
   if (!inaOk) {
+    systemDiagFlagError();
     Serial.println(F("[SYSTEM] WARNING: INA219 not found - energy monitor disabled"));
   }
 
   // DS3502 digital pot - vacuum motor speed control (shares the I2C bus).
   // Probe supported addresses so non-default A0/A1 strap settings still work.
   if (!vacuumInitDigipot(true)) {
+    systemDiagFlagError();
     Serial.println(F("[SYSTEM] WARNING: DS3502 not found - vacuum motor disabled"));
   }
   vacuumStop();
@@ -2229,6 +2318,7 @@ void setup() {
   Serial.println(F("[SYSTEM] LunaRecycle Mega firmware ready"));
   Serial.println(F("[SYSTEM] Commands: GATE_OPEN, GATE_CLOSE, MOTOR_SET <spd> <FWD|REV>, MOTOR_STOP, TC_HOME, TC_PICK, TC_STOP, STATUS, ESTOP"));
   Serial.println(F("[SYSTEM] Auto: SR_START <pe_units> <pa_units>, SR_STOP, SR_STATUS (size reduction)"));
+  systemDiagUpdateLed();
 }
 
 void loop() {
@@ -2261,4 +2351,6 @@ void loop() {
     lastEnergyPrint = now;
     printEnergy();
   }
+
+  systemDiagUpdateLed();
 }

@@ -151,7 +151,7 @@ class EventLogger:
                 if prev is not None and prev == is_on:
                     return
                 event = {
-                    "ts": datetime.now(EVENT_LOG_TZ).isoformat(),
+                    "ts": datetime.now(EVENT_LOG_TZ).strftime("%Y-%m-%dT%H:%M:%S"),
                     "actuator": actuator,
                     "state": "ON" if is_on else "OFF",
                 }

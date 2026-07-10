@@ -95,6 +95,16 @@ class EventLogger:
         if folder:
             os.makedirs(folder, exist_ok=True)
         self._archive_legacy_log_if_needed()
+        self._ensure_log_file_exists()
+
+    def _ensure_log_file_exists(self) -> None:
+        """Create the active log file at startup for easy deployment verification."""
+        try:
+            if not os.path.exists(self._path):
+                with open(self._path, "a", encoding="utf-8"):
+                    pass
+        except Exception:
+            self._last_error = "failed_to_create_event_log"
 
     def _archive_legacy_log_if_needed(self) -> None:
         """Archive old schema logs so only actuator-edge entries remain in active file."""

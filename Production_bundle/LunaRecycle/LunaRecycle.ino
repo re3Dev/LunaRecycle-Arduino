@@ -87,8 +87,8 @@
  *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
  *
  *   Mixer blast gates (RoboClaw RC pulse):
- *     LEFT  actuator  ->  D9,  limits MIN=D37 MAX=D38
- *     RIGHT actuator  ->  D8,  limits MIN=D39 MAX=D40
+ *     LEFT  actuator  ->  D9,  limits MIN=D39 MAX=D40
+ *     RIGHT actuator  ->  D8,  limits MIN=D37 MAX=D38
  *
  *   Trash conveyor (per pinmap_mega2560.md):
  *     Stepper STEP / DIR / EN  ->  D4 / D22 / D23
@@ -144,11 +144,11 @@ const int Shredder_motorController_onOff     = 25;
 const int Shredder_motorController_direction = 26;
 
 // Mixer blast gates - RoboClaw RC-pulse linear actuators (pinmap_mega2560.md).
-// Mapping verified on the bench: LEFT  -> RC D9, limits MIN=D37 MAX=D38;
-//                               RIGHT -> RC D8, limits MIN=D39 MAX=D40.
+// Current mapping: LEFT  -> RC D9, limits MIN=D39 MAX=D40;
+//                  RIGHT -> RC D8, limits MIN=D37 MAX=D38.
 const int Mixer_blastGatePin[2]    = { 9, 8 };     // [LEFT, RIGHT] RC pulse out
-const int Mixer_blastGateMinPin[2] = { 37, 39 };   // [LEFT, RIGHT] MIN limit
-const int Mixer_blastGateMaxPin[2] = { 38, 40 };   // [LEFT, RIGHT] MAX limit
+const int Mixer_blastGateMinPin[2] = { 39, 37 };   // [LEFT, RIGHT] MIN limit
+const int Mixer_blastGateMaxPin[2] = { 40, 38 };   // [LEFT, RIGHT] MAX limit
 const char* Mixer_blastGateName[2] = { "LEFT", "RIGHT" };
 const int BG_LEFT  = 0;
 const int BG_RIGHT = 1;

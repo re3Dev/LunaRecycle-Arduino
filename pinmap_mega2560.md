@@ -114,10 +114,10 @@
 ### Blast Gate Limit Switches
 | Pin  | Signal                          | Notes         |
 |------|---------------------------------|---------------|
-| D37  | `Mixer_blastGateLeftMinLimit`   | Digital input |
-| D38  | `Mixer_blastGateLeftMaxLimit`   | Digital input |
-| D39  | `Mixer_blastGateRightMinLimit`  | Digital input |
-| D40  | `Mixer_blastGateRightMaxLimit`  | Digital input |
+| D39  | `Mixer_blastGateLeftMinLimit`   | Digital input |
+| D40  | `Mixer_blastGateLeftMaxLimit`   | Digital input |
+| D37  | `Mixer_blastGateRightMinLimit`  | Digital input |
+| D38  | `Mixer_blastGateRightMaxLimit`  | Digital input |
 
 ---
 

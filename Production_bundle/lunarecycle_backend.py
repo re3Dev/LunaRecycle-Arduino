@@ -326,16 +326,20 @@ class ArduinoBridge:
     def send(self, cmd: str) -> list[str]:
         with self._lock:
             start = time.monotonic()
+            normalized = str(cmd).strip().upper()
+            cmd_name = normalized.split()[0] if normalized else ""
+            # Suppress high-frequency query chatter; keep state-changing actions.
+            is_query_only = normalized == "STATUS" or cmd_name.endswith("_STATUS")
             try:
                 lines = self._send_command(cmd)
-                event_logger.log(
-                    "command",
-                    "arduino",
-                    "send_ok",
-                    command=cmd,
-                    duration_ms=int((time.monotonic() - start) * 1000),
-                    response=lines,
-                )
+                if not is_query_only:
+                    event_logger.log(
+                        "state_change",
+                        "arduino",
+                        cmd_name or "command",
+                        command=cmd,
+                        duration_ms=int((time.monotonic() - start) * 1000),
+                    )
                 return lines
             except self.SERIAL_IO_EXCEPTIONS as exc:
                 # Drop the handle so the supervisor reconnects rather than
@@ -510,7 +514,6 @@ class DryerModbus:
             if wr.isError():
                 event_logger.log("error", "dryer", "write_holding_failed", address=addr, value=value)
                 raise RuntimeError(str(wr))
-            event_logger.log("command", "dryer", "write_holding", address=addr, value=value)
 
     def pulse_holding(
         self,
@@ -519,15 +522,6 @@ class DryerModbus:
         value_off: int = 0,
         pulse_time: float = 0.3,
     ) -> None:
-        event_logger.log(
-            "command",
-            "dryer",
-            "pulse_holding",
-            address=addr,
-            value_on=value_on,
-            value_off=value_off,
-            pulse_time=pulse_time,
-        )
         self.write_holding(addr, value_on)
         time.sleep(pulse_time)
         self.write_holding(addr, value_off)

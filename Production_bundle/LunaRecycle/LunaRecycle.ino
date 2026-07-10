@@ -460,31 +460,31 @@ void systemDiagUpdateLed() {
 
   // Waiting for homing is a setup warning.
   if (tcState == TC_WAIT_HOME) {
-    systemDiagSetColor(180, 70, 0);   // amber
+    systemDiagSetColor(255, 180, 0);  // bright amber
     return;
   }
 
   // Active homing.
   if (tcState == TC_HOMING || tcState == TC_BACK_TO_BAG1) {
-    systemDiagSetColor(0, 0, 180);    // blue
+    systemDiagSetColor(0, 0, 255);    // bright blue
     return;
   }
 
   // Size-reduction cycle running.
   if (srRunning || tcState == TC_SR_SHREDDING || tcState == TC_SR_REVERSING ||
       tcState == TC_SR_COOLING || tcState == TC_SR_END_REVERSE) {
-    systemDiagSetColor(120, 0, 120);  // purple
+    systemDiagSetColor(255, 0, 255);  // bright magenta
     return;
   }
 
   // Any actuator active.
   if (motorPwm > 0 || tcPumpRunning || shredderRunning || agitatorPercent > 0 || vacuumPercent > 0) {
-    systemDiagSetColor(0, 160, 0);    // green
+    systemDiagSetColor(0, 255, 0);    // bright green
     return;
   }
 
   // Idle and healthy.
-  systemDiagSetColor(0, 60, 60);      // visible cyan
+  systemDiagSetColor(0, 255, 255);    // bright cyan
 }
 
 // ============================================================================
@@ -2249,7 +2249,7 @@ void setup() {
   Serial.begin(115200);
 
   System_statusNeoPixel.begin();
-  System_statusNeoPixel.setBrightness(80);
+  System_statusNeoPixel.setBrightness(180);
   systemDiagSetColor(0, 0, 0);
   systemDiagBootTest();
 

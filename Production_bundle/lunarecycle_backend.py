@@ -82,12 +82,13 @@ _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class EventLogger:
-    """Thread-safe, append-only event logger for backend telemetry and actions."""
+    """Thread-safe, append-only logger for actuator ON/OFF edge events only."""
 
     def __init__(self, path: str) -> None:
         self._path = path
         self._lock = threading.Lock()
         self._last_error = ""
+        self._last_state: dict[str, bool] = {}
         # Ensure the destination directory exists so first-write cannot fail
         # silently when a custom path points to a missing folder.
         folder = os.path.dirname(os.path.abspath(self._path))
@@ -104,23 +105,29 @@ class EventLogger:
             "last_error": self._last_error,
         }
 
-    def log(self, event_type: str, source: str, action: str, **data) -> None:
-        event = {
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "event_type": event_type,
-            "source": source,
-            "action": action,
-            "data": data,
-        }
+    def log_actuator_state(self, actuator: str, is_on: bool) -> None:
         try:
             with self._lock:
+                prev = self._last_state.get(actuator)
+                if prev is not None and prev == is_on:
+                    return
+                event = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "actuator": actuator,
+                    "state": "ON" if is_on else "OFF",
+                }
                 with open(self._path, "a", encoding="utf-8") as fp:
                     fp.write(json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n")
+                self._last_state[actuator] = is_on
                 self._last_error = ""
         except Exception:
             self._last_error = "failed_to_write_event_log"
             # Logging must never break control flow.
             pass
+
+    def mark_all_off(self) -> None:
+        for actuator in ("mixer_motor", "shredder", "tc_pump", "agitator", "vacuum", "dryer"):
+            self.log_actuator_state(actuator, False)
 
 
 event_logger = EventLogger(EVENT_LOG_PATH)
@@ -213,7 +220,6 @@ class ArduinoBridge:
             self._want_connected = True
             if self._ser and self._ser.is_open:
                 self.connected = True
-                event_logger.log("connection", "arduino", "connect_reused", port=self._port, baudrate=self._baud)
                 return True
 
             last_exc: Exception | None = None
@@ -224,7 +230,6 @@ class ArduinoBridge:
                     self._ser.reset_input_buffer()
                     self.connected = True
                     self._port = candidate   # remember the working node for next reconnect
-                    event_logger.log("connection", "arduino", "connect_ok", port=self._port, baudrate=self._baud)
                     return True
                 except (serial.SerialException, OSError) as exc:
                     self._ser = None
@@ -233,14 +238,57 @@ class ArduinoBridge:
 
             if last_exc is None:
                 last_exc = RuntimeError(f"No serial candidates found for {port}")
-            event_logger.log("error", "arduino", "connect_failed", port=port, baudrate=baudrate, error=str(last_exc))
             raise RuntimeError(str(last_exc)) from last_exc
 
     def disconnect(self) -> None:
         with self._lock:
             self._want_connected = False
             self._reset_serial_locked()
-            event_logger.log("connection", "arduino", "disconnect")
+
+    def _track_state_change_from_command(self, normalized_cmd: str) -> None:
+        parts = normalized_cmd.split()
+        if not parts:
+            return
+        cmd = parts[0]
+
+        if cmd == "MOTOR_STOP":
+            event_logger.log_actuator_state("mixer_motor", False)
+        elif cmd == "MOTOR_SET":
+            pwm = 0
+            if len(parts) > 1:
+                try:
+                    pwm = int(parts[1])
+                except ValueError:
+                    pwm = 0
+            event_logger.log_actuator_state("mixer_motor", pwm > 0)
+        elif cmd == "SHREDDER_ON":
+            event_logger.log_actuator_state("shredder", True)
+        elif cmd == "SHREDDER_OFF":
+            event_logger.log_actuator_state("shredder", False)
+        elif cmd == "TC_PUMP_ON":
+            event_logger.log_actuator_state("tc_pump", True)
+        elif cmd == "TC_PUMP_OFF":
+            event_logger.log_actuator_state("tc_pump", False)
+        elif cmd == "AGITATOR_STOP":
+            event_logger.log_actuator_state("agitator", False)
+        elif cmd == "AGITATOR_SET":
+            pct = 0
+            if len(parts) > 1:
+                try:
+                    pct = int(parts[1])
+                except ValueError:
+                    pct = 0
+            event_logger.log_actuator_state("agitator", pct > 0)
+        elif cmd == "VACUUM_STOP":
+            event_logger.log_actuator_state("vacuum", False)
+        elif cmd == "VACUUM_SET":
+            pct = 0
+            if len(parts) > 1:
+                try:
+                    pct = int(parts[1])
+                except ValueError:
+                    pct = 0
+            event_logger.log_actuator_state("vacuum", pct > 0)
 
     def _reset_serial_locked(self) -> None:
         """Close and drop the serial handle. Caller must hold self._lock."""
@@ -325,44 +373,17 @@ class ArduinoBridge:
 
     def send(self, cmd: str) -> list[str]:
         with self._lock:
-            start = time.monotonic()
             normalized = str(cmd).strip().upper()
-            cmd_name = normalized.split()[0] if normalized else ""
-            # Suppress high-frequency query chatter; keep state-changing actions.
-            is_query_only = normalized == "STATUS" or cmd_name.endswith("_STATUS")
             try:
                 lines = self._send_command(cmd)
-                if not is_query_only:
-                    event_logger.log(
-                        "state_change",
-                        "arduino",
-                        cmd_name or "command",
-                        command=cmd,
-                        duration_ms=int((time.monotonic() - start) * 1000),
-                    )
+                self._track_state_change_from_command(normalized)
                 return lines
             except self.SERIAL_IO_EXCEPTIONS as exc:
                 # Drop the handle so the supervisor reconnects rather than
                 # leaving a half-dead port that fails every future command.
                 self._reset_serial_locked()
-                event_logger.log(
-                    "error",
-                    "arduino",
-                    "send_failed",
-                    command=cmd,
-                    duration_ms=int((time.monotonic() - start) * 1000),
-                    error=str(exc),
-                )
                 raise RuntimeError(f"Serial I/O error: {exc}") from exc
-            except Exception as exc:
-                event_logger.log(
-                    "error",
-                    "arduino",
-                    "send_failed",
-                    command=cmd,
-                    duration_ms=int((time.monotonic() - start) * 1000),
-                    error=str(exc),
-                )
+            except Exception:
                 raise
 
     # ── Status parsing ────────────────────────────────────────────────────────
@@ -474,7 +495,6 @@ class DryerModbus:
     def connect(self) -> bool:
         with self._lock:
             self.connected = self.client.connect()
-            event_logger.log("connection", "dryer", "connect", connected=self.connected, port=DRYER_PORT)
             return self.connected
 
     def ensure_connected(self) -> bool:
@@ -486,7 +506,6 @@ class DryerModbus:
         with self._lock:
             self.client.close()
             self.connected = False
-            event_logger.log("connection", "dryer", "disconnect", connected=False)
 
     def read_input(self, addr: int, count: int = 1) -> list[int]:
         with self._lock:
@@ -512,7 +531,6 @@ class DryerModbus:
                 address=addr, value=value & 0xFFFF, device_id=DRYER_DEVICE_ID
             )
             if wr.isError():
-                event_logger.log("error", "dryer", "write_holding_failed", address=addr, value=value)
                 raise RuntimeError(str(wr))
 
     def pulse_holding(
@@ -542,16 +560,18 @@ class DryerModbus:
     def get_output_word(self) -> int:       return self.read_input(25)[0]
 
     def set_process_setpoint(self, value: int) -> None:
-        event_logger.log("setpoint", "dryer", "set_process_setpoint", value=value)
         self.write_holding(21, _u16(value))
 
     def set_dewpoint_setpoint(self, value: int) -> None:
-        event_logger.log("setpoint", "dryer", "set_dewpoint_setpoint", value=value)
         self.write_holding(23, _u16(value))
 
     def toggle_on_off(self) -> None:
-        event_logger.log("state_change", "dryer", "toggle_on_off")
+        before = self.get_run_state_raw()
         self.pulse_holding(addr=17, value_on=1, value_off=0, pulse_time=0.3)
+        time.sleep(0.2)
+        after = self.get_run_state_raw()
+        if before in (0, 100) and after in (0, 100) and before != after:
+            event_logger.log_actuator_state("dryer", after == 100)
 
     # ── Composite reads ───────────────────────────────────────────────────────
 
@@ -1269,6 +1289,7 @@ class ProcessOrchestrator:
                 dryer.toggle_on_off()
             with self._lock:
                 self.dryer_on = True
+            event_logger.log_actuator_state("dryer", True)
         except Exception as exc:
             self._note(f"dryer ON failed: {exc}")
 
@@ -1281,6 +1302,7 @@ class ProcessOrchestrator:
         finally:
             with self._lock:
                 self.dryer_on = False
+            event_logger.log_actuator_state("dryer", False)
 
     def _run_discharge_motion(self):
         """Run discharge motion, optionally alternating directions to shake down material."""
@@ -1563,7 +1585,6 @@ def api_dry_start():
         if temp_c <= 0 or temp_c > 250:
             return jsonify({"ok": False, "error": "temp_c must be 1-250"}), 400
         orchestrator.start(int(minutes * 60), temp_c)
-        event_logger.log("state_change", "process", "dry_start", minutes=minutes, temp_c=temp_c)
         return jsonify({"ok": True, "data": orchestrator.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1573,7 +1594,6 @@ def api_dry_start():
 def api_dry_stop():
     try:
         orchestrator.stop()
-        event_logger.log("state_change", "process", "dry_stop")
         return jsonify({"ok": True, "data": orchestrator.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1601,16 +1621,6 @@ def api_feed_start():
         if meter_period <= 0 or meter_on < 0 or meter_on > meter_period:
             return jsonify({"ok": False, "error": "meter timing invalid"}), 400
         feeder.start(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct)
-        event_logger.log(
-            "state_change",
-            "process",
-            "feed_start",
-            prime_sec=prime_sec,
-            meter_on_sec=meter_on,
-            meter_period_sec=meter_period,
-            vacuum_pct=vacuum_pct,
-            agitator_pct=agitator_pct,
-        )
         return jsonify({"ok": True, "data": feeder.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1620,7 +1630,6 @@ def api_feed_start():
 def api_feed_stop():
     try:
         feeder.stop()
-        event_logger.log("state_change", "process", "feed_stop")
         return jsonify({"ok": True, "data": feeder.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1692,7 +1701,7 @@ def api_estop():
     except Exception as exc:
         errors.append(f"Dryer ESTOP: {exc}")
 
-    event_logger.log("state_change", "system", "estop", ok=len(errors) == 0, errors=errors)
+    event_logger.mark_all_off()
 
     return jsonify({
         "ok":     len(errors) == 0,

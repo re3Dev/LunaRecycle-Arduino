@@ -58,7 +58,7 @@ DRYER_TIMEOUT   = 0.5    # seconds
 # Persistent event log path (JSON Lines). One event per line with UTC timestamp.
 EVENT_LOG_PATH = os.environ.get(
     "LUNA_EVENT_LOG_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "luna_events.jsonl"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "luna_actuator_events.jsonl"),
 )
 
 # Server bind. 0.0.0.0 makes the dashboard reachable from other devices on the
@@ -94,12 +94,39 @@ class EventLogger:
         folder = os.path.dirname(os.path.abspath(self._path))
         if folder:
             os.makedirs(folder, exist_ok=True)
+        self._archive_legacy_log_if_needed()
+
+    def _archive_legacy_log_if_needed(self) -> None:
+        """Archive old schema logs so only actuator-edge entries remain in active file."""
+        if not os.path.exists(self._path):
+            return
+        try:
+            is_legacy = False
+            with open(self._path, "r", encoding="utf-8") as fp:
+                for _ in range(30):
+                    line = fp.readline()
+                    if not line:
+                        break
+                    s = line.strip()
+                    if not s:
+                        continue
+                    if '"event_type"' in s or '"source"' in s or '"action"' in s:
+                        is_legacy = True
+                        break
+            if not is_legacy:
+                return
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            archived = f"{self._path}.legacy.{stamp}"
+            os.replace(self._path, archived)
+        except Exception:
+            self._last_error = "failed_to_archive_legacy_log"
 
     def info(self) -> dict:
         exists = os.path.exists(self._path)
         size = os.path.getsize(self._path) if exists else 0
         return {
             "path": self._path,
+            "mode": "actuator_edges_only",
             "exists": exists,
             "size_bytes": size,
             "last_error": self._last_error,

@@ -214,7 +214,7 @@ const unsigned long ShredderDirSettleMs = 1000;   // [tune]
 const int AGITATOR_MAX_PERCENT = 75;
 const int AGITATOR_RAMP_STEP_PERCENT = 3;             // [tune] duty step size for soft ramps
 const unsigned long AGITATOR_RAMP_STEP_MS = 140;      // [tune] dwell between ramp steps
-const unsigned long AGITATOR_REVERSE_PAUSE_MS = 1500; // [tune] full-stop pause before direction flip
+const unsigned long AGITATOR_REVERSE_PAUSE_MS = 5000; // [tune] full-stop pause before direction flip
 const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
@@ -289,7 +289,7 @@ const unsigned long TC_shredderPauseMs = 1000;
 // ── Size Reduction (automated shred cadence) tunables ──────────────────────
 // First-guess defaults from the process spec; verify on hardware. PE bags come
 // from the LEFT cassette (bag 1), PA+EVOH+PE from the RIGHT cassette (bag 2).
-const unsigned long SR_shredTimePerBagMs = 7000;    // dwell per bag (~7 s)     [tune]
+const unsigned long SR_shredTimePerBagMs = 3000;    // dwell per bag (~3 s)     [tune]
 const int           SR_reverseEveryBags  = 10;      // reverse-clear cadence    [tune]
 const unsigned long SR_reverseDurationMs = 5000;    // reverse-clear time (5 s) [tune]
 const int           SR_coolEveryBags     = 100;     // motor-cool cadence       [tune]

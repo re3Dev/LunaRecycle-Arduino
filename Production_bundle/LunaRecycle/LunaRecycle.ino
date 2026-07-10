@@ -386,6 +386,8 @@ int  srRatioPe      = 1;      // PE bags per single PA bag (cadence)
 int  srPeInCadence  = 0;
 long srBagsShredded = 0;
 bool srRequireBothStreams = false;  // true when SR started with both PE and PA targets
+bool srRehomePending = false;        // set when a full PE:PA cadence cycle completes
+bool srResumeAfterHome = false;      // SR requested a precision re-home in progress
 unsigned long srPhaseStart = 0;
 
 // Mixer agitator state.
@@ -887,10 +889,28 @@ void tcStartHome() {
   tcBagTripsDone = 0;
   tcActiveBag = 1;
   tcSequenceStep = 0;
+  srResumeAfterHome = false;
   tcState = TC_HOMING;
   TC_stepper.enableOutputs();
   TC_stepper.setSpeed(tcMmToSteps(TC_homeSpeed) * TC_homeDir);
   Serial.println(F("[TC] Homing..."));
+}
+
+void srStartCycleRehome() {
+  srResumeAfterHome = true;
+  tcState = TC_HOMING;
+  TC_stepper.enableOutputs();
+  TC_stepper.setSpeed(tcMmToSteps(TC_homeSpeed) * TC_homeDir);
+  Serial.println(F("[SIZERED] Ratio cycle complete - rehoming TC"));
+}
+
+void srDispatchNextBag() {
+  if (srRehomePending) {
+    srRehomePending = false;
+    srStartCycleRehome();
+    return;
+  }
+  srMoveToNextBag();
 }
 
 void tcRunHome() {
@@ -998,6 +1018,8 @@ void srStart(long peUnits, long paUnits) {
   srPeInCadence  = 0;
   srBagsShredded = 0;
   srRequireBothStreams = (peUnits > 0 && paUnits > 0);
+  srRehomePending = false;
+  srResumeAfterHome = false;
   if (srPaRemaining > 0)
     srRatioPe = (int)max(1L, lround((double)srPeRemaining / (double)srPaRemaining));
   else
@@ -1027,6 +1049,11 @@ void srAfterDrop() {
   if (tcActiveBag == 2) { srPaRemaining--; srPeInCadence = 0; }
   else                  { srPeRemaining--; srPeInCadence++; }
 
+  // Re-home at the end of each PE:PA cadence cycle (i.e., right after a PA
+  // bag in dual-stream runs) to keep conveyor positioning tight over time.
+  srRehomePending = srRequireBothStreams && (tcActiveBag == 2) &&
+                    (srPeRemaining > 0) && (srPaRemaining > 0);
+
   shredderSetDirection(true);
   shredderOn();
   srPhaseStart = millis();
@@ -1043,6 +1070,8 @@ void srFinish(const __FlashStringHelper* why) {
   TC_stepper.disableOutputs();
   srRunning = false;
   srRequireBothStreams = false;
+  srRehomePending = false;
+  srResumeAfterHome = false;
   tcState = TC_READY;
   Serial.print(F("[SIZERED] Done - "));
   Serial.println(why);
@@ -1056,6 +1085,8 @@ void srAbort() {
   TC_stepper.disableOutputs();
   srRunning = false;
   srRequireBothStreams = false;
+  srRehomePending = false;
+  srResumeAfterHome = false;
   tcState = TC_READY;
 }
 
@@ -1077,7 +1108,7 @@ void srServiceTimedPhase() {
           tcState = TC_SR_REVERSING;
           Serial.println(F("[SIZERED] Reverse-clearing blades"));
         } else {
-          srMoveToNextBag();
+          srDispatchNextBag();
         }
       }
       break;
@@ -1086,7 +1117,7 @@ void srServiceTimedPhase() {
       if (elapsed >= SR_reverseDurationMs) {
         shredderSetDirection(true);
         shredderOn();
-        srMoveToNextBag();
+        srDispatchNextBag();
       }
       break;
 
@@ -1094,7 +1125,7 @@ void srServiceTimedPhase() {
       if (elapsed >= SR_coolDurationMs) {
         shredderSetDirection(true);
         shredderOn();
-        srMoveToNextBag();
+        srDispatchNextBag();
       }
       break;
 
@@ -1146,8 +1177,14 @@ void tcRunState() {
   switch (tcState) {
     case TC_BACK_TO_BAG1:
       TC_stepper.disableOutputs();
-      tcState = TC_READY;
-      Serial.println(F("[TC] Homed - at Bag 1, send TC_PICK"));
+      if (srResumeAfterHome && srRunning) {
+        srResumeAfterHome = false;
+        Serial.println(F("[SIZERED] Rehome complete - resuming feed"));
+        srMoveToNextBag();
+      } else {
+        tcState = TC_READY;
+        Serial.println(F("[TC] Homed - at Bag 1, send TC_PICK"));
+      }
       break;
 
     case TC_MOVE_TO_BAG:

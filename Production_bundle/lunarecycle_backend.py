@@ -87,6 +87,22 @@ class EventLogger:
     def __init__(self, path: str) -> None:
         self._path = path
         self._lock = threading.Lock()
+        self._last_error = ""
+        # Ensure the destination directory exists so first-write cannot fail
+        # silently when a custom path points to a missing folder.
+        folder = os.path.dirname(os.path.abspath(self._path))
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+
+    def info(self) -> dict:
+        exists = os.path.exists(self._path)
+        size = os.path.getsize(self._path) if exists else 0
+        return {
+            "path": self._path,
+            "exists": exists,
+            "size_bytes": size,
+            "last_error": self._last_error,
+        }
 
     def log(self, event_type: str, source: str, action: str, **data) -> None:
         event = {
@@ -100,7 +116,9 @@ class EventLogger:
             with self._lock:
                 with open(self._path, "a", encoding="utf-8") as fp:
                     fp.write(json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n")
+                self._last_error = ""
         except Exception:
+            self._last_error = "failed_to_write_event_log"
             # Logging must never break control flow.
             pass
 
@@ -1646,6 +1664,7 @@ def api_health():
         "ok": True,
         "arduino_connected": arduino.connected,
         "dryer_connected": dryer.connected,
+        "event_log": event_logger.info(),
     })
 
 @app.route("/api/estop", methods=["POST"])
@@ -1697,6 +1716,7 @@ if __name__ == "__main__":
     print(f"LunaRecycle backend starting on http://{SERVER_HOST}:{SERVER_PORT}")
     print(f"  Arduino: {ARDUINO_PORT} @ {ARDUINO_BAUDRATE} baud  (Gate servos, DC motor, INA219)")
     print(f"  Dryer  : {DRYER_PORT}   @ {DRYER_BAUDRATE} baud, ID {DRYER_DEVICE_ID}")
+    print(f"  Event log: {event_logger.info()['path']}")
 
     # Best-effort auto-connect at boot; the supervisor keeps retrying if the
     # Arduino is unplugged or resets, so the dashboard never needs a manual

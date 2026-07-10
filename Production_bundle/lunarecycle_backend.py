@@ -17,10 +17,12 @@ All endpoints return JSON:  { "ok": true, ... }  or  { "ok": false, "error": "..
 from __future__ import annotations
 
 import glob
+import json
 import os
 import termios
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import serial
@@ -53,6 +55,12 @@ DRYER_STOPBITS  = int(os.environ.get("LUNA_DRYER_STOPBITS", "1"))
 DRYER_BYTESIZE  = int(os.environ.get("LUNA_DRYER_BYTESIZE", "8"))
 DRYER_TIMEOUT   = 0.5    # seconds
 
+# Persistent event log path (JSON Lines). One event per line with UTC timestamp.
+EVENT_LOG_PATH = os.environ.get(
+    "LUNA_EVENT_LOG_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "luna_events.jsonl"),
+)
+
 # Server bind. 0.0.0.0 makes the dashboard reachable from other devices on the
 # LAN (e.g. http://<pi-ip>:5055). Set LUNA_HOST=127.0.0.1 to restrict to the Pi.
 SERVER_HOST = os.environ.get("LUNA_HOST", "0.0.0.0")
@@ -71,6 +79,33 @@ app = Flask(__name__)
 CORS(app)
 
 _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+class EventLogger:
+    """Thread-safe, append-only event logger for backend telemetry and actions."""
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._lock = threading.Lock()
+
+    def log(self, event_type: str, source: str, action: str, **data) -> None:
+        event = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "event_type": event_type,
+            "source": source,
+            "action": action,
+            "data": data,
+        }
+        try:
+            with self._lock:
+                with open(self._path, "a", encoding="utf-8") as fp:
+                    fp.write(json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n")
+        except Exception:
+            # Logging must never break control flow.
+            pass
+
+
+event_logger = EventLogger(EVENT_LOG_PATH)
 
 
 @app.route("/")
@@ -160,6 +195,7 @@ class ArduinoBridge:
             self._want_connected = True
             if self._ser and self._ser.is_open:
                 self.connected = True
+                event_logger.log("connection", "arduino", "connect_reused", port=self._port, baudrate=self._baud)
                 return True
 
             last_exc: Exception | None = None
@@ -170,6 +206,7 @@ class ArduinoBridge:
                     self._ser.reset_input_buffer()
                     self.connected = True
                     self._port = candidate   # remember the working node for next reconnect
+                    event_logger.log("connection", "arduino", "connect_ok", port=self._port, baudrate=self._baud)
                     return True
                 except (serial.SerialException, OSError) as exc:
                     self._ser = None
@@ -178,12 +215,14 @@ class ArduinoBridge:
 
             if last_exc is None:
                 last_exc = RuntimeError(f"No serial candidates found for {port}")
+            event_logger.log("error", "arduino", "connect_failed", port=port, baudrate=baudrate, error=str(last_exc))
             raise RuntimeError(str(last_exc)) from last_exc
 
     def disconnect(self) -> None:
         with self._lock:
             self._want_connected = False
             self._reset_serial_locked()
+            event_logger.log("connection", "arduino", "disconnect")
 
     def _reset_serial_locked(self) -> None:
         """Close and drop the serial handle. Caller must hold self._lock."""
@@ -268,13 +307,41 @@ class ArduinoBridge:
 
     def send(self, cmd: str) -> list[str]:
         with self._lock:
+            start = time.monotonic()
             try:
-                return self._send_command(cmd)
+                lines = self._send_command(cmd)
+                event_logger.log(
+                    "command",
+                    "arduino",
+                    "send_ok",
+                    command=cmd,
+                    duration_ms=int((time.monotonic() - start) * 1000),
+                    response=lines,
+                )
+                return lines
             except self.SERIAL_IO_EXCEPTIONS as exc:
                 # Drop the handle so the supervisor reconnects rather than
                 # leaving a half-dead port that fails every future command.
                 self._reset_serial_locked()
+                event_logger.log(
+                    "error",
+                    "arduino",
+                    "send_failed",
+                    command=cmd,
+                    duration_ms=int((time.monotonic() - start) * 1000),
+                    error=str(exc),
+                )
                 raise RuntimeError(f"Serial I/O error: {exc}") from exc
+            except Exception as exc:
+                event_logger.log(
+                    "error",
+                    "arduino",
+                    "send_failed",
+                    command=cmd,
+                    duration_ms=int((time.monotonic() - start) * 1000),
+                    error=str(exc),
+                )
+                raise
 
     # ── Status parsing ────────────────────────────────────────────────────────
 
@@ -385,6 +452,7 @@ class DryerModbus:
     def connect(self) -> bool:
         with self._lock:
             self.connected = self.client.connect()
+            event_logger.log("connection", "dryer", "connect", connected=self.connected, port=DRYER_PORT)
             return self.connected
 
     def ensure_connected(self) -> bool:
@@ -396,6 +464,7 @@ class DryerModbus:
         with self._lock:
             self.client.close()
             self.connected = False
+            event_logger.log("connection", "dryer", "disconnect", connected=False)
 
     def read_input(self, addr: int, count: int = 1) -> list[int]:
         with self._lock:
@@ -421,7 +490,9 @@ class DryerModbus:
                 address=addr, value=value & 0xFFFF, device_id=DRYER_DEVICE_ID
             )
             if wr.isError():
+                event_logger.log("error", "dryer", "write_holding_failed", address=addr, value=value)
                 raise RuntimeError(str(wr))
+            event_logger.log("command", "dryer", "write_holding", address=addr, value=value)
 
     def pulse_holding(
         self,
@@ -430,6 +501,15 @@ class DryerModbus:
         value_off: int = 0,
         pulse_time: float = 0.3,
     ) -> None:
+        event_logger.log(
+            "command",
+            "dryer",
+            "pulse_holding",
+            address=addr,
+            value_on=value_on,
+            value_off=value_off,
+            pulse_time=pulse_time,
+        )
         self.write_holding(addr, value_on)
         time.sleep(pulse_time)
         self.write_holding(addr, value_off)
@@ -450,12 +530,15 @@ class DryerModbus:
     def get_output_word(self) -> int:       return self.read_input(25)[0]
 
     def set_process_setpoint(self, value: int) -> None:
+        event_logger.log("setpoint", "dryer", "set_process_setpoint", value=value)
         self.write_holding(21, _u16(value))
 
     def set_dewpoint_setpoint(self, value: int) -> None:
+        event_logger.log("setpoint", "dryer", "set_dewpoint_setpoint", value=value)
         self.write_holding(23, _u16(value))
 
     def toggle_on_off(self) -> None:
+        event_logger.log("state_change", "dryer", "toggle_on_off")
         self.pulse_holding(addr=17, value_on=1, value_off=0, pulse_time=0.3)
 
     # ── Composite reads ───────────────────────────────────────────────────────
@@ -1468,6 +1551,7 @@ def api_dry_start():
         if temp_c <= 0 or temp_c > 250:
             return jsonify({"ok": False, "error": "temp_c must be 1-250"}), 400
         orchestrator.start(int(minutes * 60), temp_c)
+        event_logger.log("state_change", "process", "dry_start", minutes=minutes, temp_c=temp_c)
         return jsonify({"ok": True, "data": orchestrator.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1477,6 +1561,7 @@ def api_dry_start():
 def api_dry_stop():
     try:
         orchestrator.stop()
+        event_logger.log("state_change", "process", "dry_stop")
         return jsonify({"ok": True, "data": orchestrator.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1504,6 +1589,16 @@ def api_feed_start():
         if meter_period <= 0 or meter_on < 0 or meter_on > meter_period:
             return jsonify({"ok": False, "error": "meter timing invalid"}), 400
         feeder.start(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct)
+        event_logger.log(
+            "state_change",
+            "process",
+            "feed_start",
+            prime_sec=prime_sec,
+            meter_on_sec=meter_on,
+            meter_period_sec=meter_period,
+            vacuum_pct=vacuum_pct,
+            agitator_pct=agitator_pct,
+        )
         return jsonify({"ok": True, "data": feeder.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1513,6 +1608,7 @@ def api_feed_start():
 def api_feed_stop():
     try:
         feeder.stop()
+        event_logger.log("state_change", "process", "feed_stop")
         return jsonify({"ok": True, "data": feeder.status()})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1583,11 +1679,14 @@ def api_estop():
     except Exception as exc:
         errors.append(f"Dryer ESTOP: {exc}")
 
+    event_logger.log("state_change", "system", "estop", ok=len(errors) == 0, errors=errors)
+
     return jsonify({
         "ok":     len(errors) == 0,
         "errors": errors,
         "message": "ESTOP issued to all connected subsystems.",
     })
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────

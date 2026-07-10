@@ -22,7 +22,7 @@ import os
 import termios
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import serial
@@ -55,11 +55,12 @@ DRYER_STOPBITS  = int(os.environ.get("LUNA_DRYER_STOPBITS", "1"))
 DRYER_BYTESIZE  = int(os.environ.get("LUNA_DRYER_BYTESIZE", "8"))
 DRYER_TIMEOUT   = 0.5    # seconds
 
-# Persistent event log path (JSON Lines). One event per line with UTC timestamp.
+# Persistent event log path (JSON Lines). One event per line with CST timestamp.
 EVENT_LOG_PATH = os.environ.get(
     "LUNA_EVENT_LOG_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "luna_actuator_events.jsonl"),
 )
+EVENT_LOG_TZ = timezone(timedelta(hours=-6), name="CST")
 
 # Server bind. 0.0.0.0 makes the dashboard reachable from other devices on the
 # LAN (e.g. http://<pi-ip>:5055). Set LUNA_HOST=127.0.0.1 to restrict to the Pi.
@@ -137,6 +138,7 @@ class EventLogger:
         return {
             "path": self._path,
             "mode": "actuator_edges_only",
+            "timezone": "CST",
             "exists": exists,
             "size_bytes": size,
             "last_error": self._last_error,
@@ -149,7 +151,7 @@ class EventLogger:
                 if prev is not None and prev == is_on:
                     return
                 event = {
-                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "ts": datetime.now(EVENT_LOG_TZ).isoformat(),
                     "actuator": actuator,
                     "state": "ON" if is_on else "OFF",
                 }

@@ -397,6 +397,7 @@ bool srResumeAfterHome = false;      // SR requested a precision re-home in prog
 unsigned long srPhaseStart = 0;
 unsigned long systemDiagErrorUntilMs = 0;
 uint32_t      systemDiagLastColor = 0;
+unsigned long systemDiagBootHoldUntilMs = 0;
 
 // Mixer agitator state.
 int  agitatorPercent   = 0;      // 0..AGITATOR_MAX_PERCENT
@@ -440,17 +441,22 @@ void systemDiagSetColor(uint8_t r, uint8_t g, uint8_t b) {
 
 void systemDiagBootTest() {
   systemDiagSetColor(255, 0, 0);
-  delay(150);
+  delay(120);
   systemDiagSetColor(0, 255, 0);
-  delay(150);
+  delay(120);
   systemDiagSetColor(0, 0, 255);
-  delay(150);
-  systemDiagSetColor(255, 255, 255);
-  delay(250);
+  delay(120);
+  systemDiagSetColor(255, 180, 0);
+  delay(600);
   systemDiagSetColor(0, 0, 0);
 }
 
 void systemDiagUpdateLed() {
+  if ((long)(systemDiagBootHoldUntilMs - millis()) > 0) {
+    systemDiagSetColor(255, 180, 0);  // hold amber after boot so the steady path is obvious
+    return;
+  }
+
   // Error state has highest priority: blinking red.
   if (systemDiagErrorActive()) {
     bool on = ((millis() / 200UL) % 2UL) == 0UL;
@@ -2249,9 +2255,10 @@ void setup() {
   Serial.begin(115200);
 
   System_statusNeoPixel.begin();
-  System_statusNeoPixel.setBrightness(180);
+  System_statusNeoPixel.setBrightness(48);
   systemDiagSetColor(0, 0, 0);
   systemDiagBootTest();
+  systemDiagBootHoldUntilMs = millis() + 3000UL;
 
   // Gate servos - start closed
   Mixer_shredderGateLeftServoMotor.attach(Mixer_shredderGateLeftServoMotor_pin);

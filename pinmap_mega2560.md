@@ -127,11 +127,11 @@
 |------|-----------|------------------------------------------------|
 | RPi 5| USB       | Modbus RTU — RPi talks to dryer directly       |
 
-> The dryer's control interface is handled entirely by the RPi 5 via USB Modbus. The Mega has no direct connection to the dryer control registers.
+> The RPi 5 still handles dryer parameter/control via USB Modbus. The Mega now provides AC power enable via the dryer SSR on D31.
 ### `Dryer_SSR` — SSR AC Power Control
 | Pin  | Signal      | Notes                    |
 |------|-------------|--------------------------|
-| D31  | `Dryer_SSR` | SSR — dryer AC power     |
+| D31  | `Dryer_SSR` | SSR — dryer AC power (enable before Modbus control) |
 
 ### `Dryer_regenExhaustEnvironmentalSensor` — Temp/Humidity (I2C)
 | Bus  | Address | Notes                        |

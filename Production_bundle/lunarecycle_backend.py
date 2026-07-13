@@ -517,6 +517,20 @@ def _u16(x: int) -> int:
     return x & 0xFFFF
 
 
+def _arduino_send_required(cmd: str) -> list[str]:
+    if not arduino.connected:
+        raise RuntimeError("Arduino not connected.")
+    return arduino.send(cmd)
+
+
+def set_dryer_power(on: bool) -> list[str]:
+    return _arduino_send_required("DRYER_SSR_ON" if on else "DRYER_SSR_OFF")
+
+
+def set_fume_extractor_power(on: bool) -> list[str]:
+    return _arduino_send_required("FE_SSR_ON" if on else "FE_SSR_OFF")
+
+
 class DryerModbus:
     def __init__(self) -> None:
         self.client = ModbusSerialClient(
@@ -676,7 +690,12 @@ dryer = DryerModbus()
 
 @app.route("/api/dryer/connect", methods=["POST"])
 def api_dryer_connect():
-    ok = dryer.connect()
+    try:
+        set_dryer_power(True)
+        time.sleep(1.0)
+        ok = dryer.connect()
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
     return jsonify({
         "ok": ok,
         "connected": ok,
@@ -689,6 +708,10 @@ def api_dryer_connect():
 @app.route("/api/dryer/disconnect", methods=["POST"])
 def api_dryer_disconnect():
     dryer.close()
+    try:
+        set_dryer_power(False)
+    except Exception:
+        pass
     return jsonify({"ok": True, "connected": False})
 
 
@@ -713,6 +736,33 @@ def api_dryer_toggle():
             "after_run_state":  after,
             "message": "Toggled dryer using 40018 bit 0 pulse.",
         })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/fe/on", methods=["POST"])
+def api_fe_on():
+    try:
+        lines = set_fume_extractor_power(True)
+        return jsonify({"ok": True, "state": "ON", "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/fe/off", methods=["POST"])
+def api_fe_off():
+    try:
+        lines = set_fume_extractor_power(False)
+        return jsonify({"ok": True, "state": "OFF", "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/fe/status", methods=["GET"])
+def api_fe_status():
+    try:
+        lines = _arduino_send_required("FE_SSR_STATUS")
+        return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
@@ -1321,6 +1371,8 @@ class ProcessOrchestrator:
 
     def _dryer_on(self, temp_c: int):
         try:
+            set_dryer_power(True)
+            time.sleep(1.0)
             if not dryer.connected:
                 dryer.connect()
             dryer.set_process_setpoint(int(temp_c))
@@ -1339,6 +1391,10 @@ class ProcessOrchestrator:
         except Exception as exc:
             self._note(f"dryer OFF failed: {exc}")
         finally:
+            try:
+                set_dryer_power(False)
+            except Exception as exc:
+                self._note(f"dryer SSR OFF failed: {exc}")
             with self._lock:
                 self.dryer_on = False
             event_logger.log_actuator_state("dryer", False)
@@ -1739,6 +1795,16 @@ def api_estop():
                 dryer.toggle_on_off()
     except Exception as exc:
         errors.append(f"Dryer ESTOP: {exc}")
+
+    try:
+        set_dryer_power(False)
+    except Exception as exc:
+        errors.append(f"Dryer SSR: {exc}")
+
+    try:
+        set_fume_extractor_power(False)
+    except Exception as exc:
+        errors.append(f"FE SSR: {exc}")
 
     event_logger.mark_all_off()
 

@@ -46,6 +46,9 @@
  *   VACUUM_STOP                     Stop the vacuum motor
  *   VACUUM_STATUS                   Print vacuum motor speed
  *   VACUUM_REINIT                   Re-scan I2C and re-initialize DS3502
+
+ *   DRYER_SSR_ON / OFF / STATUS     Enable / disable dryer AC power
+ *   FE_SSR_ON / OFF / STATUS        Enable / disable fume extractor AC power
  *
  *   BLASTGATE_HOME <L|R|ALL>     Retract gate to MIN (0%)
  *   BLASTGATE_HOMEMAX <L|R|ALL>  Extend gate to MAX (100%)
@@ -96,7 +99,9 @@
  *     Home limit switch        ->  D34
  *     Left film (bag) sensor   ->  D35
  *     Vacuum sensor            ->  A0
- *     Vacuum pump relay (D24)  ->  NOT USED YET (pump control omitted)
+ *     Vacuum pump relay        ->  D24
+ *     Dryer SSR power          ->  D31
+ *     Fume extractor SSR power  ->  D32
  */
 
 #include <Servo.h>
@@ -136,6 +141,8 @@ const int TC_stepperHomeLimit              = 34;
 const int TC_leftFilmSensor                = 35;
 const int TC_rightFilmSensor               = 36;
 const int TC_vacuumSensor                  = A0;
+const int Dryer_SSR_pin                    = 31;
+const int FE_SSR_pin                       = 32;
 const int System_statusNeoPixelPin         = 46;
 const int System_statusNeoPixelCount       = 7;
 
@@ -383,6 +390,8 @@ int  tcCurrentServoAngle = TC_servoUpDeg;
 bool tcPumpRunning     = false;
 bool shredderRunning   = false;
 bool shredderFwd       = true;
+bool dryerSsrRunning    = false;
+bool feSsrRunning       = false;
 
 // Size Reduction (automated shred cadence) state.
 bool srRunning      = false;
@@ -414,6 +423,51 @@ long          blastGatePositionMs[2] = { 0, 0 };   // estimated ms of travel fro
 bool          blastGateCalibrated[2] = { false, false };
 bool          blastGatePrevMin[2]    = { false, false };
 bool          blastGatePrevMax[2]    = { false, false };
+
+// ============================================================================
+//  SSR power outputs
+// ============================================================================
+
+const bool DryerSsrActiveHigh = true;
+const bool FeSsrActiveHigh    = true;
+
+void dryerSsrApply() {
+  digitalWrite(Dryer_SSR_pin, (dryerSsrRunning ^ !DryerSsrActiveHigh) ? HIGH : LOW);
+}
+
+void dryerSsrOn() {
+  dryerSsrRunning = true;
+  dryerSsrApply();
+}
+
+void dryerSsrOff() {
+  dryerSsrRunning = false;
+  dryerSsrApply();
+}
+
+void feSsrApply() {
+  digitalWrite(FE_SSR_pin, (feSsrRunning ^ !FeSsrActiveHigh) ? HIGH : LOW);
+}
+
+void feSsrOn() {
+  feSsrRunning = true;
+  feSsrApply();
+}
+
+void feSsrOff() {
+  feSsrRunning = false;
+  feSsrApply();
+}
+
+void dryerSsrStatus() {
+  Serial.print(F("[DRYER_SSR] state="));
+  Serial.println(dryerSsrRunning ? F("ON") : F("OFF"));
+}
+
+void feSsrStatus() {
+  Serial.print(F("[FE_SSR] state="));
+  Serial.println(feSsrRunning ? F("ON") : F("OFF"));
+}
 
 // ============================================================================
 //  System status / diagnostics LED (NeoPixel on D46)
@@ -1970,6 +2024,10 @@ void printAllStatus() {
   Serial.print(agitatorFwd ? F("FWD") : F("REV"));
   Serial.print(F(" vacuum_pct="));
   Serial.print(vacuumPercent);
+  Serial.print(F(" dryer_ssr="));
+  Serial.print(dryerSsrRunning ? F("ON") : F("OFF"));
+  Serial.print(F(" fe_ssr="));
+  Serial.print(feSsrRunning ? F("ON") : F("OFF"));
   Serial.print(F(" mixer_rpm="));
   Serial.println(mixerRpm, 0);
   printEnergy();
@@ -2151,6 +2209,28 @@ void handleCommand(const String& cmd) {
   } else if (cmd == "VACUUM_STATUS") {
     vacuumStatus();
 
+  } else if (cmd == "DRYER_SSR_ON") {
+    dryerSsrOn();
+    dryerSsrStatus();
+
+  } else if (cmd == "DRYER_SSR_OFF") {
+    dryerSsrOff();
+    dryerSsrStatus();
+
+  } else if (cmd == "DRYER_SSR_STATUS") {
+    dryerSsrStatus();
+
+  } else if (cmd == "FE_SSR_ON") {
+    feSsrOn();
+    feSsrStatus();
+
+  } else if (cmd == "FE_SSR_OFF") {
+    feSsrOff();
+    feSsrStatus();
+
+  } else if (cmd == "FE_SSR_STATUS") {
+    feSsrStatus();
+
   } else if (cmd == "VACUUM_REINIT") {
     bool ok = vacuumInitDigipot(true);
     if (ok) {
@@ -2326,6 +2406,10 @@ void setup() {
   pinMode(TC_rightFilmSensor, INPUT);
   pinMode(TC_vacuumPumpRelay, OUTPUT);
   tcPumpOff();
+  pinMode(Dryer_SSR_pin, OUTPUT);
+  pinMode(FE_SSR_pin, OUTPUT);
+  dryerSsrOff();
+  feSsrOff();
   TC_servoMotor.attach(TC_servoMotor_pin, TC_servoMinUs, TC_servoMaxUs);
   tcServoUp();
   TC_stepper.setEnablePin(TC_stepperMotorController_enable);
@@ -2337,7 +2421,7 @@ void setup() {
 
   Serial.println(F("[SYSTEM] LunaRecycle Mega firmware ready"));
   Serial.println(F("[SYSTEM] NeoPixel status LED initialized on D46"));
-  Serial.println(F("[SYSTEM] Commands: GATE_OPEN, GATE_CLOSE, MOTOR_SET <spd> <FWD|REV>, MOTOR_STOP, TC_HOME, TC_PICK, TC_STOP, STATUS, ESTOP"));
+  Serial.println(F("[SYSTEM] Commands: GATE_OPEN, GATE_CLOSE, MOTOR_SET <spd> <FWD|REV>, MOTOR_STOP, TC_HOME, TC_PICK, TC_STOP, STATUS, ESTOP, DRYER_SSR_ON/OFF, FE_SSR_ON/OFF"));
   Serial.println(F("[SYSTEM] Auto: SR_START <pe_units> <pa_units>, SR_STOP, SR_STATUS (size reduction)"));
   systemDiagUpdateLed();
 }

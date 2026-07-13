@@ -77,6 +77,8 @@ VIEWER_PRINTER_API_URL = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "")
 MOONRAKER_WS_URL = os.environ.get("LUNA_MOONRAKER_WS_URL", "").strip()
 MOONRAKER_EXTRUDER_VELOCITY_MIN = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_VEL_MIN", "0.01"))
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
+MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
+MOONRAKER_FE_RETRY_SEC = float(os.environ.get("LUNA_MOONRAKER_FE_RETRY_SEC", "5.0"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Flask app
@@ -190,6 +192,11 @@ class MoonrakerMonitor:
         self.live_extruder_velocity = 0.0
         self.print_state = ""
         self.filament_used = 0.0
+        self.extruder_temps: dict[str, float] = {}
+        self.max_extruder_temp_c = 0.0
+        self.fe_auto_on: Optional[bool] = None
+        self.fe_auto_last_error = ""
+        self._next_fe_retry_at = 0.0
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -207,6 +214,11 @@ class MoonrakerMonitor:
                 "live_extruder_velocity": self.live_extruder_velocity,
                 "print_state": self.print_state,
                 "filament_used": self.filament_used,
+                "extruder_temps": dict(self.extruder_temps),
+                "max_extruder_temp_c": self.max_extruder_temp_c,
+                "fe_temp_threshold_c": MOONRAKER_FE_TEMP_C,
+                "fe_auto_on": self.fe_auto_on,
+                "fe_auto_last_error": self.fe_auto_last_error,
             }
 
     def _set_connected(self, connected: bool) -> None:
@@ -215,6 +227,8 @@ class MoonrakerMonitor:
             if not connected:
                 self.extruding = False
                 self.live_extruder_velocity = 0.0
+                self.extruder_temps = {}
+                self.max_extruder_temp_c = 0.0
 
     def _apply_status(self, status: dict) -> None:
         motion = status.get("motion_report", {}) if isinstance(status, dict) else {}
@@ -241,32 +255,97 @@ class MoonrakerMonitor:
             if filament_used is not None:
                 self.filament_used = filament_used
 
+            # Collect any reported extruder heater temperatures.
+            for obj_name, obj_data in status.items():
+                if not isinstance(obj_name, str) or not obj_name.startswith("extruder"):
+                    continue
+                if not isinstance(obj_data, dict):
+                    continue
+                temp_raw = obj_data.get("temperature")
+                try:
+                    temp_c = float(temp_raw)
+                except (TypeError, ValueError):
+                    continue
+                self.extruder_temps[obj_name] = temp_c
+            self.max_extruder_temp_c = max(self.extruder_temps.values()) if self.extruder_temps else 0.0
+
             # Extruding means a meaningful live extrusion velocity.
             vel = abs(self.live_extruder_velocity)
             self.extruding = vel >= MOONRAKER_EXTRUDER_VELOCITY_MIN
 
+        # Drive FE SSR from heater temperatures (ON >= threshold, OFF < threshold).
+        self._sync_fume_extractor_from_temp()
+
+    def _sync_fume_extractor_from_temp(self) -> None:
+        with self._lock:
+            if not self.extruder_temps:
+                return
+            target_on = self.max_extruder_temp_c >= MOONRAKER_FE_TEMP_C
+            if self.fe_auto_on is not None and self.fe_auto_on == target_on:
+                return
+            if time.monotonic() < self._next_fe_retry_at:
+                return
+
+        try:
+            set_fume_extractor_power(target_on)
+            with self._lock:
+                self.fe_auto_on = target_on
+                self.fe_auto_last_error = ""
+                self._next_fe_retry_at = 0.0
+        except Exception as exc:
+            with self._lock:
+                self.fe_auto_last_error = str(exc)
+                self._next_fe_retry_at = time.monotonic() + MOONRAKER_FE_RETRY_SEC
+
     @staticmethod
-    def _subscribe_payload() -> str:
+    def _subscribe_payload(extruder_objects: list[str]) -> str:
+        objects = {
+            "motion_report": ["live_extruder_velocity", "live_position"],
+            "gcode_move": ["axis_map"],
+            "print_stats": ["filament_used", "state"],
+        }
+        for name in extruder_objects:
+            objects[name] = ["temperature", "target", "power"]
+
         payload = {
             "jsonrpc": "2.0",
             "method": "printer.objects.subscribe",
-            "params": {
-                "objects": {
-                    "motion_report": ["live_extruder_velocity", "live_position"],
-                    "gcode_move": ["axis_map"],
-                    "print_stats": ["filament_used", "state"],
-                }
-            },
+            "params": {"objects": objects},
             "id": 1,
         }
         return json.dumps(payload)
+
+    @staticmethod
+    def _extract_extruder_objects(msg: dict) -> list[str]:
+        result = msg.get("result", {}) if isinstance(msg, dict) else {}
+        objects = result.get("objects", []) if isinstance(result, dict) else []
+        if not isinstance(objects, list):
+            return ["extruder"]
+        names = [str(name) for name in objects if isinstance(name, str) and name.startswith("extruder")]
+        # Keep deterministic order and dedupe.
+        names = sorted(set(names))
+        return names or ["extruder"]
 
     def _run(self) -> None:
         while True:
             ws = None
             try:
                 ws = websocket.create_connection(self.ws_url, timeout=5)
-                ws.send(self._subscribe_payload())
+
+                # Discover available extruder heater objects first.
+                ws.send(json.dumps({"jsonrpc": "2.0", "method": "printer.objects.list", "id": 2}))
+                extruder_objects = ["extruder"]
+                list_deadline = time.monotonic() + 5.0
+                while time.monotonic() < list_deadline:
+                    raw = ws.recv()
+                    if not raw:
+                        raise RuntimeError("Moonraker websocket closed before objects list")
+                    msg = json.loads(raw)
+                    if isinstance(msg, dict) and msg.get("id") == 2:
+                        extruder_objects = self._extract_extruder_objects(msg)
+                        break
+
+                ws.send(self._subscribe_payload(extruder_objects))
                 self._set_connected(True)
 
                 while True:

@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import serial
+import websocket
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pymodbus.client import ModbusSerialClient
@@ -71,6 +72,11 @@ SERVER_PORT = int(os.environ.get("LUNA_PORT", "5055"))
 VIEWER_DRYER_CAM_URL   = os.environ.get("LUNA_VIEWER_DRYER_CAM_URL", "")
 VIEWER_PRINTER_CAM_URL = os.environ.get("LUNA_VIEWER_PRINTER_CAM_URL", "")
 VIEWER_PRINTER_API_URL = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "")
+
+# Moonraker (Klipper) live extrusion monitoring.
+MOONRAKER_WS_URL = os.environ.get("LUNA_MOONRAKER_WS_URL", "").strip()
+MOONRAKER_EXTRUDER_VELOCITY_MIN = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_VEL_MIN", "0.01"))
+MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Flask app
@@ -170,6 +176,132 @@ class EventLogger:
 
 
 event_logger = EventLogger(EVENT_LOG_PATH)
+
+
+class MoonrakerMonitor:
+    """Background websocket monitor for live extrusion state from Moonraker."""
+
+    def __init__(self, ws_url: str) -> None:
+        self.ws_url = ws_url
+        self.enabled = bool(ws_url)
+        self._lock = threading.Lock()
+        self.connected = False
+        self.extruding = False
+        self.live_extruder_velocity = 0.0
+        self.print_state = ""
+        self.filament_used = 0.0
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if not self.enabled or self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "enabled": self.enabled,
+                "connected": self.connected,
+                "extruding": self.extruding,
+                "live_extruder_velocity": self.live_extruder_velocity,
+                "print_state": self.print_state,
+                "filament_used": self.filament_used,
+            }
+
+    def _set_connected(self, connected: bool) -> None:
+        with self._lock:
+            self.connected = connected
+            if not connected:
+                self.extruding = False
+                self.live_extruder_velocity = 0.0
+
+    def _apply_status(self, status: dict) -> None:
+        motion = status.get("motion_report", {}) if isinstance(status, dict) else {}
+        stats = status.get("print_stats", {}) if isinstance(status, dict) else {}
+
+        velocity_raw = motion.get("live_extruder_velocity")
+        try:
+            velocity = float(velocity_raw)
+        except (TypeError, ValueError):
+            velocity = None
+
+        print_state = stats.get("state")
+        filament_used_raw = stats.get("filament_used")
+        try:
+            filament_used = float(filament_used_raw)
+        except (TypeError, ValueError):
+            filament_used = None
+
+        with self._lock:
+            if velocity is not None:
+                self.live_extruder_velocity = velocity
+            if isinstance(print_state, str):
+                self.print_state = print_state
+            if filament_used is not None:
+                self.filament_used = filament_used
+
+            # Extruding means a meaningful live extrusion velocity.
+            vel = abs(self.live_extruder_velocity)
+            self.extruding = vel >= MOONRAKER_EXTRUDER_VELOCITY_MIN
+
+    @staticmethod
+    def _subscribe_payload() -> str:
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "printer.objects.subscribe",
+            "params": {
+                "objects": {
+                    "motion_report": ["live_extruder_velocity", "live_position"],
+                    "gcode_move": ["axis_map"],
+                    "print_stats": ["filament_used", "state"],
+                }
+            },
+            "id": 1,
+        }
+        return json.dumps(payload)
+
+    def _run(self) -> None:
+        while True:
+            ws = None
+            try:
+                ws = websocket.create_connection(self.ws_url, timeout=5)
+                ws.send(self._subscribe_payload())
+                self._set_connected(True)
+
+                while True:
+                    raw = ws.recv()
+                    if not raw:
+                        raise RuntimeError("Moonraker websocket closed")
+                    msg = json.loads(raw)
+
+                    # Initial subscribe response.
+                    if isinstance(msg, dict) and msg.get("id") == 1:
+                        result = msg.get("result", {})
+                        status = result.get("status", {}) if isinstance(result, dict) else {}
+                        if isinstance(status, dict):
+                            self._apply_status(status)
+                        continue
+
+                    # Ongoing notify updates.
+                    if isinstance(msg, dict) and msg.get("method") == "notify_status_update":
+                        params = msg.get("params", [])
+                        if isinstance(params, list) and params:
+                            status = params[0]
+                            if isinstance(status, dict):
+                                self._apply_status(status)
+            except Exception:
+                self._set_connected(False)
+                time.sleep(MOONRAKER_RECONNECT_SEC)
+            finally:
+                try:
+                    if ws is not None:
+                        ws.close()
+                except Exception:
+                    pass
+
+
+moonraker = MoonrakerMonitor(MOONRAKER_WS_URL)
 
 
 @app.route("/")
@@ -1575,6 +1707,8 @@ class FeedController:
         self.vacuum_pct = 0
         self.agitator_pct = 0
         self.agitator_on = False
+        self.moonraker_connected = False
+        self.moonraker_extruding = False
         self.message = ""
 
     def _arduino(self, cmd: str):
@@ -1593,6 +1727,40 @@ class FeedController:
                 self.agitator_pct = agitator_pct
                 self.message = "Priming crammer (vacuum + agitator)."
             self._arduino(f"VACUUM_SET {vacuum_pct}")
+
+            use_moonraker_gating = moonraker.enabled
+            if use_moonraker_gating:
+                # Moonraker-controlled mode: keep vacuum continuously on and only
+                # run the agitator when extrusion is actively happening.
+                with self._lock:
+                    self.phase = "METERING"
+                    self.message = "Metering gated by live extruder activity."
+                while not self._stop.is_set():
+                    snap = moonraker.snapshot()
+                    want = bool(snap.get("extruding"))
+                    connected = bool(snap.get("connected"))
+                    with self._lock:
+                        on = self.agitator_on
+                        self.moonraker_connected = connected
+                        self.moonraker_extruding = want
+                    if want and not on:
+                        self._arduino(f"AGITATOR_SET {agitator_pct} {FEED_AGITATOR_DIR}")
+                        with self._lock:
+                            self.agitator_on = True
+                    elif not want and on:
+                        self._arduino("AGITATOR_STOP")
+                        with self._lock:
+                            self.agitator_on = False
+                    self._stop.wait(0.2)
+
+                self._arduino("AGITATOR_STOP")
+                self._arduino("VACUUM_STOP")
+                with self._lock:
+                    self.agitator_on = False
+                    self.phase = "STOPPED"
+                    self.message = "Feed stopped."
+                return
+
             self._arduino(f"AGITATOR_SET {agitator_pct} {FEED_AGITATOR_DIR}")
             with self._lock:
                 self.agitator_on = True
@@ -1660,6 +1828,8 @@ class FeedController:
                 "vacuum_pct":   self.vacuum_pct,
                 "agitator_pct": self.agitator_pct,
                 "agitator_on":  self.agitator_on,
+                "moonraker_connected": self.moonraker_connected,
+                "moonraker_extruding": self.moonraker_extruding,
                 "message":      self.message,
             }
 
@@ -1762,6 +1932,7 @@ def api_health():
         "ok": True,
         "arduino_connected": arduino.connected,
         "dryer_connected": dryer.connected,
+        "moonraker": moonraker.snapshot(),
         "event_log": event_logger.info(),
     })
 
@@ -1835,5 +2006,11 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"  Arduino not connected yet ({exc}); supervisor will retry")
     arduino.start_supervisor()
+
+    if moonraker.enabled:
+        print(f"  Moonraker WS: {MOONRAKER_WS_URL}")
+        moonraker.start()
+    else:
+        print("  Moonraker WS: disabled (set LUNA_MOONRAKER_WS_URL to enable)")
 
     app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, threaded=True)

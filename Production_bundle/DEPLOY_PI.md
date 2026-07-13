@@ -73,6 +73,10 @@ sudo systemctl restart lunarecycle-backend
 | `LUNA_VIEWER_DRYER_CAM_URL` | ``       | Dryer camera URL shown in `/viewer`  |
 | `LUNA_VIEWER_PRINTER_CAM_URL` | ``     | Printer camera URL shown in `/viewer` |
 | `LUNA_VIEWER_PRINTER_API_URL` | ``     | Moonraker base URL used by `/viewer`  |
+| `LUNA_MOONRAKER_WS_URL` | ``         | Moonraker websocket URL (e.g. `ws://127.0.0.1:7125/websocket`) |
+| `LUNA_MOONRAKER_EXTRUDER_VEL_MIN` | `0.01` | Minimum `live_extruder_velocity` considered active extrusion |
+| `LUNA_MOONRAKER_FE_TEMP_C` | `100.0`  | FE auto turns ON when any extruder heater temperature is at or above this value |
+| `LUNA_MOONRAKER_FE_RETRY_SEC` | `5.0` | Retry delay after FE SSR command errors |
 | `LUNA_HOST`          | `0.0.0.0`        | Bind address (`127.0.0.1` = Pi only) |
 | `LUNA_PORT`          | `5055`           | HTTP port                            |
 

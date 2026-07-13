@@ -173,7 +173,16 @@ class EventLogger:
             pass
 
     def mark_all_off(self) -> None:
-        for actuator in ("mixer_motor", "shredder", "tc_pump", "agitator", "vacuum", "dryer"):
+        for actuator in (
+            "mixer_motor",
+            "shredder",
+            "tc_pump",
+            "agitator",
+            "vacuum",
+            "dryer",
+            "dryer_power",
+            "fume_extractor",
+        ):
             self.log_actuator_state(actuator, False)
 
 
@@ -735,11 +744,15 @@ def _arduino_send_required(cmd: str) -> list[str]:
 
 
 def set_dryer_power(on: bool) -> list[str]:
-    return _arduino_send_required("DRYER_SSR_ON" if on else "DRYER_SSR_OFF")
+    lines = _arduino_send_required("DRYER_SSR_ON" if on else "DRYER_SSR_OFF")
+    event_logger.log_actuator_state("dryer_power", bool(on))
+    return lines
 
 
 def set_fume_extractor_power(on: bool) -> list[str]:
-    return _arduino_send_required("FE_SSR_ON" if on else "FE_SSR_OFF")
+    lines = _arduino_send_required("FE_SSR_ON" if on else "FE_SSR_OFF")
+    event_logger.log_actuator_state("fume_extractor", bool(on))
+    return lines
 
 
 class DryerModbus:

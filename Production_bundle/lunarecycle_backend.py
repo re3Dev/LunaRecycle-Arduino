@@ -538,6 +538,14 @@ class ArduinoBridge:
                 except ValueError:
                     pct = 0
             event_logger.log_actuator_state("agitator", pct > 0)
+        elif cmd == "AGITATOR_MOVE":
+            pwm = 0
+            if len(parts) > 3:
+                try:
+                    pwm = int(parts[3])
+                except ValueError:
+                    pwm = 0
+            event_logger.log_actuator_state("agitator", pwm > 0)
         elif cmd == "VACUUM_STOP":
             event_logger.log_actuator_state("vacuum", False)
         elif cmd == "VACUUM_SET":
@@ -1266,7 +1274,7 @@ def api_shredder_rev():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-# ─────────────────────────────────────────────────────────────────────────────#  Routes — Mixer agitator (2nd H-bridge channel, capped at 75%)
+# ─────────────────────────────────────────────────────────────────────────────#  Routes — Mixer agitator (2nd H-bridge channel)
 # ──────────────────────────────────────────────────────────────────
 
 @app.route("/api/agitator/set", methods=["POST"])
@@ -1288,6 +1296,29 @@ def api_agitator_set():
 def api_agitator_stop():
     try:
         lines = arduino.send("AGITATOR_STOP")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/agitator/move", methods=["POST"])
+def api_agitator_move():
+    try:
+        spins = int(request.json["spins"])
+        pause_ms = int(request.json.get("pause_ms", 0))
+        pwm = int(request.json["pwm"])
+        direction = str(request.json.get("dir", "FWD")).strip().upper()
+
+        if spins <= 0:
+            raise ValueError("spins must be > 0")
+        if pause_ms < 0 or pause_ms > 600000:
+            raise ValueError("pause_ms must be 0-600000")
+        if pwm < 0 or pwm > 255:
+            raise ValueError("pwm must be 0-255")
+        if direction not in ("FWD", "REV"):
+            raise ValueError("dir must be FWD or REV")
+
+        lines = arduino.send(f"AGITATOR_MOVE {spins} {pause_ms} {pwm} {direction}")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500

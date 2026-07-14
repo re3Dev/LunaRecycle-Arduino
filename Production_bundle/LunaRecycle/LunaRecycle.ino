@@ -38,7 +38,9 @@
  *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
  *   SHREDDER_FWD / _REV    Set shredder motor direction
  *
- *   AGITATOR_SET <0-100> <FWD|REV>  Run bottom agitator (capped at 75% power)
+ *   AGITATOR_SET <0-100> <FWD|REV>  Run bottom agitator (full 0-100% range)
+ *   AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV]
+ *                                  Run N hall-homed revolutions at raw PWM
  *   AGITATOR_STOP                   Stop the agitator
  *   AGITATOR_STATUS                 Print agitator power / direction
  *
@@ -84,7 +86,8 @@
  *     US5881 sensor    ->  D2 (INT0)   [FALLING-edge pulse count]
  *
  *   Mixer agitator (2nd H-bridge channel):
- *     ENB / IN3 / IN4  ->  D3 / D12 / D13   (power capped at 75%)
+ *     ENB / IN3 / IN4  ->  D11 / D42 / D43
+ *     Hall home sensor ->  D44 (update if rewired)
  *
  *   Mixer vacuum motor:
  *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
@@ -130,6 +133,7 @@ const int Mixer_screwRotationSensor   = 2;    // D2 = INT0
 const int Mixer_agitatorMotor_ENB = 11;    // ENB enable (PWM)
 const int Mixer_agitatorMotor_IN3 = 42;   // IN3
 const int Mixer_agitatorMotor_IN4 = 43;   // IN4
+const int Mixer_agitatorHallSensor = 44;  // TODO: set to final hall pin (INPUT_PULLUP)
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
@@ -219,13 +223,13 @@ const unsigned long ShredderReversePauseMs = 5000;
 // so the drive latches a stable direction signal before it energizes.
 const unsigned long ShredderDirSettleMs = 1000;   // [tune]
 
-// Mixer agitator: hard ceiling on power (percent of full PWM). Requests above
-// this are clamped so the agitator never exceeds this duty.
-const int AGITATOR_MAX_PERCENT = 75;
+// Mixer agitator controls. Percent maps to full PWM (0..255) with no cap.
 const int AGITATOR_RAMP_STEP_PERCENT = 3;             // [tune] duty step size for soft ramps
 const unsigned long AGITATOR_RAMP_STEP_MS = 140;      // [tune] dwell between ramp steps
 const unsigned long AGITATOR_REVERSE_PAUSE_MS = 5000; // [tune] full-stop pause before direction flip
 const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
+const bool AGITATOR_HALL_ACTIVE_LOW = true;
+const unsigned long AGITATOR_HALL_TIMEOUT_MS = 12000UL;
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -409,7 +413,8 @@ uint32_t      systemDiagLastColor = 0;
 unsigned long systemDiagBootHoldUntilMs = 0;
 
 // Mixer agitator state.
-int  agitatorPercent   = 0;      // 0..AGITATOR_MAX_PERCENT
+int  agitatorPercent   = 0;      // 0..100
+int  agitatorPwm       = 0;      // 0..255
 bool agitatorFwd       = true;   // true = FWD, false = REV
 
 // Mixer vacuum motor state (DS3502 digipot).
@@ -1493,19 +1498,21 @@ void agitatorSetDirectionPins(bool fwd) {
 }
 
 void agitatorApply() {
-  int percent = constrain(agitatorPercent, 0, AGITATOR_MAX_PERCENT);
+  int percent = constrain(agitatorPercent, 0, 100);
   if (percent == 0) {
     // Disable ENB first, then clear direction pins (avoids shoot-through).
+    agitatorPwm = 0;
     agitatorNeutral();
     return;
   }
   agitatorSetDirectionPins(agitatorFwd);
   int pwm = (int)((long)percent * 255 / 100);   // percent of full duty
+  agitatorPwm = pwm;
   analogWrite(Mixer_agitatorMotor_ENB, pwm);
 }
 
 void agitatorSet(int percent, bool fwd) {
-  int target = constrain(percent, 0, AGITATOR_MAX_PERCENT);
+  int target = constrain(percent, 0, 100);
   int step = max(1, AGITATOR_RAMP_STEP_PERCENT);
 
   // If reversing under load, ramp down first, pause at 0, then ramp up in the
@@ -1563,8 +1570,75 @@ void agitatorStop() {
 void agitatorStatus() {
   Serial.print(F("[AGITATOR] percent="));
   Serial.print(agitatorPercent);
+  Serial.print(F(" pwm="));
+  Serial.print(agitatorPwm);
   Serial.print(F(" dir="));
-  Serial.println(agitatorFwd ? F("FWD") : F("REV"));
+  Serial.print(agitatorFwd ? F("FWD") : F("REV"));
+  Serial.print(F(" hall="));
+  bool hallHome = (digitalRead(Mixer_agitatorHallSensor) == (AGITATOR_HALL_ACTIVE_LOW ? LOW : HIGH));
+  Serial.println(hallHome ? F("HOME") : F("AWAY"));
+}
+
+bool agitatorHallHomeDetected() {
+  return digitalRead(Mixer_agitatorHallSensor) == (AGITATOR_HALL_ACTIVE_LOW ? LOW : HIGH);
+}
+
+bool agitatorAbortRequested() {
+  if (Serial.available() > 0) {
+    while (Serial.available() > 0) Serial.read();
+    return true;
+  }
+  return false;
+}
+
+int agitatorWaitForHallState(bool targetHome, unsigned long timeoutMs) {
+  unsigned long start = millis();
+  while (agitatorHallHomeDetected() != targetHome) {
+    if (agitatorAbortRequested()) return 2;
+    if (millis() - start > timeoutMs) return 1;
+    delay(1);
+  }
+  return 0;
+}
+
+void agitatorDriveRawPwm(int pwm, bool fwd) {
+  int clampedPwm = constrain(pwm, 0, 255);
+  agitatorFwd = fwd;
+  if (clampedPwm == 0) {
+    agitatorPercent = 0;
+    agitatorPwm = 0;
+    agitatorNeutral();
+    return;
+  }
+  agitatorPercent = (int)((long)clampedPwm * 100 / 255);
+  agitatorPwm = clampedPwm;
+  agitatorSetDirectionPins(agitatorFwd);
+  analogWrite(Mixer_agitatorMotor_ENB, clampedPwm);
+}
+
+bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd) {
+  if (spins <= 0) return true;
+  for (int i = 0; i < spins; i++) {
+    agitatorDriveRawPwm(pwm, fwd);
+
+    // If we are currently on the home mark, first move off it so the next
+    // home transition is one complete revolution.
+    if (agitatorHallHomeDetected()) {
+      int waitOff = agitatorWaitForHallState(false, AGITATOR_HALL_TIMEOUT_MS);
+      if (waitOff == 2) { agitatorStop(); Serial.println(F("[AGITATOR] MOVE aborted")); return false; }
+      if (waitOff == 1) { agitatorStop(); Serial.println(F("[AGITATOR] ERROR: hall timeout leaving HOME")); return false; }
+    }
+
+    int waitHome = agitatorWaitForHallState(true, AGITATOR_HALL_TIMEOUT_MS);
+    if (waitHome == 2) { agitatorStop(); Serial.println(F("[AGITATOR] MOVE aborted")); return false; }
+    if (waitHome == 1) { agitatorStop(); Serial.println(F("[AGITATOR] ERROR: hall timeout seeking HOME")); return false; }
+
+    agitatorStop();
+    if (pauseMs > 0 && i < spins - 1) {
+      delay(pauseMs);
+    }
+  }
+  return true;
 }
 
 // ============================================================================
@@ -2154,7 +2228,7 @@ void handleCommand(const String& cmd) {
     Serial.println(F("[SHREDDER] Direction REV"));
 
   } else if (cmd.startsWith("AGITATOR_SET ")) {
-    // AGITATOR_SET <0-100> <FWD|REV>  (power is capped at AGITATOR_MAX_PERCENT)
+    // AGITATOR_SET <0-100> <FWD|REV>
     String args = cmd.substring(13);
     args.trim();
     int sp = args.indexOf(' ');
@@ -2178,6 +2252,68 @@ void handleCommand(const String& cmd) {
     }
     agitatorSet(pct, dir == "FWD");
     agitatorStatus();
+
+  } else if (cmd.startsWith("AGITATOR_MOVE ")) {
+    // AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV]
+    String args = cmd.substring(14);
+    args.trim();
+
+    int sp1 = args.indexOf(' ');
+    int sp2 = (sp1 >= 0) ? args.indexOf(' ', sp1 + 1) : -1;
+    int sp3 = (sp2 >= 0) ? args.indexOf(' ', sp2 + 1) : -1;
+    if (sp1 < 0 || sp2 < 0) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: usage AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV]"));
+      return;
+    }
+
+    int spins = args.substring(0, sp1).toInt();
+    long pauseMs = args.substring(sp1 + 1, sp2).toInt();
+    String pwmToken = (sp3 < 0) ? args.substring(sp2 + 1) : args.substring(sp2 + 1, sp3);
+    int pwm = pwmToken.toInt();
+
+    bool fwd = agitatorFwd;
+    if (sp3 >= 0) {
+      String dir = args.substring(sp3 + 1);
+      dir.trim();
+      if (dir != "FWD" && dir != "REV") {
+        systemDiagFlagError();
+        Serial.println(F("[AGITATOR] ERROR: direction must be FWD or REV"));
+        return;
+      }
+      fwd = (dir == "FWD");
+    }
+
+    if (spins <= 0) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: spins must be > 0"));
+      return;
+    }
+    if (pauseMs < 0 || pauseMs > 600000L) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: pause_ms must be 0-600000"));
+      return;
+    }
+    if (pwm < 0 || pwm > 255) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: pwm must be 0-255"));
+      return;
+    }
+
+    bool ok = agitatorMoveSpins(spins, (unsigned long)pauseMs, pwm, fwd);
+    if (ok) {
+      Serial.print(F("[AGITATOR] MOVE done spins="));
+      Serial.print(spins);
+      Serial.print(F(" pause_ms="));
+      Serial.print((unsigned long)pauseMs);
+      Serial.print(F(" pwm="));
+      Serial.print(pwm);
+      Serial.print(F(" dir="));
+      Serial.println(fwd ? F("FWD") : F("REV"));
+      agitatorStatus();
+    } else {
+      systemDiagFlagError();
+    }
 
   } else if (cmd == "AGITATOR_STOP") {
     agitatorStop();
@@ -2389,6 +2525,7 @@ void setup() {
   pinMode(Mixer_agitatorMotor_ENB, OUTPUT);
   pinMode(Mixer_agitatorMotor_IN3, OUTPUT);
   pinMode(Mixer_agitatorMotor_IN4, OUTPUT);
+  pinMode(Mixer_agitatorHallSensor, INPUT_PULLUP);
   agitatorStop();
 
   // Mixer blast gates - hold RC neutral (1500 us) so the RoboClaw arms;

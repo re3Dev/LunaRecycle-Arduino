@@ -133,7 +133,7 @@ const int Mixer_screwRotationSensor   = 2;    // D2 = INT0
 const int Mixer_agitatorMotor_ENB = 11;    // ENB enable (PWM)
 const int Mixer_agitatorMotor_IN3 = 42;   // IN3
 const int Mixer_agitatorMotor_IN4 = 43;   // IN4
-const int Mixer_agitatorHallSensor = 44;  // TODO: set to final hall pin (INPUT_PULLUP)
+const int Mixer_agitatorHallSensor = 50;  // Hall home sensor input (INPUT_PULLUP)
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;

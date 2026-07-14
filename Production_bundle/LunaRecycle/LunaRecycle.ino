@@ -229,7 +229,6 @@ const unsigned long AGITATOR_RAMP_STEP_MS = 140;      // [tune] dwell between ra
 const unsigned long AGITATOR_REVERSE_PAUSE_MS = 5000; // [tune] full-stop pause before direction flip
 const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
 const bool AGITATOR_HALL_ACTIVE_LOW = true;
-const unsigned long AGITATOR_HALL_TIMEOUT_MS = 12000UL;
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -1602,11 +1601,9 @@ bool agitatorAbortRequested() {
   return false;
 }
 
-int agitatorWaitForHallState(bool targetHome, unsigned long timeoutMs) {
-  unsigned long start = millis();
+int agitatorWaitForHallState(bool targetHome) {
   while (agitatorHallHomeDetected() != targetHome) {
     if (agitatorAbortRequested()) return 2;
-    if (millis() - start > timeoutMs) return 1;
     delay(1);
   }
   return 0;
@@ -1635,14 +1632,12 @@ bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd) {
     // If we are currently on the home mark, first move off it so the next
     // home transition is one complete revolution.
     if (agitatorHallHomeDetected()) {
-      int waitOff = agitatorWaitForHallState(false, AGITATOR_HALL_TIMEOUT_MS);
+      int waitOff = agitatorWaitForHallState(false);
       if (waitOff == 2) { agitatorStop(); Serial.println(F("[AGITATOR] MOVE aborted")); return false; }
-      if (waitOff == 1) { agitatorStop(); Serial.println(F("[AGITATOR] ERROR: hall timeout leaving HOME")); return false; }
     }
 
-    int waitHome = agitatorWaitForHallState(true, AGITATOR_HALL_TIMEOUT_MS);
+    int waitHome = agitatorWaitForHallState(true);
     if (waitHome == 2) { agitatorStop(); Serial.println(F("[AGITATOR] MOVE aborted")); return false; }
-    if (waitHome == 1) { agitatorStop(); Serial.println(F("[AGITATOR] ERROR: hall timeout seeking HOME")); return false; }
 
     agitatorStop();
     if (pauseMs > 0 && i < spins - 1) {

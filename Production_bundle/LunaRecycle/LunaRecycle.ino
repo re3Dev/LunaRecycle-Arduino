@@ -416,6 +416,7 @@ unsigned long systemDiagBootHoldUntilMs = 0;
 int  agitatorPercent   = 0;      // 0..100
 int  agitatorPwm       = 0;      // 0..255
 bool agitatorFwd       = true;   // true = FWD, false = REV
+bool agitatorHallLastState = false;
 
 // Mixer vacuum motor state (DS3502 digipot).
 int  vacuumPercent   = 0;        // 0..100
@@ -1583,6 +1584,16 @@ bool agitatorHallHomeDetected() {
   return digitalRead(Mixer_agitatorHallSensor) == (AGITATOR_HALL_ACTIVE_LOW ? LOW : HIGH);
 }
 
+void agitatorMonitorHall() {
+  bool hallHome = agitatorHallHomeDetected();
+  if (hallHome != agitatorHallLastState) {
+    agitatorHallLastState = hallHome;
+    if (hallHome) {
+      Serial.println(F("[AGITATOR] hall TRIGGERED"));
+    }
+  }
+}
+
 bool agitatorAbortRequested() {
   if (Serial.available() > 0) {
     while (Serial.available() > 0) Serial.read();
@@ -2526,6 +2537,7 @@ void setup() {
   pinMode(Mixer_agitatorMotor_IN3, OUTPUT);
   pinMode(Mixer_agitatorMotor_IN4, OUTPUT);
   pinMode(Mixer_agitatorHallSensor, INPUT_PULLUP);
+  agitatorHallLastState = agitatorHallHomeDetected();
   agitatorStop();
 
   // Mixer blast gates - hold RC neutral (1500 us) so the RoboClaw arms;
@@ -2567,6 +2579,9 @@ void loop() {
   // Watch the hall-sensor interrupt for an EMI-driven edge storm and pause it if
   // it fires impossibly fast, so mixer-motor noise can never freeze the board.
   mixerGuardHall();
+
+  // Emit a single serial line when the agitator hall sensor becomes active.
+  agitatorMonitorHall();
 
   readSerial();
 

@@ -1588,7 +1588,7 @@ void agitatorMonitorHall() {
   if (hallHome != agitatorHallLastState) {
     agitatorHallLastState = hallHome;
     if (hallHome) {
-      Serial.println(F("[AGITATOR] hall TRIGGERED"));
+      Serial.println(F("[AGITATOR_HALL] TRIGGERED"));
     }
   }
 }

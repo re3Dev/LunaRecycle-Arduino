@@ -477,6 +477,11 @@ def serve_model():
     """Serve the spatial model so it runs on http://127.0.0.1:5055/model (same-origin)."""
     return send_from_directory(_BUNDLE_DIR, "lunar_model.html")
 
+@app.route("/assets/<path:filename>")
+def serve_bundle_asset(filename: str):
+    """Serve static bundle assets (images, css, etc.) used by dashboard pages."""
+    return send_from_directory(_BUNDLE_DIR, filename)
+
 @app.route("/api/viewer/config", methods=["GET"])
 def api_viewer_config():
     """Expose env-driven config for the read-only viewer page."""

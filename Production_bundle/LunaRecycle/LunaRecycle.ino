@@ -1586,40 +1586,42 @@ bool agitatorHallHomeDetected() {
 
 bool agitatorStopOrEStopRequested() {
   static String safetyCmdBuffer;
-  while (Serial.available() > 0) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') {
-      safetyCmdBuffer.trim();
-      safetyCmdBuffer.toUpperCase();
+  if (Serial.available() <= 0) return false;
 
-      if (safetyCmdBuffer == "AGITATOR_STOP") {
-        safetyCmdBuffer = "";
-        return true;
-      }
+  // Consume at most one byte per call so hall polling stays tight enough to
+  // catch short sensor windows at higher agitator speeds.
+  char c = (char)Serial.read();
+  if (c == '\n' || c == '\r') {
+    safetyCmdBuffer.trim();
+    safetyCmdBuffer.toUpperCase();
 
-      if (safetyCmdBuffer == "ESTOP") {
-        // Mirror main ESTOP behavior so a blocked AGITATOR_MOVE remains
-        // safety-stop responsive while waiting on hall transitions.
-        systemDiagFlagError(30000UL);
-        motorStop();
-        gateCloseCmd();
-        shredderOff();
-        agitatorStop();
-        vacuumStop();
-        bgStopAll();
-        srRunning = false;
-        tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
-        tcState = TC_WAIT_HOME;
-        Serial.println(F("[SYSTEM] ESTOP - all stopped"));
-        safetyCmdBuffer = "";
-        return true;
-      }
-
+    if (safetyCmdBuffer == "AGITATOR_STOP") {
       safetyCmdBuffer = "";
-    } else {
-      safetyCmdBuffer += c;
-      if (safetyCmdBuffer.length() > 48) safetyCmdBuffer = "";
+      return true;
     }
+
+    if (safetyCmdBuffer == "ESTOP") {
+      // Mirror main ESTOP behavior so a blocked AGITATOR_MOVE remains
+      // safety-stop responsive while waiting on hall transitions.
+      systemDiagFlagError(30000UL);
+      motorStop();
+      gateCloseCmd();
+      shredderOff();
+      agitatorStop();
+      vacuumStop();
+      bgStopAll();
+      srRunning = false;
+      tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
+      tcState = TC_WAIT_HOME;
+      Serial.println(F("[SYSTEM] ESTOP - all stopped"));
+      safetyCmdBuffer = "";
+      return true;
+    }
+
+    safetyCmdBuffer = "";
+  } else {
+    safetyCmdBuffer += c;
+    if (safetyCmdBuffer.length() > 48) safetyCmdBuffer = "";
   }
   return false;
 }

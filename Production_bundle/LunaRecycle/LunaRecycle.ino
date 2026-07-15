@@ -1630,9 +1630,12 @@ void agitatorMonitorHall() {
   bool hallHome = agitatorHallHomeDetected();
   if (hallHome != agitatorHallLastState) {
     agitatorHallLastState = hallHome;
-    if (hallHome) {
-      Serial.println(F("[AGITATOR_HALL] TRIGGERED"));
-    }
+    Serial.print(F("[AGITATOR_HALL] "));
+    Serial.print(hallHome ? F("TRIGGERED") : F("CLEARED"));
+    Serial.print(F(" raw="));
+    Serial.print(digitalRead(Mixer_agitatorHallSensor));
+    Serial.print(F(" home="));
+    Serial.println(hallHome ? F("1") : F("0"));
   }
 }
 

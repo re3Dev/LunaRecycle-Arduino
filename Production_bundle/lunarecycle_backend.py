@@ -77,6 +77,8 @@ VIEWER_PRINTER_API_URL = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "")
 MOONRAKER_WS_URL = os.environ.get("LUNA_MOONRAKER_WS_URL", "").strip()
 MOONRAKER_EXTRUDER_VELOCITY_MIN = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_VEL_MIN", "0.01"))
 MOONRAKER_EXTRUDER_UNITS_PER_ROTATION = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_UNITS_PER_ROTATION", "1.0"))
+RATIO_TEST_VACUUM_BOOST_SEC = float(os.environ.get("LUNA_RATIO_TEST_VACUUM_BOOST_SEC", "5.0"))
+RATIO_TEST_VACUUM_IDLE_PCT = int(os.environ.get("LUNA_RATIO_TEST_VACUUM_IDLE_PCT", "15"))
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
 MOONRAKER_FE_RETRY_SEC = float(os.environ.get("LUNA_MOONRAKER_FE_RETRY_SEC", "5.0"))
@@ -2046,6 +2048,10 @@ class ExtrusionRatioTestController:
         self.running = False
         self.started_at = 0.0
         self.vacuum_pct = 0
+        self.vacuum_active_pct = 0
+        self.vacuum_idle_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
+        self.vacuum_boost_sec = max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
+        self.vacuum_boost_remaining_sec = 0.0
         self.agitator_pwm = 0
         self.agitator_dir = "FWD"
         self.agitator_pause_ms = 0
@@ -2062,12 +2068,19 @@ class ExtrusionRatioTestController:
 
     def _run(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct):
         baseline_rot = None
+        vacuum_boost_until = 0.0
+        vacuum_idle_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
+        vacuum_active_pct = vacuum_idle_pct
         try:
             with self._lock:
                 self.phase = "RUNNING"
                 self.running = True
                 self.started_at = time.monotonic()
                 self.vacuum_pct = vacuum_pct
+                self.vacuum_active_pct = vacuum_active_pct
+                self.vacuum_idle_pct = vacuum_idle_pct
+                self.vacuum_boost_sec = max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
+                self.vacuum_boost_remaining_sec = 0.0
                 self.agitator_pwm = agitator_pwm
                 self.agitator_dir = agitator_dir
                 self.agitator_pause_ms = agitator_pause_ms
@@ -2077,9 +2090,12 @@ class ExtrusionRatioTestController:
                 self.agitator_rotations_commanded = 0
                 self.message = "Waiting for Moonraker extrusion data."
 
-            self._arduino(f"VACUUM_SET {vacuum_pct}")
+            # Start at idle vacuum. Boost to configured vacuum_pct only for a
+            # short window after each completed agitator spin command.
+            self._arduino(f"VACUUM_SET {vacuum_idle_pct}")
 
             while not self._stop.is_set():
+                now = time.monotonic()
                 snap = moonraker.snapshot()
                 connected = bool(snap.get("connected"))
                 try:
@@ -2095,6 +2111,7 @@ class ExtrusionRatioTestController:
                     self.moonraker_connected = connected
                     self.live_extruder_velocity = live_vel
                     self.live_extruder_rotations_total = live_rot
+                    self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - now)
 
                 if not connected:
                     with self._lock:
@@ -2124,15 +2141,30 @@ class ExtrusionRatioTestController:
                     self._arduino(
                         f"AGITATOR_MOVE {agitator_rot_per_cycle} {agitator_pause_ms} {agitator_pwm} {agitator_dir}"
                     )
+
+                    # After a completed spin cycle, hold configured vacuum for
+                    # a short window, then return to idle vacuum.
+                    if vacuum_active_pct != vacuum_pct:
+                        self._arduino(f"VACUUM_SET {vacuum_pct}")
+                        vacuum_active_pct = vacuum_pct
+                    vacuum_boost_until = time.monotonic() + max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
+
                     with self._lock:
                         self.agitator_rotations_commanded += agitator_rot_per_cycle
+                        self.vacuum_active_pct = vacuum_active_pct
+                        self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
                         self.message = (
                             f"Agitated {self.agitator_rotations_commanded} turns "
                             f"at ratio {self.extruder_rotations_per_cycle}:"
                             f"{self.agitator_rotations_per_cycle}."
                         )
                 else:
+                    if vacuum_active_pct != vacuum_idle_pct and time.monotonic() >= vacuum_boost_until:
+                        self._arduino(f"VACUUM_SET {vacuum_idle_pct}")
+                        vacuum_active_pct = vacuum_idle_pct
                     with self._lock:
+                        self.vacuum_active_pct = vacuum_active_pct
+                        self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
                         self.message = (
                             f"Running ratio test ({self.extruder_rotations_per_cycle}:"
                             f"{self.agitator_rotations_per_cycle})."
@@ -2180,6 +2212,10 @@ class ExtrusionRatioTestController:
                 "running": self.running,
                 "message": self.message,
                 "vacuum_pct": self.vacuum_pct,
+                "vacuum_active_pct": self.vacuum_active_pct,
+                "vacuum_idle_pct": self.vacuum_idle_pct,
+                "vacuum_boost_sec": self.vacuum_boost_sec,
+                "vacuum_boost_remaining_sec": self.vacuum_boost_remaining_sec,
                 "agitator_pwm": self.agitator_pwm,
                 "agitator_dir": self.agitator_dir,
                 "agitator_pause_ms": self.agitator_pause_ms,

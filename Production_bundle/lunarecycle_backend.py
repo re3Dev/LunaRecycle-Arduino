@@ -2247,7 +2247,12 @@ def api_extrusion_ratio_test_start():
 
         body = request.get_json(silent=True) or {}
         extruder_rot_per_cycle = float(body.get("extruder_rotations_per_cycle", 10.0))
-        agitator_rot_per_cycle = int(body.get("agitator_rotations_per_cycle", 1))
+        agitator_rot_per_cycle = int(
+            body.get(
+                "agitator_consecutive_rotations",
+                body.get("agitator_rotations_per_cycle", 1),
+            )
+        )
         agitator_pwm = int(body.get("agitator_pwm", 180))
         agitator_dir = str(body.get("agitator_dir", "FWD")).strip().upper()
         agitator_pause_ms = int(body.get("agitator_pause_ms", 0))
@@ -2295,6 +2300,7 @@ def api_extrusion_ratio_test_status():
 
 @app.route("/api/dry/start", methods=["POST"])
 def api_dry_start():
+                "agitator_consecutive_rotations": self.agitator_rotations_per_cycle,
     """Begin the drying + mixing cycle. Body: {minutes, temp_c}."""
     try:
         body = request.get_json(silent=True) or {}

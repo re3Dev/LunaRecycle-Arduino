@@ -958,7 +958,7 @@
                 </div>
                 <div class="act-row-4">
                   <div class="act-mini"><label>Extruder Rot/Cycle</label><input type="number" id="rtExtRotCycle" min="0.01" step="0.01" value="10" /></div>
-                  <div class="act-mini"><label>Agitator Rot/Cycle</label><input type="number" id="rtAgRotCycle" min="1" step="1" value="1" /></div>
+                  <div class="act-mini"><label>Consecutive Agitator Rot</label><input type="number" id="rtAgRotCycle" min="1" step="1" value="1" /></div>
                   <div class="act-mini"><label>Agitator PWM</label><input type="number" id="rtAgPwm" min="0" max="255" value="180" /></div>
                   <div class="act-mini"><label>Agitator Dir</label><select id="rtAgDir"><option>FWD</option><option>REV</option></select></div>
                 </div>
@@ -2034,7 +2034,7 @@
       }
       const body = {
         extruder_rotations_per_cycle: Math.max(0.01, getNum("rtExtRotCycle", 10)),
-        agitator_rotations_per_cycle: Math.max(1, Math.round(getNum("rtAgRotCycle", 1))),
+        agitator_consecutive_rotations: Math.max(1, Math.round(getNum("rtAgRotCycle", 1))),
         agitator_pwm: Math.max(0, Math.min(255, Math.round(getNum("rtAgPwm", 180)))),
         agitator_dir: getSel("rtAgDir", "FWD"),
         agitator_pause_ms: Math.max(0, Math.round(getNum("rtAgPauseMs", 0))),

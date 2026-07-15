@@ -2134,7 +2134,10 @@ class ExtrusionRatioTestController:
                 run_cycle = False
                 with self._lock:
                     if self.extruder_rot_pending >= self.extruder_rotations_per_cycle:
-                        self.extruder_rot_pending -= self.extruder_rotations_per_cycle
+                        # Fire one burst when threshold is crossed, then drop
+                        # backlog so we do not "catch up" with endless queued
+                        # bursts after a long AGITATOR_MOVE cycle.
+                        self.extruder_rot_pending = 0.0
                         run_cycle = True
 
                 if run_cycle:

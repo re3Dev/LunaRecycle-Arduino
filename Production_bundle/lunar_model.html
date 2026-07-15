@@ -42,7 +42,11 @@
     .brand{display:flex;align-items:center;gap:10px}
     .logo{
       width:32px;height:32px;border-radius:9px;
-      background:linear-gradient(135deg,rgba(122,167,255,.88),rgba(49,208,170,.80));
+      background-color: rgba(255,255,255,.06);
+      background-image: url("LunaBotXS-logo.png");
+      background-position: center;
+      background-repeat: no-repeat;
+      background-size: contain;
       display:grid;place-items:center;font-size:16px;user-select:none;flex:0 0 auto;
     }
     .brand-text h1{font-size:13px;font-weight:760;letter-spacing:.15px}
@@ -528,7 +532,7 @@
 <body>
   <header>
     <div class="brand">
-      <div class="logo" aria-hidden="true">♻</div>
+      <div class="logo" aria-hidden="true"></div>
       <div class="brand-text">
         <h1>LunaRecycle · Machine Model</h1>
         <div class="sub">Live spatial view — all subsystems</div>

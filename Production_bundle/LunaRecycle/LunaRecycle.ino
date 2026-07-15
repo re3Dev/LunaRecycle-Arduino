@@ -229,6 +229,7 @@ const unsigned long AGITATOR_RAMP_STEP_MS = 140;      // [tune] dwell between ra
 const unsigned long AGITATOR_REVERSE_PAUSE_MS = 5000; // [tune] full-stop pause before direction flip
 const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
 const bool AGITATOR_HALL_ACTIVE_LOW = true;
+const unsigned long AGITATOR_MOVE_HALL_FAILSAFE_MS = 20000UL;
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -1583,6 +1584,46 @@ bool agitatorHallHomeDetected() {
   return digitalRead(Mixer_agitatorHallSensor) == (AGITATOR_HALL_ACTIVE_LOW ? LOW : HIGH);
 }
 
+bool agitatorStopOrEStopRequested() {
+  static String safetyCmdBuffer;
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      safetyCmdBuffer.trim();
+      safetyCmdBuffer.toUpperCase();
+
+      if (safetyCmdBuffer == "AGITATOR_STOP") {
+        safetyCmdBuffer = "";
+        return true;
+      }
+
+      if (safetyCmdBuffer == "ESTOP") {
+        // Mirror main ESTOP behavior so a blocked AGITATOR_MOVE remains
+        // safety-stop responsive while waiting on hall transitions.
+        systemDiagFlagError(30000UL);
+        motorStop();
+        gateCloseCmd();
+        shredderOff();
+        agitatorStop();
+        vacuumStop();
+        bgStopAll();
+        srRunning = false;
+        tcStopPickSequence(F("[TC] ESTOP - conveyor halted"));
+        tcState = TC_WAIT_HOME;
+        Serial.println(F("[SYSTEM] ESTOP - all stopped"));
+        safetyCmdBuffer = "";
+        return true;
+      }
+
+      safetyCmdBuffer = "";
+    } else {
+      safetyCmdBuffer += c;
+      if (safetyCmdBuffer.length() > 48) safetyCmdBuffer = "";
+    }
+  }
+  return false;
+}
+
 void agitatorMonitorHall() {
   bool hallHome = agitatorHallHomeDetected();
   if (hallHome != agitatorHallLastState) {
@@ -1593,10 +1634,18 @@ void agitatorMonitorHall() {
   }
 }
 
-void agitatorWaitForHallState(bool targetHome) {
+bool agitatorWaitForHallState(bool targetHome) {
+  unsigned long start = millis();
   while (agitatorHallHomeDetected() != targetHome) {
+    if (agitatorStopOrEStopRequested()) return false;
+    if (millis() - start > AGITATOR_MOVE_HALL_FAILSAFE_MS) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: hall wait timeout"));
+      return false;
+    }
     delay(1);
   }
+  return true;
 }
 
 void agitatorDriveRawPwm(int pwm, bool fwd) {
@@ -1622,14 +1671,30 @@ bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd) {
     // If we are currently on the home mark, first move off it so the next
     // home transition is one complete revolution.
     if (agitatorHallHomeDetected()) {
-      agitatorWaitForHallState(false);
+      if (!agitatorWaitForHallState(false)) {
+        agitatorStop();
+        Serial.println(F("[AGITATOR] MOVE stopped"));
+        return false;
+      }
     }
 
-    agitatorWaitForHallState(true);
+    if (!agitatorWaitForHallState(true)) {
+      agitatorStop();
+      Serial.println(F("[AGITATOR] MOVE stopped"));
+      return false;
+    }
 
     agitatorStop();
     if (pauseMs > 0 && i < spins - 1) {
-      delay(pauseMs);
+      unsigned long startPause = millis();
+      while (millis() - startPause < pauseMs) {
+        if (agitatorStopOrEStopRequested()) {
+          agitatorStop();
+          Serial.println(F("[AGITATOR] MOVE stopped"));
+          return false;
+        }
+        delay(1);
+      }
     }
   }
   return true;

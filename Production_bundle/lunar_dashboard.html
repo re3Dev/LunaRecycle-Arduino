@@ -841,7 +841,7 @@
           <div class="bd">
             <div class="manual-grid">
               <div class="act-block">
-                <div class="act-head">Gate</div>
+                <div class="act-head">Shredder Gates</div>
                 <div class="act-actions">
                   <button class="btn mini primary" id="btnGateOpen">Open</button>
                   <button class="btn mini" id="btnGateClose">Close</button>
@@ -850,7 +850,7 @@
               </div>
 
               <div class="act-block">
-                <div class="act-head">Screw Motor</div>
+                <div class="act-head">Mixer Motor</div>
                 <div class="act-row">
                   <div class="act-mini"><label>PWM (0-255)</label><input type="number" id="manMotorSpeed" min="0" max="255" value="150" /></div>
                   <div class="act-mini"><label>Dir</label><select id="manMotorDir"><option>FWD</option><option>REV</option></select></div>
@@ -875,7 +875,7 @@
               </div>
 
               <div class="act-block">
-                <div class="act-head">Shredder</div>
+                <div class="act-head">Shredder Motor</div>
                 <div class="act-actions">
                   <button class="btn mini primary" id="btnShredderOn">On</button>
                   <button class="btn mini" id="btnShredderOff">Off</button>
@@ -885,7 +885,7 @@
               </div>
 
               <div class="act-block">
-                <div class="act-head">Agitator</div>
+                <div class="act-head">Air Lock</div>
                 <div class="act-row">
                   <div class="act-mini"><label>Percent (0-100)</label><input type="number" id="manAgPct" min="0" max="100" value="60" /></div>
                   <div class="act-mini"><label>Dir</label><select id="manAgDir"><option>FWD</option><option>REV</option></select></div>
@@ -907,7 +907,7 @@
               </div>
 
               <div class="act-block">
-                <div class="act-head">Vacuum</div>
+                <div class="act-head">Blower Motor</div>
                 <div class="act-row">
                   <div class="act-mini"><label>Percent (0-100)</label><input type="number" id="manVacPct" min="0" max="100" value="40" /></div>
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini primary" id="btnVacSet">Set</button></div>
@@ -940,7 +940,7 @@
               </div>
 
               <div class="act-block" style="grid-column: 1 / -1;">
-                <div class="act-head">Fume Extractor SSR</div>
+                <div class="act-head">Printer Filtration</div>
                 <div class="act-actions">
                   <button class="btn mini primary" id="btnFeOn">On</button>
                   <button class="btn mini" id="btnFeOff">Off</button>
@@ -958,15 +958,15 @@
                 </div>
                 <div class="act-row-4">
                   <div class="act-mini"><label>Extruder Rot/Cycle</label><input type="number" id="rtExtRotCycle" min="0.01" step="0.01" value="10" /></div>
-                  <div class="act-mini"><label>Consecutive Agitator Rot</label><input type="number" id="rtAgRotCycle" min="1" step="1" value="1" /></div>
-                  <div class="act-mini"><label>Agitator PWM</label><input type="number" id="rtAgPwm" min="0" max="255" value="180" /></div>
-                  <div class="act-mini"><label>Agitator Dir</label><select id="rtAgDir"><option>FWD</option><option>REV</option></select></div>
+                  <div class="act-mini"><label>Consecutive Air Lock Rot</label><input type="number" id="rtAgRotCycle" min="1" step="1" value="1" /></div>
+                  <div class="act-mini"><label>Air Lock PWM</label><input type="number" id="rtAgPwm" min="0" max="255" value="180" /></div>
+                  <div class="act-mini"><label>Air Lock Dir</label><select id="rtAgDir"><option>FWD</option><option>REV</option></select></div>
                 </div>
                 <div class="act-row-4">
-                  <div class="act-mini"><label>Agitator Pause ms</label><input type="number" id="rtAgPauseMs" min="0" step="1" value="0" /></div>
-                  <div class="act-mini"><label>Vacuum %</label><input type="number" id="rtVacPct" min="0" max="100" step="1" value="40" /></div>
+                  <div class="act-mini"><label>Air Lock Pause ms</label><input type="number" id="rtAgPauseMs" min="0" step="1" value="0" /></div>
+                  <div class="act-mini"><label>Blower Motor %</label><input type="number" id="rtVacPct" min="0" max="100" step="1" value="40" /></div>
                   <div class="act-mini"><label>Pending Ext Rot</label><input type="text" id="rtPendingText" value="—" readonly /></div>
-                  <div class="act-mini"><label>Agitator Rot Cmd</label><input type="text" id="rtAgCmdText" value="—" readonly /></div>
+                  <div class="act-mini"><label>Air Lock Rot Cmd</label><input type="text" id="rtAgCmdText" value="—" readonly /></div>
                 </div>
                 <div class="act-actions">
                   <button class="btn mini primary" id="btnRatioTestStart">Start Ratio Test</button>

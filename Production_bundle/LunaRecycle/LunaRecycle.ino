@@ -1593,20 +1593,10 @@ void agitatorMonitorHall() {
   }
 }
 
-bool agitatorAbortRequested() {
-  if (Serial.available() > 0) {
-    while (Serial.available() > 0) Serial.read();
-    return true;
-  }
-  return false;
-}
-
-int agitatorWaitForHallState(bool targetHome) {
+void agitatorWaitForHallState(bool targetHome) {
   while (agitatorHallHomeDetected() != targetHome) {
-    if (agitatorAbortRequested()) return 2;
     delay(1);
   }
-  return 0;
 }
 
 void agitatorDriveRawPwm(int pwm, bool fwd) {
@@ -1632,12 +1622,10 @@ bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd) {
     // If we are currently on the home mark, first move off it so the next
     // home transition is one complete revolution.
     if (agitatorHallHomeDetected()) {
-      int waitOff = agitatorWaitForHallState(false);
-      if (waitOff == 2) { agitatorStop(); Serial.println(F("[AGITATOR] MOVE aborted")); return false; }
+      agitatorWaitForHallState(false);
     }
 
-    int waitHome = agitatorWaitForHallState(true);
-    if (waitHome == 2) { agitatorStop(); Serial.println(F("[AGITATOR] MOVE aborted")); return false; }
+    agitatorWaitForHallState(true);
 
     agitatorStop();
     if (pauseMs > 0 && i < spins - 1) {

@@ -76,6 +76,7 @@ VIEWER_PRINTER_API_URL = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "")
 # Moonraker (Klipper) live extrusion monitoring.
 MOONRAKER_WS_URL = os.environ.get("LUNA_MOONRAKER_WS_URL", "").strip()
 MOONRAKER_EXTRUDER_VELOCITY_MIN = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_VEL_MIN", "0.01"))
+MOONRAKER_EXTRUDER_UNITS_PER_ROTATION = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_UNITS_PER_ROTATION", "1.0"))
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
 MOONRAKER_FE_RETRY_SEC = float(os.environ.get("LUNA_MOONRAKER_FE_RETRY_SEC", "5.0"))
@@ -201,6 +202,13 @@ class MoonrakerMonitor:
         self.live_extruder_velocity = 0.0
         self.print_state = ""
         self.filament_used = 0.0
+        self.axis_map: list[str] = []
+        self.extruder_axis_index = -1
+        self.live_position: list[float] = []
+        self.live_extruder_position = 0.0
+        self.extruder_units_total = 0.0
+        self.extruder_rotations_total = 0.0
+        self._last_live_extruder_position: Optional[float] = None
         self.extruder_temps: dict[str, float] = {}
         self.max_extruder_temp_c = 0.0
         self.fe_auto_on: Optional[bool] = None
@@ -221,6 +229,13 @@ class MoonrakerMonitor:
                 "connected": self.connected,
                 "extruding": self.extruding,
                 "live_extruder_velocity": self.live_extruder_velocity,
+                "axis_map": list(self.axis_map),
+                "extruder_axis_index": self.extruder_axis_index,
+                "live_position": list(self.live_position),
+                "live_extruder_position": self.live_extruder_position,
+                "extruder_units_total": self.extruder_units_total,
+                "extruder_rotations_total": self.extruder_rotations_total,
+                "extruder_units_per_rotation": MOONRAKER_EXTRUDER_UNITS_PER_ROTATION,
                 "print_state": self.print_state,
                 "filament_used": self.filament_used,
                 "extruder_temps": dict(self.extruder_temps),
@@ -236,11 +251,19 @@ class MoonrakerMonitor:
             if not connected:
                 self.extruding = False
                 self.live_extruder_velocity = 0.0
+                self.axis_map = []
+                self.extruder_axis_index = -1
+                self.live_position = []
+                self.live_extruder_position = 0.0
+                self.extruder_units_total = 0.0
+                self.extruder_rotations_total = 0.0
+                self._last_live_extruder_position = None
                 self.extruder_temps = {}
                 self.max_extruder_temp_c = 0.0
 
     def _apply_status(self, status: dict) -> None:
         motion = status.get("motion_report", {}) if isinstance(status, dict) else {}
+        gmove = status.get("gcode_move", {}) if isinstance(status, dict) else {}
         stats = status.get("print_stats", {}) if isinstance(status, dict) else {}
 
         velocity_raw = motion.get("live_extruder_velocity")
@@ -256,6 +279,22 @@ class MoonrakerMonitor:
         except (TypeError, ValueError):
             filament_used = None
 
+        axis_map_raw = gmove.get("axis_map") if isinstance(gmove, dict) else None
+        axis_map = None
+        if isinstance(axis_map_raw, list):
+            axis_map = [str(v).strip().lower() for v in axis_map_raw]
+
+        live_pos_raw = motion.get("live_position") if isinstance(motion, dict) else None
+        live_pos = None
+        if isinstance(live_pos_raw, (list, tuple)):
+            live_pos = []
+            for v in live_pos_raw:
+                try:
+                    live_pos.append(float(v))
+                except (TypeError, ValueError):
+                    live_pos = None
+                    break
+
         with self._lock:
             if velocity is not None:
                 self.live_extruder_velocity = velocity
@@ -263,6 +302,34 @@ class MoonrakerMonitor:
                 self.print_state = print_state
             if filament_used is not None:
                 self.filament_used = filament_used
+
+            if axis_map is not None:
+                self.axis_map = axis_map
+                try:
+                    self.extruder_axis_index = self.axis_map.index("e")
+                except ValueError:
+                    self.extruder_axis_index = -1
+
+            if live_pos is not None:
+                self.live_position = live_pos
+                e_idx = self.extruder_axis_index
+                e_live = None
+                if 0 <= e_idx < len(live_pos):
+                    e_live = live_pos[e_idx]
+                elif len(live_pos) >= 4:
+                    e_live = live_pos[3]
+
+                if e_live is not None:
+                    self.live_extruder_position = e_live
+                    if self._last_live_extruder_position is not None:
+                        delta = e_live - self._last_live_extruder_position
+                        # Keep a monotonic total of forward extrusion only. Ignore
+                        # retracts and giant resets from coordinate re-zeroing.
+                        if 0.0 <= delta <= 1000.0:
+                            self.extruder_units_total += delta
+                    self._last_live_extruder_position = e_live
+                    units_per_rot = max(1e-6, MOONRAKER_EXTRUDER_UNITS_PER_ROTATION)
+                    self.extruder_rotations_total = self.extruder_units_total / units_per_rot
 
             # Collect any reported extruder heater temperatures.
             for obj_name, obj_data in status.items():
@@ -1961,6 +2028,235 @@ orchestrator = ProcessOrchestrator()
 feeder = FeedController()
 
 
+class ExtrusionRatioTestController:
+    """Manual test mode: run vacuum + hall-homed agitator based on live extruder ratio.
+
+    This is independent from /api/feed automation and intended for operator tuning.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._reset()
+
+    def _reset(self):
+        self.phase = "IDLE"     # IDLE, RUNNING, STOPPED, ERROR
+        self.message = ""
+        self.running = False
+        self.started_at = 0.0
+        self.vacuum_pct = 0
+        self.agitator_pwm = 0
+        self.agitator_dir = "FWD"
+        self.agitator_pause_ms = 0
+        self.extruder_rotations_per_cycle = 10.0
+        self.agitator_rotations_per_cycle = 1
+        self.extruder_rot_pending = 0.0
+        self.agitator_rotations_commanded = 0
+        self.moonraker_connected = False
+        self.live_extruder_velocity = 0.0
+        self.live_extruder_rotations_total = 0.0
+
+    def _arduino(self, cmd: str):
+        arduino.send(cmd)
+
+    def _run(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct):
+        baseline_rot = None
+        try:
+            with self._lock:
+                self.phase = "RUNNING"
+                self.running = True
+                self.started_at = time.monotonic()
+                self.vacuum_pct = vacuum_pct
+                self.agitator_pwm = agitator_pwm
+                self.agitator_dir = agitator_dir
+                self.agitator_pause_ms = agitator_pause_ms
+                self.extruder_rotations_per_cycle = extruder_rot_per_cycle
+                self.agitator_rotations_per_cycle = agitator_rot_per_cycle
+                self.extruder_rot_pending = 0.0
+                self.agitator_rotations_commanded = 0
+                self.message = "Waiting for Moonraker extrusion data."
+
+            self._arduino(f"VACUUM_SET {vacuum_pct}")
+
+            while not self._stop.is_set():
+                snap = moonraker.snapshot()
+                connected = bool(snap.get("connected"))
+                try:
+                    live_vel = float(snap.get("live_extruder_velocity", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    live_vel = 0.0
+                try:
+                    live_rot = float(snap.get("extruder_rotations_total", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    live_rot = 0.0
+
+                with self._lock:
+                    self.moonraker_connected = connected
+                    self.live_extruder_velocity = live_vel
+                    self.live_extruder_rotations_total = live_rot
+
+                if not connected:
+                    with self._lock:
+                        self.message = "Moonraker disconnected; waiting to resume."
+                    self._stop.wait(0.2)
+                    continue
+
+                if baseline_rot is None or live_rot < baseline_rot:
+                    baseline_rot = live_rot
+                    self._stop.wait(0.1)
+                    continue
+
+                delta_rot = max(0.0, live_rot - baseline_rot)
+                baseline_rot = live_rot
+
+                if delta_rot > 0.0:
+                    with self._lock:
+                        self.extruder_rot_pending += delta_rot
+
+                run_cycle = False
+                with self._lock:
+                    if self.extruder_rot_pending >= self.extruder_rotations_per_cycle:
+                        self.extruder_rot_pending -= self.extruder_rotations_per_cycle
+                        run_cycle = True
+
+                if run_cycle:
+                    self._arduino(
+                        f"AGITATOR_MOVE {agitator_rot_per_cycle} {agitator_pause_ms} {agitator_pwm} {agitator_dir}"
+                    )
+                    with self._lock:
+                        self.agitator_rotations_commanded += agitator_rot_per_cycle
+                        self.message = (
+                            f"Agitated {self.agitator_rotations_commanded} turns "
+                            f"at ratio {self.extruder_rotations_per_cycle}:"
+                            f"{self.agitator_rotations_per_cycle}."
+                        )
+                else:
+                    with self._lock:
+                        self.message = (
+                            f"Running ratio test ({self.extruder_rotations_per_cycle}:"
+                            f"{self.agitator_rotations_per_cycle})."
+                        )
+
+                self._stop.wait(0.1)
+
+            self._arduino("AGITATOR_STOP")
+            self._arduino("VACUUM_STOP")
+            with self._lock:
+                self.phase = "STOPPED"
+                self.running = False
+                self.message = "Extruder-ratio test stopped."
+        except Exception as exc:
+            try:
+                self._arduino("AGITATOR_STOP")
+                self._arduino("VACUUM_STOP")
+            except Exception:
+                pass
+            with self._lock:
+                self.phase = "ERROR"
+                self.running = False
+                self.message = f"Error: {exc}"
+
+    def start(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct):
+        with self._lock:
+            if self.running:
+                raise RuntimeError("Extruder-ratio test already running.")
+            self._reset()
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct),
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def status(self) -> dict:
+        with self._lock:
+            return {
+                "phase": self.phase,
+                "running": self.running,
+                "message": self.message,
+                "vacuum_pct": self.vacuum_pct,
+                "agitator_pwm": self.agitator_pwm,
+                "agitator_dir": self.agitator_dir,
+                "agitator_pause_ms": self.agitator_pause_ms,
+                "extruder_rotations_per_cycle": self.extruder_rotations_per_cycle,
+                "agitator_rotations_per_cycle": self.agitator_rotations_per_cycle,
+                "extruder_rot_pending": self.extruder_rot_pending,
+                "agitator_rotations_commanded": self.agitator_rotations_commanded,
+                "moonraker_connected": self.moonraker_connected,
+                "live_extruder_velocity": self.live_extruder_velocity,
+                "live_extruder_rotations_total": self.live_extruder_rotations_total,
+            }
+
+
+ratio_test = ExtrusionRatioTestController()
+
+
+@app.route("/api/moonraker/status", methods=["GET"])
+def api_moonraker_status():
+    return jsonify({"ok": True, "data": moonraker.snapshot()})
+
+
+@app.route("/api/extrusion_ratio_test/start", methods=["POST"])
+def api_extrusion_ratio_test_start():
+    try:
+        if not moonraker.enabled:
+            return jsonify({"ok": False, "error": "Moonraker is disabled (set LUNA_MOONRAKER_WS_URL)."}), 400
+        if feeder.status().get("running"):
+            return jsonify({"ok": False, "error": "feed automation is running; stop it first"}), 400
+
+        body = request.get_json(silent=True) or {}
+        extruder_rot_per_cycle = float(body.get("extruder_rotations_per_cycle", 10.0))
+        agitator_rot_per_cycle = int(body.get("agitator_rotations_per_cycle", 1))
+        agitator_pwm = int(body.get("agitator_pwm", 180))
+        agitator_dir = str(body.get("agitator_dir", "FWD")).strip().upper()
+        agitator_pause_ms = int(body.get("agitator_pause_ms", 0))
+        vacuum_pct = int(body.get("vacuum_pct", 40))
+
+        if extruder_rot_per_cycle <= 0:
+            return jsonify({"ok": False, "error": "extruder_rotations_per_cycle must be > 0"}), 400
+        if agitator_rot_per_cycle <= 0:
+            return jsonify({"ok": False, "error": "agitator_rotations_per_cycle must be > 0"}), 400
+        if not (0 <= agitator_pwm <= 255):
+            return jsonify({"ok": False, "error": "agitator_pwm must be 0-255"}), 400
+        if agitator_dir not in ("FWD", "REV"):
+            return jsonify({"ok": False, "error": "agitator_dir must be FWD or REV"}), 400
+        if not (0 <= agitator_pause_ms <= 600000):
+            return jsonify({"ok": False, "error": "agitator_pause_ms must be 0-600000"}), 400
+        if not (0 <= vacuum_pct <= 100):
+            return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
+
+        ratio_test.start(
+            extruder_rot_per_cycle,
+            agitator_rot_per_cycle,
+            agitator_pwm,
+            agitator_dir,
+            agitator_pause_ms,
+            vacuum_pct,
+        )
+        return jsonify({"ok": True, "data": ratio_test.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/extrusion_ratio_test/stop", methods=["POST"])
+def api_extrusion_ratio_test_stop():
+    try:
+        ratio_test.stop()
+        return jsonify({"ok": True, "data": ratio_test.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/extrusion_ratio_test/status", methods=["GET"])
+def api_extrusion_ratio_test_status():
+    return jsonify({"ok": True, "data": ratio_test.status()})
+
+
 @app.route("/api/dry/start", methods=["POST"])
 def api_dry_start():
     """Begin the drying + mixing cycle. Body: {minutes, temp_c}."""
@@ -1996,6 +2292,8 @@ def api_dry_status():
 def api_feed_start():
     """Begin print-feed prime + metering. Body overrides are optional."""
     try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         body = request.get_json(silent=True) or {}
         prime_sec    = int(body.get("prime_sec", FEED_PRIME_SECONDS))
         meter_on     = int(body.get("meter_on_sec", FEED_METER_ON_SECONDS))
@@ -2004,8 +2302,8 @@ def api_feed_start():
         agitator_pct = int(body.get("agitator_pct", FEED_AGITATOR_PCT))
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
-        if not (0 <= agitator_pct <= 75):
-            return jsonify({"ok": False, "error": "agitator_pct must be 0-75"}), 400
+        if not (0 <= agitator_pct <= 100):
+            return jsonify({"ok": False, "error": "agitator_pct must be 0-100"}), 400
         if meter_period <= 0 or meter_on < 0 or meter_on > meter_period:
             return jsonify({"ok": False, "error": "meter timing invalid"}), 400
         feeder.start(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct)
@@ -2076,6 +2374,10 @@ def api_estop():
         feeder.stop()
     except Exception as exc:
         errors.append(f"Feed stop: {exc}")
+    try:
+        ratio_test.stop()
+    except Exception as exc:
+        errors.append(f"Ratio-test stop: {exc}")
 
     try:
         arduino.send("ESTOP")

@@ -947,6 +947,35 @@
                   <button class="btn mini" id="btnFeStatus">Status</button>
                 </div>
               </div>
+
+              <div class="act-block" style="grid-column: 1 / -1;">
+                <div class="act-head">Extruder Ratio Test (Moonraker)</div>
+                <div class="split" style="margin-bottom:6px;">
+                  <div class="kv"><div class="k">Moonraker</div><div class="v" id="mrConnText">—</div></div>
+                  <div class="kv"><div class="k">Live Extruder Vel</div><div class="v" id="mrVelText">—</div></div>
+                  <div class="kv"><div class="k">Live Position (E)</div><div class="v" id="mrLiveEText">—</div></div>
+                  <div class="kv"><div class="k">Extruder Rot Total</div><div class="v" id="mrRotTotalText">—</div></div>
+                </div>
+                <div class="act-row-4">
+                  <div class="act-mini"><label>Extruder Rot/Cycle</label><input type="number" id="rtExtRotCycle" min="0.01" step="0.01" value="10" /></div>
+                  <div class="act-mini"><label>Agitator Rot/Cycle</label><input type="number" id="rtAgRotCycle" min="1" step="1" value="1" /></div>
+                  <div class="act-mini"><label>Agitator PWM</label><input type="number" id="rtAgPwm" min="0" max="255" value="180" /></div>
+                  <div class="act-mini"><label>Agitator Dir</label><select id="rtAgDir"><option>FWD</option><option>REV</option></select></div>
+                </div>
+                <div class="act-row-4">
+                  <div class="act-mini"><label>Agitator Pause ms</label><input type="number" id="rtAgPauseMs" min="0" step="1" value="0" /></div>
+                  <div class="act-mini"><label>Vacuum %</label><input type="number" id="rtVacPct" min="0" max="100" step="1" value="40" /></div>
+                  <div class="act-mini"><label>Pending Ext Rot</label><input type="text" id="rtPendingText" value="—" readonly /></div>
+                  <div class="act-mini"><label>Agitator Rot Cmd</label><input type="text" id="rtAgCmdText" value="—" readonly /></div>
+                </div>
+                <div class="act-actions">
+                  <button class="btn mini primary" id="btnRatioTestStart">Start Ratio Test</button>
+                  <button class="btn mini danger" id="btnRatioTestStop">Stop Ratio Test</button>
+                  <button class="btn mini" id="btnRatioTestRefresh">Refresh</button>
+                  <span class="statechip" id="ratioTestChip">IDLE</span>
+                </div>
+                <div class="hint" id="ratioTestMsgText" style="margin-top:4px;">—</div>
+              </div>
             </div>
           </div>
         </section>
@@ -1114,6 +1143,20 @@
       workflowStopRequested: false,
       workflowPhase: "IDLE",
       workflowMsg: "Ready.",
+
+      moonraker: {
+        connected: false,
+        live_extruder_velocity: 0,
+        live_extruder_position: 0,
+        extruder_rotations_total: 0,
+      },
+      ratioTest: {
+        running: false,
+        phase: "IDLE",
+        message: "—",
+        extruder_rot_pending: 0,
+        agitator_rotations_commanded: 0,
+      },
 
       screw_on: false,
       heater_on: false,
@@ -1319,6 +1362,10 @@
       on("btnFeOn", "click", ()=>manualAction("Fume extractor on", "/fe/on"));
       on("btnFeOff", "click", ()=>manualAction("Fume extractor off", "/fe/off"));
       on("btnFeStatus", "click", ()=>manualAction("Fume extractor status", "/fe/status", null, "GET"));
+
+      on("btnRatioTestStart", "click", ratioTestStart);
+      on("btnRatioTestStop", "click", ratioTestStop);
+      on("btnRatioTestRefresh", "click", ()=>ratioTestRefreshStatus(false));
     }
 
     async function arduinoConnect(){
@@ -1477,6 +1524,22 @@
         const warn = phase === "STOPPING";
         const bad = phase === "ERROR";
         wchip.className = "statechip" + (bad ? " bad" : warn ? " warn" : S.workflowRunning ? " good" : "");
+      }
+
+      setText("mrConnText", S.moonraker.connected ? "CONNECTED" : "DISCONNECTED");
+      setText("mrVelText", Number(S.moonraker.live_extruder_velocity || 0).toFixed(4));
+      setText("mrLiveEText", Number(S.moonraker.live_extruder_position || 0).toFixed(4));
+      setText("mrRotTotalText", Number(S.moonraker.extruder_rotations_total || 0).toFixed(4));
+
+      setText("rtPendingText", Number(S.ratioTest.extruder_rot_pending || 0).toFixed(4));
+      setText("rtAgCmdText", String(S.ratioTest.agitator_rotations_commanded ?? "—"));
+      setText("ratioTestMsgText", S.ratioTest.message || "—");
+
+      const rtChip = document.getElementById("ratioTestChip");
+      if(rtChip){
+        const running = !!S.ratioTest.running;
+        rtChip.textContent = running ? String(S.ratioTest.phase || "RUNNING").toUpperCase() : "IDLE";
+        rtChip.className = "statechip" + (running ? " good" : "");
       }
     }
 
@@ -1950,6 +2013,55 @@
       return fetchJSON(`${API_BASE}${path}`, opts, timeoutMs);
     }
 
+    async function ratioTestRefreshStatus(silent=false){
+      try{
+        const [mr, rt] = await Promise.all([
+          apiArduino("/moonraker/status", { method: "GET" }),
+          apiArduino("/extrusion_ratio_test/status", { method: "GET" }),
+        ]);
+        S.moonraker = mr.data || S.moonraker;
+        S.ratioTest = rt.data || S.ratioTest;
+      }catch(err){
+        if(!silent){ log(`Ratio-test status failed: ${err.message}`, "bad"); }
+      }
+      render();
+    }
+
+    async function ratioTestStart(){
+      if(!S.arduinoConnected){
+        log("Arduino not connected.", "bad");
+        return;
+      }
+      const body = {
+        extruder_rotations_per_cycle: Math.max(0.01, getNum("rtExtRotCycle", 10)),
+        agitator_rotations_per_cycle: Math.max(1, Math.round(getNum("rtAgRotCycle", 1))),
+        agitator_pwm: Math.max(0, Math.min(255, Math.round(getNum("rtAgPwm", 180)))),
+        agitator_dir: getSel("rtAgDir", "FWD"),
+        agitator_pause_ms: Math.max(0, Math.round(getNum("rtAgPauseMs", 0))),
+        vacuum_pct: Math.max(0, Math.min(100, Math.round(getNum("rtVacPct", 40)))),
+      };
+      try{
+        await apiArduino("/extrusion_ratio_test/start", {
+          method: "POST",
+          body: JSON.stringify(body),
+        }, 12000);
+        log("Extruder ratio test started.", "good");
+        await ratioTestRefreshStatus(true);
+      }catch(err){
+        log(`Extruder ratio test start failed: ${err.message}`, "bad");
+      }
+    }
+
+    async function ratioTestStop(){
+      try{
+        await apiArduino("/extrusion_ratio_test/stop", { method: "POST" });
+        log("Extruder ratio test stop requested.", "warn");
+        await ratioTestRefreshStatus(true);
+      }catch(err){
+        log(`Extruder ratio test stop failed: ${err.message}`, "bad");
+      }
+    }
+
     async function dryerConnect(){
       try{
         const data = await api("/connect", { method: "POST" });
@@ -2216,6 +2328,7 @@
     let dryerPollTimer = 0;
     let arduinoPollTimer = 0;
     let srPollTimer = 0;
+    let ratioPollTimer = 0;
 
     function loop(now){
       const dt = Math.min(0.05, (now-last)/1000);
@@ -2225,6 +2338,7 @@
       dryerPollTimer += dt;
       arduinoPollTimer += dt;
       srPollTimer += dt;
+      ratioPollTimer += dt;
 
       tickConnection(dt);
 
@@ -2249,6 +2363,11 @@
         pollFeed();
       }
 
+      if(ratioPollTimer >= 1.0){
+        ratioPollTimer = 0;
+        ratioTestRefreshStatus(true);
+      }
+
       render();
       requestAnimationFrame(loop);
     }
@@ -2269,6 +2388,7 @@
 
       bind();
       workflowUpdateModeUI();
+      ratioTestRefreshStatus(true);
       render();
       requestAnimationFrame(loop);
     }

@@ -2221,6 +2221,7 @@ class ExtrusionRatioTestController:
                 "agitator_pause_ms": self.agitator_pause_ms,
                 "extruder_rotations_per_cycle": self.extruder_rotations_per_cycle,
                 "agitator_rotations_per_cycle": self.agitator_rotations_per_cycle,
+                "agitator_consecutive_rotations": self.agitator_rotations_per_cycle,
                 "extruder_rot_pending": self.extruder_rot_pending,
                 "agitator_rotations_commanded": self.agitator_rotations_commanded,
                 "moonraker_connected": self.moonraker_connected,
@@ -2300,7 +2301,6 @@ def api_extrusion_ratio_test_status():
 
 @app.route("/api/dry/start", methods=["POST"])
 def api_dry_start():
-                "agitator_consecutive_rotations": self.agitator_rotations_per_cycle,
     """Begin the drying + mixing cycle. Body: {minutes, temp_c}."""
     try:
         body = request.get_json(silent=True) or {}

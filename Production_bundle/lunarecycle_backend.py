@@ -1349,6 +1349,8 @@ def api_shredder_rev():
 @app.route("/api/agitator/set", methods=["POST"])
 def api_agitator_set():
     try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         percent = int(request.json["percent"])
         direction = str(request.json.get("dir", "FWD")).strip().upper()
         if percent < 0 or percent > 100:
@@ -1364,6 +1366,8 @@ def api_agitator_set():
 @app.route("/api/agitator/stop", methods=["POST"])
 def api_agitator_stop():
     try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         lines = arduino.send("AGITATOR_STOP")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
@@ -1373,6 +1377,8 @@ def api_agitator_stop():
 @app.route("/api/agitator/move", methods=["POST"])
 def api_agitator_move():
     try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         spins = int(request.json["spins"])
         pause_ms = int(request.json.get("pause_ms", 0))
         pwm = int(request.json["pwm"])
@@ -1409,6 +1415,8 @@ def api_agitator_status():
 @app.route("/api/vacuum/set", methods=["POST"])
 def api_vacuum_set():
     try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         percent = int(request.json["percent"])
         if percent < 0 or percent > 100:
             raise ValueError("percent must be 0-100")

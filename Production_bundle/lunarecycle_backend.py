@@ -2155,9 +2155,8 @@ class ExtrusionRatioTestController:
 
                     # After a completed spin cycle, hold configured vacuum for
                     # a short window, then return to idle vacuum.
-                    if vacuum_active_pct != vacuum_pct:
-                        self._arduino(f"VACUUM_SET {vacuum_pct}")
-                        vacuum_active_pct = vacuum_pct
+                    self._arduino(f"VACUUM_SET {vacuum_pct}")
+                    vacuum_active_pct = vacuum_pct
                     vacuum_boost_until = time.monotonic() + max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
 
                     with self._lock:

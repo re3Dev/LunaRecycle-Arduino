@@ -45,6 +45,7 @@ ARDUINO_PORT     = os.environ.get("LUNA_ARDUINO_PORT", "/dev/ttyACM0")
 ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "115200"))
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
 BLASTGATE_TIMEOUT = 12.0  # blast gate moves are blocking and can take seconds
+AGITATOR_MOVE_TIMEOUT = float(os.environ.get("LUNA_AGITATOR_MOVE_TIMEOUT", "45.0"))
 # How often the background supervisor retries a dropped Arduino connection.
 RECONNECT_INTERVAL = float(os.environ.get("LUNA_RECONNECT_INTERVAL", "3.0"))
 
@@ -665,7 +666,13 @@ class ArduinoBridge:
         # few seconds) and emit several [BLASTGATE ...] lines, ending with a
         # unique [BLASTGATE_DONE] marker. Give them a longer read window.
         is_blastgate = cmd.strip().upper().startswith("BLASTGATE_")
-        total_timeout = BLASTGATE_TIMEOUT if is_blastgate else ARDUINO_TIMEOUT
+        is_agitator_move = cmd.strip().upper().startswith("AGITATOR_MOVE ")
+        if is_blastgate:
+            total_timeout = BLASTGATE_TIMEOUT
+        elif is_agitator_move:
+            total_timeout = AGITATOR_MOVE_TIMEOUT
+        else:
+            total_timeout = ARDUINO_TIMEOUT
         # Tags that mark a genuine command reply. [ENERGY] is async telemetry the
         # firmware streams every 500 ms; for non-STATUS commands it must be skipped
         # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies

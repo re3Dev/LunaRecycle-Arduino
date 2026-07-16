@@ -39,8 +39,10 @@
  *   SHREDDER_FWD / _REV    Set shredder motor direction
  *
  *   AGITATOR_SET <0-100> <FWD|REV>  Run bottom agitator (full 0-100% range)
- *   AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV]
- *                                  Run N hall-homed revolutions at raw PWM
+ *   AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV] [pwm_after_ms] [pwm_after]
+ *                                  Run N hall-homed revolutions at raw PWM,
+ *                                  optionally shift to pwm_after after
+ *                                  pwm_after_ms within each spin.
  *   AGITATOR_STOP                   Stop the agitator
  *   AGITATOR_STATUS                 Print agitator power / direction
  *
@@ -1668,25 +1670,60 @@ void agitatorDriveRawPwm(int pwm, bool fwd) {
   analogWrite(Mixer_agitatorMotor_ENB, clampedPwm);
 }
 
-bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd) {
+bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd, long pwmShiftAfterMs, int pwmAfter) {
   if (spins <= 0) return true;
   for (int i = 0; i < spins; i++) {
+    unsigned long moveStart = millis();
+    bool pwmShifted = (pwmShiftAfterMs < 0);
     agitatorDriveRawPwm(pwm, fwd);
 
     // If we are currently on the home mark, first move off it so the next
     // home transition is one complete revolution.
     if (agitatorHallHomeDetected()) {
-      if (!agitatorWaitForHallState(false)) {
+      while (agitatorHallHomeDetected()) {
+        if (agitatorStopOrEStopRequested()) {
+          agitatorStop();
+          Serial.println(F("[AGITATOR] MOVE stopped"));
+          return false;
+        }
+        if (!pwmShifted && (millis() - moveStart >= (unsigned long)pwmShiftAfterMs)) {
+          agitatorDriveRawPwm(pwmAfter, fwd);
+          pwmShifted = true;
+        }
+        if (millis() - moveStart > AGITATOR_MOVE_HALL_FAILSAFE_MS) {
+          systemDiagFlagError();
+          Serial.println(F("[AGITATOR] ERROR: hall wait timeout"));
+          agitatorStop();
+          Serial.println(F("[AGITATOR] MOVE stopped"));
+          return false;
+        }
+        delay(1);
+      }
+    }
+
+    while (!agitatorHallHomeDetected()) {
+      if (agitatorStopOrEStopRequested()) {
         agitatorStop();
         Serial.println(F("[AGITATOR] MOVE stopped"));
         return false;
       }
+      if (!pwmShifted && (millis() - moveStart >= (unsigned long)pwmShiftAfterMs)) {
+        agitatorDriveRawPwm(pwmAfter, fwd);
+        pwmShifted = true;
+      }
+      if (millis() - moveStart > AGITATOR_MOVE_HALL_FAILSAFE_MS) {
+        systemDiagFlagError();
+        Serial.println(F("[AGITATOR] ERROR: hall wait timeout"));
+        agitatorStop();
+        Serial.println(F("[AGITATOR] MOVE stopped"));
+        return false;
+      }
+      delay(1);
     }
 
-    if (!agitatorWaitForHallState(true)) {
-      agitatorStop();
-      Serial.println(F("[AGITATOR] MOVE stopped"));
-      return false;
+    if (!pwmShifted && (millis() - moveStart >= (unsigned long)pwmShiftAfterMs)) {
+      agitatorDriveRawPwm(pwmAfter, fwd);
+      pwmShifted = true;
     }
 
     agitatorStop();
@@ -2318,34 +2355,57 @@ void handleCommand(const String& cmd) {
     agitatorStatus();
 
   } else if (cmd.startsWith("AGITATOR_MOVE ")) {
-    // AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV]
+    // AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV] [pwm_after_ms] [pwm_after]
     String args = cmd.substring(14);
     args.trim();
 
-    int sp1 = args.indexOf(' ');
-    int sp2 = (sp1 >= 0) ? args.indexOf(' ', sp1 + 1) : -1;
-    int sp3 = (sp2 >= 0) ? args.indexOf(' ', sp2 + 1) : -1;
-    if (sp1 < 0 || sp2 < 0) {
+    String tok[6];
+    int tokCount = 0;
+    int idx = 0;
+    while (idx < args.length() && tokCount < 6) {
+      while (idx < args.length() && args.charAt(idx) == ' ') idx++;
+      if (idx >= args.length()) break;
+      int end = args.indexOf(' ', idx);
+      if (end < 0) end = args.length();
+      tok[tokCount++] = args.substring(idx, end);
+      idx = end + 1;
+    }
+
+    if (tokCount < 3) {
       systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: usage AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV]"));
+      Serial.println(F("[AGITATOR] ERROR: usage AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV] [pwm_after_ms] [pwm_after]"));
       return;
     }
 
-    int spins = args.substring(0, sp1).toInt();
-    long pauseMs = args.substring(sp1 + 1, sp2).toInt();
-    String pwmToken = (sp3 < 0) ? args.substring(sp2 + 1) : args.substring(sp2 + 1, sp3);
-    int pwm = pwmToken.toInt();
+    int spins = tok[0].toInt();
+    long pauseMs = tok[1].toInt();
+    int pwm = tok[2].toInt();
 
     bool fwd = agitatorFwd;
-    if (sp3 >= 0) {
-      String dir = args.substring(sp3 + 1);
+    int extraIdx = 3;
+    if (tokCount > 3) {
+      String dir = tok[3];
       dir.trim();
       if (dir != "FWD" && dir != "REV") {
-        systemDiagFlagError();
-        Serial.println(F("[AGITATOR] ERROR: direction must be FWD or REV"));
-        return;
+        // Direction omitted; keep current direction and treat token 4 as
+        // pwm_after_ms for backward-compatible compact syntax.
+      } else {
+        fwd = (dir == "FWD");
+        extraIdx = 4;
       }
-      fwd = (dir == "FWD");
+    }
+
+    long pwmShiftAfterMs = -1;
+    int pwmAfter = 0;
+    int remaining = tokCount - extraIdx;
+    if (remaining != 0 && remaining != 2) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: optional pwm_after args must be <pwm_after_ms> <pwm_after>"));
+      return;
+    }
+    if (remaining == 2) {
+      pwmShiftAfterMs = tok[extraIdx].toInt();
+      pwmAfter = tok[extraIdx + 1].toInt();
     }
 
     if (spins <= 0) {
@@ -2363,8 +2423,18 @@ void handleCommand(const String& cmd) {
       Serial.println(F("[AGITATOR] ERROR: pwm must be 0-255"));
       return;
     }
+    if (pwmShiftAfterMs > 600000L) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: pwm_after_ms must be 0-600000"));
+      return;
+    }
+    if (pwmShiftAfterMs >= 0 && (pwmAfter < 0 || pwmAfter > 255)) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR] ERROR: pwm_after must be 0-255"));
+      return;
+    }
 
-    bool ok = agitatorMoveSpins(spins, (unsigned long)pauseMs, pwm, fwd);
+    bool ok = agitatorMoveSpins(spins, (unsigned long)pauseMs, pwm, fwd, pwmShiftAfterMs, pwmAfter);
     if (ok) {
       Serial.print(F("[AGITATOR] MOVE done spins="));
       Serial.print(spins);
@@ -2372,6 +2442,12 @@ void handleCommand(const String& cmd) {
       Serial.print((unsigned long)pauseMs);
       Serial.print(F(" pwm="));
       Serial.print(pwm);
+      if (pwmShiftAfterMs >= 0) {
+        Serial.print(F(" pwm_after_ms="));
+        Serial.print((unsigned long)pwmShiftAfterMs);
+        Serial.print(F(" pwm_after="));
+        Serial.print(pwmAfter);
+      }
       Serial.print(F(" dir="));
       Serial.println(fwd ? F("FWD") : F("REV"));
       agitatorStatus();

@@ -1395,6 +1395,8 @@ def api_agitator_move():
         pause_ms = int(request.json.get("pause_ms", 0))
         pwm = int(request.json["pwm"])
         direction = str(request.json.get("dir", "FWD")).strip().upper()
+        pwm_after_start_ms = request.json.get("pwm_after_start_ms")
+        pwm_after = request.json.get("pwm_after")
 
         if spins <= 0:
             raise ValueError("spins must be > 0")
@@ -1405,7 +1407,22 @@ def api_agitator_move():
         if direction not in ("FWD", "REV"):
             raise ValueError("dir must be FWD or REV")
 
-        lines = arduino.send(f"AGITATOR_MOVE {spins} {pause_ms} {pwm} {direction}")
+        use_pwm_shift = pwm_after_start_ms is not None or pwm_after is not None
+        if use_pwm_shift:
+            if pwm_after_start_ms is None or pwm_after is None:
+                raise ValueError("pwm_after_start_ms and pwm_after must both be provided")
+            pwm_after_start_ms = int(pwm_after_start_ms)
+            pwm_after = int(pwm_after)
+            if pwm_after_start_ms < 0 or pwm_after_start_ms > 600000:
+                raise ValueError("pwm_after_start_ms must be 0-600000")
+            if pwm_after < 0 or pwm_after > 255:
+                raise ValueError("pwm_after must be 0-255")
+
+        cmd = f"AGITATOR_MOVE {spins} {pause_ms} {pwm} {direction}"
+        if use_pwm_shift:
+            cmd += f" {pwm_after_start_ms} {pwm_after}"
+
+        lines = arduino.send(cmd)
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -2073,6 +2090,8 @@ class ExtrusionRatioTestController:
         self.vacuum_boost_sec = max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
         self.vacuum_boost_remaining_sec = 0.0
         self.agitator_pwm = 0
+        self.agitator_pwm_after_start_ms = -1
+        self.agitator_pwm_after = 0
         self.agitator_dir = "FWD"
         self.agitator_pause_ms = 0
         self.extruder_rotations_per_cycle = 10.0
@@ -2090,7 +2109,7 @@ class ExtrusionRatioTestController:
     def _arduino(self, cmd: str):
         arduino.send(cmd)
 
-    def _run(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
+    def _run(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_pwm_after_start_ms, agitator_pwm_after, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
         baseline_rot = None
         vacuum_boost_until = 0.0
         vacuum_idle_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
@@ -2106,6 +2125,8 @@ class ExtrusionRatioTestController:
                 self.vacuum_boost_sec = max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
                 self.vacuum_boost_remaining_sec = 0.0
                 self.agitator_pwm = agitator_pwm
+                self.agitator_pwm_after_start_ms = agitator_pwm_after_start_ms
+                self.agitator_pwm_after = agitator_pwm_after
                 self.agitator_dir = agitator_dir
                 self.agitator_pause_ms = agitator_pause_ms
                 self.extruder_rotations_per_cycle = extruder_rot_per_cycle
@@ -2170,9 +2191,10 @@ class ExtrusionRatioTestController:
                         run_cycle = True
 
                 if run_cycle:
-                    self._arduino(
-                        f"AGITATOR_MOVE {agitator_rot_per_cycle} {agitator_pause_ms} {agitator_pwm} {agitator_dir}"
-                    )
+                    cmd = f"AGITATOR_MOVE {agitator_rot_per_cycle} {agitator_pause_ms} {agitator_pwm} {agitator_dir}"
+                    if agitator_pwm_after_start_ms >= 0:
+                        cmd += f" {agitator_pwm_after_start_ms} {agitator_pwm_after}"
+                    self._arduino(cmd)
 
                     # After a completed spin cycle, hold configured vacuum for
                     # a short window, then return to idle vacuum.
@@ -2256,7 +2278,7 @@ class ExtrusionRatioTestController:
                 self.mixer_active = False
                 self.message = f"Error: {exc}"
 
-    def start(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
+    def start(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_pwm_after_start_ms, agitator_pwm_after, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
         with self._lock:
             if self.running:
                 raise RuntimeError("Extruder-ratio test already running.")
@@ -2264,7 +2286,7 @@ class ExtrusionRatioTestController:
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run,
-            args=(extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles),
+            args=(extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_pwm_after_start_ms, agitator_pwm_after, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles),
             daemon=True,
         )
         self._thread.start()
@@ -2284,6 +2306,8 @@ class ExtrusionRatioTestController:
                 "vacuum_boost_sec": self.vacuum_boost_sec,
                 "vacuum_boost_remaining_sec": self.vacuum_boost_remaining_sec,
                 "agitator_pwm": self.agitator_pwm,
+                "agitator_pwm_after_start_ms": self.agitator_pwm_after_start_ms,
+                "agitator_pwm_after": self.agitator_pwm_after,
                 "agitator_dir": self.agitator_dir,
                 "agitator_pause_ms": self.agitator_pause_ms,
                 "extruder_rotations_per_cycle": self.extruder_rotations_per_cycle,
@@ -2326,6 +2350,8 @@ def api_extrusion_ratio_test_start():
             )
         )
         agitator_pwm = int(body.get("agitator_pwm", 180))
+        agitator_pwm_after_start_ms = int(body.get("agitator_pwm_after_start_ms", -1))
+        agitator_pwm_after = int(body.get("agitator_pwm_after", 0))
         agitator_dir = str(body.get("agitator_dir", "FWD")).strip().upper()
         agitator_pause_ms = int(body.get("agitator_pause_ms", 0))
         vacuum_pct = int(body.get("vacuum_pct", 40))
@@ -2337,6 +2363,10 @@ def api_extrusion_ratio_test_start():
             return jsonify({"ok": False, "error": "agitator_rotations_per_cycle must be > 0"}), 400
         if not (0 <= agitator_pwm <= 255):
             return jsonify({"ok": False, "error": "agitator_pwm must be 0-255"}), 400
+        if not (-1 <= agitator_pwm_after_start_ms <= 600000):
+            return jsonify({"ok": False, "error": "agitator_pwm_after_start_ms must be -1 or 0-600000"}), 400
+        if not (0 <= agitator_pwm_after <= 255):
+            return jsonify({"ok": False, "error": "agitator_pwm_after must be 0-255"}), 400
         if agitator_dir not in ("FWD", "REV"):
             return jsonify({"ok": False, "error": "agitator_dir must be FWD or REV"}), 400
         if not (0 <= agitator_pause_ms <= 600000):
@@ -2350,6 +2380,8 @@ def api_extrusion_ratio_test_start():
             extruder_rot_per_cycle,
             agitator_rot_per_cycle,
             agitator_pwm,
+            agitator_pwm_after_start_ms,
+            agitator_pwm_after,
             agitator_dir,
             agitator_pause_ms,
             vacuum_pct,

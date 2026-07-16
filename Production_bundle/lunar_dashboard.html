@@ -969,8 +969,14 @@
                 <div class="act-row-4">
                   <div class="act-mini"><label>Air Lock Pause ms</label><input type="number" id="rtAgPauseMs" min="0" step="1" value="0" /></div>
                   <div class="act-mini"><label>Blower Motor %</label><input type="number" id="rtVacPct" min="0" max="100" step="1" value="40" /></div>
+                  <div class="act-mini"><label>Mixer Every Cycles</label><input type="number" id="rtMixerEveryCycles" min="0" step="1" value="0" /></div>
+                  <div class="act-mini"><label>Mixer State</label><input type="text" id="rtMixerStateText" value="DISABLED" readonly /></div>
+                </div>
+                <div class="act-row-4">
                   <div class="act-mini"><label>Pending Ext Rot</label><input type="text" id="rtPendingText" value="—" readonly /></div>
                   <div class="act-mini"><label>Air Lock Rot Cmd</label><input type="text" id="rtAgCmdText" value="—" readonly /></div>
+                  <div class="act-mini"><label>Air Lock Cycles</label><input type="text" id="rtAgCycleText" value="—" readonly /></div>
+                  <div class="act-mini"><label>Mixer Start At</label><input type="text" id="rtMixerStartText" value="—" readonly /></div>
                 </div>
                 <div class="act-actions">
                   <button class="btn mini primary" id="btnRatioTestStart">Start Ratio Test</button>
@@ -1537,6 +1543,17 @@
 
       setText("rtPendingText", Number(S.ratioTest.extruder_rot_pending || 0).toFixed(4));
       setText("rtAgCmdText", String(S.ratioTest.agitator_rotations_commanded ?? "—"));
+      setText("rtAgCycleText", String(S.ratioTest.agitator_cycles_completed ?? "—"));
+      setText(
+        "rtMixerStateText",
+        S.ratioTest.mixer_every_cycles > 0
+          ? (S.ratioTest.mixer_active ? "RUNNING 200 PWM REV" : "ARMED")
+          : "DISABLED"
+      );
+      setText(
+        "rtMixerStartText",
+        S.ratioTest.mixer_every_cycles > 0 ? String(S.ratioTest.mixer_every_cycles) : "—"
+      );
       setText("ratioTestMsgText", S.ratioTest.message || "—");
 
       const rtChip = document.getElementById("ratioTestChip");
@@ -2043,6 +2060,7 @@
         agitator_dir: getSel("rtAgDir", "FWD"),
         agitator_pause_ms: Math.max(0, Math.round(getNum("rtAgPauseMs", 0))),
         vacuum_pct: Math.max(0, Math.min(100, Math.round(getNum("rtVacPct", 40)))),
+        mixer_every_cycles: Math.max(0, Math.round(getNum("rtMixerEveryCycles", 0))),
       };
       try{
         await apiArduino("/extrusion_ratio_test/start", {

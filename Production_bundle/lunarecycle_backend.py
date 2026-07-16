@@ -2079,6 +2079,9 @@ class ExtrusionRatioTestController:
         self.agitator_rotations_per_cycle = 1
         self.extruder_rot_pending = 0.0
         self.agitator_rotations_commanded = 0
+        self.agitator_cycles_completed = 0
+        self.mixer_every_cycles = 0
+        self.mixer_active = False
         self.moonraker_connected = False
         self.live_extruder_velocity = 0.0
         self.live_extruder_rotations_total = 0.0
@@ -2086,7 +2089,7 @@ class ExtrusionRatioTestController:
     def _arduino(self, cmd: str):
         arduino.send(cmd)
 
-    def _run(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct):
+    def _run(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
         baseline_rot = None
         vacuum_boost_until = 0.0
         vacuum_idle_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
@@ -2108,11 +2111,15 @@ class ExtrusionRatioTestController:
                 self.agitator_rotations_per_cycle = agitator_rot_per_cycle
                 self.extruder_rot_pending = 0.0
                 self.agitator_rotations_commanded = 0
+                self.agitator_cycles_completed = 0
+                self.mixer_every_cycles = mixer_every_cycles
+                self.mixer_active = False
                 self.message = "Waiting for Moonraker extrusion data."
 
             # Start at idle vacuum. Boost to configured vacuum_pct only for a
             # short window after each completed agitator spin command.
             self._arduino(f"VACUUM_SET {vacuum_idle_pct}")
+            self._arduino("MOTOR_STOP")
 
             while not self._stop.is_set():
                 now = time.monotonic()
@@ -2171,14 +2178,29 @@ class ExtrusionRatioTestController:
                     vacuum_active_pct = vacuum_pct
                     vacuum_boost_until = time.monotonic() + max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
 
+                    mixer_started = False
                     with self._lock:
+                        self.agitator_cycles_completed += 1
                         self.agitator_rotations_commanded += agitator_rot_per_cycle
+                        if (
+                            self.mixer_every_cycles > 0
+                            and not self.mixer_active
+                            and self.agitator_cycles_completed >= self.mixer_every_cycles
+                        ):
+                            self.mixer_active = True
+                            mixer_started = True
                         self.vacuum_active_pct = vacuum_active_pct
                         self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
+                    if mixer_started:
+                        self._arduino("MOTOR_SET 200 REV")
+
+                    with self._lock:
+                        mixer_note = " Mixer running at 200 PWM REV." if self.mixer_active else ""
                         self.message = (
-                            f"Agitated {self.agitator_rotations_commanded} turns "
-                            f"at ratio {self.extruder_rotations_per_cycle}:"
-                            f"{self.agitator_rotations_per_cycle}."
+                            f"Agitated {self.agitator_rotations_commanded} turns across "
+                            f"{self.agitator_cycles_completed} cycles at ratio "
+                            f"{self.extruder_rotations_per_cycle}:{self.agitator_rotations_per_cycle}."
+                            f"{mixer_note}"
                         )
                 else:
                     if vacuum_active_pct != vacuum_idle_pct and time.monotonic() >= vacuum_boost_until:
@@ -2187,31 +2209,43 @@ class ExtrusionRatioTestController:
                     with self._lock:
                         self.vacuum_active_pct = vacuum_active_pct
                         self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
+                        mixer_note = (
+                            f" Mixer armed for cycle {self.mixer_every_cycles}."
+                            if self.mixer_every_cycles > 0 and not self.mixer_active
+                            else " Mixer running at 200 PWM REV."
+                            if self.mixer_active
+                            else ""
+                        )
                         self.message = (
                             f"Running ratio test ({self.extruder_rotations_per_cycle}:"
                             f"{self.agitator_rotations_per_cycle})."
+                            f"{mixer_note}"
                         )
 
                 self._stop.wait(0.1)
 
             self._arduino("AGITATOR_STOP")
+            self._arduino("MOTOR_STOP")
             self._arduino("VACUUM_STOP")
             with self._lock:
                 self.phase = "STOPPED"
                 self.running = False
+                self.mixer_active = False
                 self.message = "Extruder-ratio test stopped."
         except Exception as exc:
             try:
                 self._arduino("AGITATOR_STOP")
+                self._arduino("MOTOR_STOP")
                 self._arduino("VACUUM_STOP")
             except Exception:
                 pass
             with self._lock:
                 self.phase = "ERROR"
                 self.running = False
+                self.mixer_active = False
                 self.message = f"Error: {exc}"
 
-    def start(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct):
+    def start(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
         with self._lock:
             if self.running:
                 raise RuntimeError("Extruder-ratio test already running.")
@@ -2219,7 +2253,7 @@ class ExtrusionRatioTestController:
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run,
-            args=(extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct),
+            args=(extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles),
             daemon=True,
         )
         self._thread.start()
@@ -2246,6 +2280,9 @@ class ExtrusionRatioTestController:
                 "agitator_consecutive_rotations": self.agitator_rotations_per_cycle,
                 "extruder_rot_pending": self.extruder_rot_pending,
                 "agitator_rotations_commanded": self.agitator_rotations_commanded,
+                "agitator_cycles_completed": self.agitator_cycles_completed,
+                "mixer_every_cycles": self.mixer_every_cycles,
+                "mixer_active": self.mixer_active,
                 "moonraker_connected": self.moonraker_connected,
                 "live_extruder_velocity": self.live_extruder_velocity,
                 "live_extruder_rotations_total": self.live_extruder_rotations_total,
@@ -2280,6 +2317,7 @@ def api_extrusion_ratio_test_start():
         agitator_dir = str(body.get("agitator_dir", "FWD")).strip().upper()
         agitator_pause_ms = int(body.get("agitator_pause_ms", 0))
         vacuum_pct = int(body.get("vacuum_pct", 40))
+        mixer_every_cycles = int(body.get("mixer_every_cycles", 0))
 
         if extruder_rot_per_cycle <= 0:
             return jsonify({"ok": False, "error": "extruder_rotations_per_cycle must be > 0"}), 400
@@ -2293,6 +2331,8 @@ def api_extrusion_ratio_test_start():
             return jsonify({"ok": False, "error": "agitator_pause_ms must be 0-600000"}), 400
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
+        if mixer_every_cycles < 0:
+            return jsonify({"ok": False, "error": "mixer_every_cycles must be >= 0"}), 400
 
         ratio_test.start(
             extruder_rot_per_cycle,
@@ -2301,6 +2341,7 @@ def api_extrusion_ratio_test_start():
             agitator_dir,
             agitator_pause_ms,
             vacuum_pct,
+            mixer_every_cycles,
         )
         return jsonify({"ok": True, "data": ratio_test.status()})
     except Exception as exc:

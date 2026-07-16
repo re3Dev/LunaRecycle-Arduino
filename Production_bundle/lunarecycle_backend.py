@@ -2081,6 +2081,7 @@ class ExtrusionRatioTestController:
         self.agitator_rotations_commanded = 0
         self.agitator_cycles_completed = 0
         self.mixer_every_cycles = 0
+        self.mixer_eligible = False
         self.mixer_active = False
         self.moonraker_connected = False
         self.live_extruder_velocity = 0.0
@@ -2113,6 +2114,7 @@ class ExtrusionRatioTestController:
                 self.agitator_rotations_commanded = 0
                 self.agitator_cycles_completed = 0
                 self.mixer_every_cycles = mixer_every_cycles
+                self.mixer_eligible = False
                 self.mixer_active = False
                 self.message = "Waiting for Moonraker extrusion data."
 
@@ -2184,9 +2186,10 @@ class ExtrusionRatioTestController:
                         self.agitator_rotations_commanded += agitator_rot_per_cycle
                         if (
                             self.mixer_every_cycles > 0
-                            and not self.mixer_active
                             and self.agitator_cycles_completed >= self.mixer_every_cycles
                         ):
+                            self.mixer_eligible = True
+                        if self.mixer_eligible and not self.mixer_active:
                             self.mixer_active = True
                             mixer_started = True
                         self.vacuum_active_pct = vacuum_active_pct
@@ -2206,12 +2209,18 @@ class ExtrusionRatioTestController:
                     if vacuum_active_pct != vacuum_idle_pct and time.monotonic() >= vacuum_boost_until:
                         self._arduino(f"VACUUM_SET {vacuum_idle_pct}")
                         vacuum_active_pct = vacuum_idle_pct
+                        with self._lock:
+                            if self.mixer_active:
+                                self.mixer_active = False
+                                self._arduino("MOTOR_STOP")
                     with self._lock:
                         self.vacuum_active_pct = vacuum_active_pct
                         self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
                         mixer_note = (
-                            f" Mixer armed for cycle {self.mixer_every_cycles}."
-                            if self.mixer_every_cycles > 0 and not self.mixer_active
+                            " Mixer ready for blower windows."
+                            if self.mixer_eligible and not self.mixer_active
+                            else f" Mixer armed for cycle {self.mixer_every_cycles}."
+                            if self.mixer_every_cycles > 0 and not self.mixer_eligible
                             else " Mixer running at 200 PWM REV."
                             if self.mixer_active
                             else ""
@@ -2230,6 +2239,7 @@ class ExtrusionRatioTestController:
             with self._lock:
                 self.phase = "STOPPED"
                 self.running = False
+                self.mixer_eligible = False
                 self.mixer_active = False
                 self.message = "Extruder-ratio test stopped."
         except Exception as exc:
@@ -2242,6 +2252,7 @@ class ExtrusionRatioTestController:
             with self._lock:
                 self.phase = "ERROR"
                 self.running = False
+                self.mixer_eligible = False
                 self.mixer_active = False
                 self.message = f"Error: {exc}"
 
@@ -2282,6 +2293,7 @@ class ExtrusionRatioTestController:
                 "agitator_rotations_commanded": self.agitator_rotations_commanded,
                 "agitator_cycles_completed": self.agitator_cycles_completed,
                 "mixer_every_cycles": self.mixer_every_cycles,
+                "mixer_eligible": self.mixer_eligible,
                 "mixer_active": self.mixer_active,
                 "moonraker_connected": self.moonraker_connected,
                 "live_extruder_velocity": self.live_extruder_velocity,

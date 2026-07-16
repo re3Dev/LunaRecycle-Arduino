@@ -2195,10 +2195,10 @@ class ExtrusionRatioTestController:
                         self.vacuum_active_pct = vacuum_active_pct
                         self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
                     if mixer_started:
-                        self._arduino("MOTOR_SET 200 REV")
+                        self._arduino("MOTOR_SET 200 FWD")
 
                     with self._lock:
-                        mixer_note = " Mixer running at 200 PWM REV." if self.mixer_active else ""
+                        mixer_note = " Mixer running at 200 PWM FWD." if self.mixer_active else ""
                         self.message = (
                             f"Agitated {self.agitator_rotations_commanded} turns across "
                             f"{self.agitator_cycles_completed} cycles at ratio "
@@ -2221,7 +2221,7 @@ class ExtrusionRatioTestController:
                             if self.mixer_eligible and not self.mixer_active
                             else f" Mixer armed for cycle {self.mixer_every_cycles}."
                             if self.mixer_every_cycles > 0 and not self.mixer_eligible
-                            else " Mixer running at 200 PWM REV."
+                            else " Mixer running at 200 PWM FWD."
                             if self.mixer_active
                             else ""
                         )

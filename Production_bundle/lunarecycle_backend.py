@@ -683,7 +683,7 @@ class ArduinoBridge:
         # firmware streams every 500 ms; for non-STATUS commands it must be skipped
         # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies
         # with a [TC] line, not [ENERGY]).
-        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[AGITATOR_ENC]", "[VACUUM]", "[BLASTGATE_DONE]", "[SIZERED]", "[SYSTEM]")
+        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[AGITATOR_ENC]", "[AGITATOR_ENC_CAL_DONE]", "[VACUUM]", "[BLASTGATE_DONE]", "[SIZERED]", "[SYSTEM]")
 
         lines: list[str] = []
         seen_status = False
@@ -713,6 +713,10 @@ class ArduinoBridge:
                 if line.startswith("[ENERGY]"):
                     continue
                 lines.append(line)
+                if is_agitator_cal:
+                    if line.startswith("[AGITATOR_ENC_CAL_DONE]"):
+                        break
+                    continue
                 if line.startswith(reply_tags):
                     break
             else:

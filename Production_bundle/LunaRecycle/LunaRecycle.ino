@@ -2158,6 +2158,7 @@ bool agitatorCalibrateCountsPerRev(int pwm, int revolutions) {
   if (agitatorHallHomeDetected() && !agitatorWaitForHallState(false)) {
     agitatorStop();
     Serial.println(F("[AGITATOR_ENC] cal stopped"));
+    Serial.println(F("[AGITATOR_ENC_CAL_DONE]"));
     return false;
   }
 
@@ -2165,6 +2166,7 @@ bool agitatorCalibrateCountsPerRev(int pwm, int revolutions) {
   if (!agitatorWaitForHallState(true)) {
     agitatorStop();
     Serial.println(F("[AGITATOR_ENC] cal stopped"));
+    Serial.println(F("[AGITATOR_ENC_CAL_DONE]"));
     return false;
   }
 
@@ -2175,6 +2177,7 @@ bool agitatorCalibrateCountsPerRev(int pwm, int revolutions) {
     if (!agitatorWaitForHallState(false) || !agitatorWaitForHallState(true)) {
       agitatorStop();
       Serial.println(F("[AGITATOR_ENC] cal stopped"));
+      Serial.println(F("[AGITATOR_ENC_CAL_DONE]"));
       return false;
     }
 
@@ -2185,6 +2188,7 @@ bool agitatorCalibrateCountsPerRev(int pwm, int revolutions) {
       agitatorStop();
       systemDiagFlagError();
       Serial.println(F("[AGITATOR_ENC] ERROR: cal measured zero counts"));
+      Serial.println(F("[AGITATOR_ENC_CAL_DONE]"));
       return false;
     }
 
@@ -2209,6 +2213,7 @@ bool agitatorCalibrateCountsPerRev(int pwm, int revolutions) {
   Serial.print(AGITATOR_ENCODER_COUNTS_PER_REV);
   Serial.print(F(" revs="));
   Serial.println(clampedRevs);
+  Serial.println(F("[AGITATOR_ENC_CAL_DONE]"));
   return true;
 }
 

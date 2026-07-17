@@ -920,6 +920,11 @@
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncCal">Measure CPR</button></div>
                 </div>
                 <div class="act-row-4">
+                  <div class="act-mini"><label>Measured CPR</label><input type="text" id="manAgEncCalAvg" value="—" readonly /></div>
+                  <div class="act-mini"><label>Configured CPR</label><input type="text" id="manAgEncCalCfg" value="—" readonly /></div>
+                  <div class="act-mini"><label>Cal Detail</label><input type="text" id="manAgEncCalDetail" value="—" readonly /></div>
+                </div>
+                <div class="act-row-4">
                   <div class="act-mini"><label>Home Trim Counts</label><input type="number" id="manAgHomeTrimCounts" min="0" max="3959" value="0" /></div>
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgHomeTrim">Set Home Trim</button></div>
                 </div>
@@ -1161,6 +1166,9 @@
       vacuumPct: "—",
       bgLeft: "—",
       bgRight: "—",
+      agitatorCalAvg: "—",
+      agitatorCalConfigured: "—",
+      agitatorCalDetail: "—",
 
       // Size Reduction automation status (parsed from SR_STATUS)
       srRun: "—",
@@ -1246,7 +1254,8 @@
 
     function log(msg, kind="info", sub=""){
       const time = new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
-      const line = `[${time}] ${msg}\n`;
+      const detail = sub ? `\n    ${sub}` : "";
+      const line = `[${time}] ${msg}${detail}\n`;
       const logEl = $("#log");
       logEl.textContent = line + logEl.textContent;
       toast(msg, kind, sub);
@@ -1326,6 +1335,21 @@
       return "";
     }
 
+    function captureAgitatorCalibration(res){
+      const lines = Array.isArray(res?.response) ? res.response : [];
+      if(!lines.length) return;
+      const avgLine = lines.find(line => /avg_counts_per_rev=/i.test(String(line))) || "";
+      const revLine = [...lines].reverse().find(line => /cal rev=/i.test(String(line))) || "";
+      const avgMatch = avgLine.match(/avg_counts_per_rev=([0-9.]+)/i);
+      const configuredMatch = avgLine.match(/configured=([0-9.]+)/i);
+      const revMatch = revLine.match(/rev=([0-9]+)\s+counts=([0-9.]+)/i);
+      if(avgMatch) S.agitatorCalAvg = avgMatch[1];
+      if(configuredMatch) S.agitatorCalConfigured = configuredMatch[1];
+      if(revMatch) S.agitatorCalDetail = `rev ${revMatch[1]}: ${revMatch[2]} counts`;
+      else if(avgLine) S.agitatorCalDetail = avgLine.replace(/^\[AGITATOR_ENC\]\s*/i, "");
+      renderArduino();
+    }
+
     async function manualAction(label, path, body=null, method="POST", timeoutMs=12000){
       if(!S.arduinoConnected){
         log(`${label}: Arduino not connected.`, "bad");
@@ -1381,10 +1405,26 @@
       on("btnAgEncHome", "click", ()=>manualAction("Agitator encoder home", "/agitator/encoder/home", {
         pwm: Math.max(1, Math.min(255, Math.round(getNum("manAgEncHomePwm", 120))))
       }));
-      on("btnAgEncCal", "click", ()=>manualAction("Agitator encoder calibrate", "/agitator/encoder/calibrate", {
-        pwm: Math.max(45, Math.min(255, Math.round(getNum("manAgEncCalPwm", 120)))),
-        revs: Math.max(1, Math.min(10, Math.round(getNum("manAgEncCalRevs", 3))))
-      }, "POST", 45000));
+      on("btnAgEncCal", "click", async ()=>{
+        if(!S.arduinoConnected){
+          log("Agitator encoder calibrate: Arduino not connected.", "bad");
+          return;
+        }
+        try{
+          const res = await apiArduino("/agitator/encoder/calibrate", {
+            method: "POST",
+            body: JSON.stringify({
+              pwm: Math.max(45, Math.min(255, Math.round(getNum("manAgEncCalPwm", 120)))),
+              revs: Math.max(1, Math.min(10, Math.round(getNum("manAgEncCalRevs", 3))))
+            })
+          }, 45000);
+          captureAgitatorCalibration(res);
+          log("Agitator encoder calibrate OK.", "good", summarizeResponse(res));
+          await arduinoRefreshStatus(true);
+        }catch(err){
+          log(`Agitator encoder calibrate failed: ${err.message}`, "bad");
+        }
+      });
       on("btnAgEncGoto", "click", ()=>manualAction("Agitator encoder goto", "/agitator/encoder/goto", {
         target_count: Math.max(0, Math.min(3959, Math.round(getNum("manAgEncTarget", 0)))),
         pwm_max: Math.max(45, Math.min(255, Math.round(getNum("manAgEncPwmMax", 220))))
@@ -1628,6 +1668,9 @@
         S.ratioTest.mixer_every_cycles > 0 ? String(S.ratioTest.mixer_every_cycles) : "—"
       );
       setText("ratioTestMsgText", S.ratioTest.message || "—");
+      setText("manAgEncCalAvg", S.agitatorCalAvg || "—");
+      setText("manAgEncCalCfg", S.agitatorCalConfigured || "—");
+      setText("manAgEncCalDetail", S.agitatorCalDetail || "—");
 
       const rtChip = document.getElementById("ratioTestChip");
       if(rtChip){

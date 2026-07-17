@@ -249,6 +249,8 @@ const int AGITATOR_ENCODER_COUNTS_PER_REV = 64;
 const bool AGITATOR_ENCODER_B_HIGH_IS_FWD = true;
 const int AGITATOR_GOTO_DEFAULT_MAX_PWM = 220;
 const int AGITATOR_GOTO_MIN_PWM = 45;
+const int AGITATOR_GOTO_REACHED_TOL_COUNTS = 1;
+const int AGITATOR_GOTO_OVERSHOOT_ALLOW_COUNTS = 4;
 const unsigned long AGITATOR_GOTO_TIMEOUT_MS = 12000UL;
 const unsigned long AGITATOR_HOME_TIMEOUT_MS = 12000UL;
 float AGITATOR_PID_KP = 6.0f;
@@ -1836,8 +1838,11 @@ void agitatorPositionService() {
   int currentPos = agitatorEncoderCurrentPos();
   int diffSigned = (int)agitatorSignedErrorForControl(agitatorGotoTargetMod, currentPos);
 
-  // For forward-only control, a small overshoot still counts as reached.
-  if (abs(diffSigned) <= 1) {
+  // Forward-only settle rule: near-target undershoot and small overshoot both
+  // count as reached to avoid an unnecessary extra full wrap-around turn.
+  bool reachedFromBelow = (diffSigned >= 0 && diffSigned <= AGITATOR_GOTO_REACHED_TOL_COUNTS);
+  bool reachedBySmallOvershoot = (diffSigned < 0 && (-diffSigned) <= AGITATOR_GOTO_OVERSHOOT_ALLOW_COUNTS);
+  if (reachedFromBelow || reachedBySmallOvershoot) {
     agitatorStop();
     Serial.print(F("[AGITATOR_ENC] goto reached target="));
     Serial.print(agitatorGotoTargetMod);

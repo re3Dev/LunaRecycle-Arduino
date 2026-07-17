@@ -267,7 +267,10 @@ const int AGITATOR_AUTOTUNE_DEFAULT_PWM_HI = 180;
 const int AGITATOR_AUTOTUNE_DEFAULT_CYCLES = 6;
 const int AGITATOR_AUTOTUNE_MIN_CYCLES = 4;
 const int AGITATOR_AUTOTUNE_MAX_CYCLES = 20;
+const int AGITATOR_AUTOTUNE_MIN_PWM_LO = 110;
+const int AGITATOR_AUTOTUNE_MIN_PWM_SPAN = 20;
 const unsigned long AGITATOR_AUTOTUNE_TIMEOUT_MS = 30000UL;
+const unsigned long AGITATOR_AUTOTUNE_STALL_MS = 1200UL;
 const float AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS = 1.0f;
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
@@ -483,6 +486,8 @@ int agitatorAutotuneCrossings = 0;
 int agitatorAutotuneState = 1;
 unsigned long agitatorAutotuneStartMs = 0;
 unsigned long agitatorAutotuneLastCrossMs = 0;
+long agitatorAutotuneLastEncoderCount = 0;
+unsigned long agitatorAutotuneLastMotionMs = 0;
 float agitatorAutotunePeriodAccMs = 0.0f;
 float agitatorAutotunePeakMax = -1000000.0f;
 float agitatorAutotunePeakMin = 1000000.0f;
@@ -1617,6 +1622,8 @@ void agitatorResetAutotuneState() {
   agitatorAutotuneState = 1;
   agitatorAutotuneStartMs = millis();
   agitatorAutotuneLastCrossMs = 0;
+  agitatorAutotuneLastEncoderCount = agitatorEncoderRead();
+  agitatorAutotuneLastMotionMs = agitatorAutotuneStartMs;
   agitatorAutotunePeriodAccMs = 0.0f;
   agitatorAutotunePeakMax = -1000000.0f;
   agitatorAutotunePeakMin = 1000000.0f;
@@ -1636,10 +1643,12 @@ float agitatorSignedErrorForControl(int targetMod, int currentPos) {
 
 void agitatorStartPidAutotune(int targetMod, int pwmLo, int pwmHi, int cycles) {
   int clampedTarget = constrain(targetMod, 0, AGITATOR_ENCODER_COUNTS_PER_REV - 1);
-  int clampedLo = constrain(pwmLo, AGITATOR_GOTO_MIN_PWM, 255);
+  int clampedLo = constrain(pwmLo, AGITATOR_AUTOTUNE_MIN_PWM_LO, 255);
   int clampedHi = constrain(pwmHi, AGITATOR_GOTO_MIN_PWM, 255);
   int clampedCycles = constrain(cycles, AGITATOR_AUTOTUNE_MIN_CYCLES, AGITATOR_AUTOTUNE_MAX_CYCLES);
-  if (clampedHi <= clampedLo) clampedHi = min(255, clampedLo + 20);
+  if (clampedHi < (clampedLo + AGITATOR_AUTOTUNE_MIN_PWM_SPAN)) {
+    clampedHi = min(255, clampedLo + AGITATOR_AUTOTUNE_MIN_PWM_SPAN);
+  }
 
   agitatorCancelClosedLoop();
   agitatorAutotuneTargetMod = clampedTarget;
@@ -1708,6 +1717,16 @@ void agitatorAutotuneService() {
   }
 
   int currentPos = agitatorEncoderCurrentPos();
+  long currentCount = agitatorEncoderRead();
+  if (currentCount != agitatorAutotuneLastEncoderCount) {
+    agitatorAutotuneLastEncoderCount = currentCount;
+    agitatorAutotuneLastMotionMs = now;
+  } else if (now - agitatorAutotuneLastMotionMs > AGITATOR_AUTOTUNE_STALL_MS) {
+    agitatorAutotuneActive = false;
+    agitatorFinishAutotuneWithError(F("stalled (raise pwm_lo)"));
+    return;
+  }
+
   float error = agitatorSignedErrorForControl(agitatorAutotuneTargetMod, currentPos);
   agitatorAutotunePeakMax = max(agitatorAutotunePeakMax, error);
   agitatorAutotunePeakMin = min(agitatorAutotunePeakMin, error);
@@ -3069,10 +3088,10 @@ void handleCommand(const String& cmd) {
       Serial.println(F("[AGITATOR_ENC] ERROR: target_count must be 0-63"));
       return;
     }
-    if (pwmLo < AGITATOR_GOTO_MIN_PWM || pwmLo > 255) {
+    if (pwmLo < AGITATOR_AUTOTUNE_MIN_PWM_LO || pwmLo > 255) {
       systemDiagFlagError();
       Serial.print(F("[AGITATOR_ENC] ERROR: pwm_lo must be "));
-      Serial.print(AGITATOR_GOTO_MIN_PWM);
+      Serial.print(AGITATOR_AUTOTUNE_MIN_PWM_LO);
       Serial.println(F("-255"));
       return;
     }
@@ -3083,9 +3102,10 @@ void handleCommand(const String& cmd) {
       Serial.println(F("-255"));
       return;
     }
-    if (pwmHi <= pwmLo) {
+    if (pwmHi < (pwmLo + AGITATOR_AUTOTUNE_MIN_PWM_SPAN)) {
       systemDiagFlagError();
-      Serial.println(F("[AGITATOR_ENC] ERROR: pwm_hi must be > pwm_lo"));
+      Serial.print(F("[AGITATOR_ENC] ERROR: pwm_hi must be at least pwm_lo+"));
+      Serial.println(AGITATOR_AUTOTUNE_MIN_PWM_SPAN);
       return;
     }
     if (cycles < AGITATOR_AUTOTUNE_MIN_CYCLES || cycles > AGITATOR_AUTOTUNE_MAX_CYCLES) {

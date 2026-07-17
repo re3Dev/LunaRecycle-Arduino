@@ -1528,18 +1528,18 @@ def api_agitator_encoder_pid_autotune():
             return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         body = request.get_json(silent=True) or {}
         target_count = int(body["target_count"])
-        pwm_lo = int(body.get("pwm_lo", 70))
+        pwm_lo = int(body.get("pwm_lo", 120))
         pwm_hi = int(body.get("pwm_hi", 180))
         cycles = int(body.get("cycles", 6))
 
         if target_count < 0 or target_count > 63:
             raise ValueError("target_count must be 0-63")
-        if pwm_lo < 45 or pwm_lo > 255:
-            raise ValueError("pwm_lo must be 45-255")
+        if pwm_lo < 110 or pwm_lo > 255:
+            raise ValueError("pwm_lo must be 110-255")
         if pwm_hi < 45 or pwm_hi > 255:
             raise ValueError("pwm_hi must be 45-255")
-        if pwm_hi <= pwm_lo:
-            raise ValueError("pwm_hi must be > pwm_lo")
+        if pwm_hi < (pwm_lo + 20):
+            raise ValueError("pwm_hi must be at least pwm_lo+20")
         if cycles < 4 or cycles > 20:
             raise ValueError("cycles must be 4-20")
 

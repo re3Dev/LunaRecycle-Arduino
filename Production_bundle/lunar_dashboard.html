@@ -930,7 +930,7 @@
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncPid">Set PID</button></div>
                 </div>
                 <div class="act-row-4">
-                  <div class="act-mini"><label>Autotune PWM Low</label><input type="number" id="manAgAtPwmLo" min="45" max="255" value="70" /></div>
+                  <div class="act-mini"><label>Autotune PWM Low</label><input type="number" id="manAgAtPwmLo" min="110" max="255" value="120" /></div>
                   <div class="act-mini"><label>Autotune PWM High</label><input type="number" id="manAgAtPwmHi" min="45" max="255" value="180" /></div>
                   <div class="act-mini"><label>Autotune Cycles</label><input type="number" id="manAgAtCycles" min="4" max="20" value="6" /></div>
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncPidAutotune">PID Autotune</button></div>
@@ -1394,8 +1394,11 @@
       }));
       on("btnAgEncPidAutotune", "click", ()=>manualAction("Agitator PID autotune", "/agitator/encoder/pid_autotune", {
         target_count: Math.max(0, Math.min(63, Math.round(getNum("manAgEncTarget", 0)))),
-        pwm_lo: Math.max(45, Math.min(255, Math.round(getNum("manAgAtPwmLo", 70)))),
-        pwm_hi: Math.max(45, Math.min(255, Math.round(getNum("manAgAtPwmHi", 180)))),
+        pwm_lo: Math.max(110, Math.min(255, Math.round(getNum("manAgAtPwmLo", 120)))),
+        pwm_hi: Math.max(
+          Math.max(45, Math.min(255, Math.round(getNum("manAgAtPwmLo", 120)))) + 20,
+          Math.min(255, Math.round(getNum("manAgAtPwmHi", 180)))
+        ),
         cycles: Math.max(4, Math.min(20, Math.round(getNum("manAgAtCycles", 6))))
       }, "POST", 45000));
       on("btnAgEncStatus", "click", ()=>manualAction("Agitator encoder status", "/agitator/encoder/status", {}, "POST"));

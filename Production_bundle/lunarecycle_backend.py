@@ -1470,6 +1470,25 @@ def api_agitator_encoder_goto():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/agitator/encoder/goto_tolerance", methods=["POST"])
+def api_agitator_encoder_goto_tolerance():
+    try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
+        body = request.get_json(silent=True) or {}
+        undershoot_counts = int(body.get("undershoot_counts", 1))
+        overshoot_counts = int(body.get("overshoot_counts", 4))
+        if undershoot_counts < 0 or undershoot_counts > 31:
+            raise ValueError("undershoot_counts must be 0-31")
+        if overshoot_counts < 0 or overshoot_counts > 31:
+            raise ValueError("overshoot_counts must be 0-31")
+        cmd = f"AGITATOR_GOTO_TOL {undershoot_counts} {overshoot_counts}"
+        lines = arduino.send(cmd)
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/api/agitator/encoder/pid", methods=["POST"])
 def api_agitator_encoder_pid():
     try:

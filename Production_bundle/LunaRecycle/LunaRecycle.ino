@@ -45,6 +45,8 @@
  *                                  pwm_after_ms within each spin.
  *   AGITATOR_ENC_HOME [pwm]        Seek hall rising edge and zero encoder
  *   AGITATOR_GOTO <0-63> [pwm_max] Forward-only PID move to encoder count
+ *   AGITATOR_GOTO_TOL <undershoot_counts> <overshoot_counts>
+ *                                  Set forward-only goto settle tolerances
  *   AGITATOR_PID <kp> <ki> <kd>    Set PID gains for AGITATOR_GOTO
  *   AGITATOR_PID_AUTOTUNE <target_count> [pwm_lo] [pwm_hi] [cycles]
  *                                  Relay autotune around target, then apply PID
@@ -249,8 +251,9 @@ const int AGITATOR_ENCODER_COUNTS_PER_REV = 64;
 const bool AGITATOR_ENCODER_B_HIGH_IS_FWD = true;
 const int AGITATOR_GOTO_DEFAULT_MAX_PWM = 220;
 const int AGITATOR_GOTO_MIN_PWM = 45;
-const int AGITATOR_GOTO_REACHED_TOL_COUNTS = 1;
-const int AGITATOR_GOTO_OVERSHOOT_ALLOW_COUNTS = 4;
+const int AGITATOR_GOTO_REACHED_TOL_COUNTS_DEFAULT = 1;
+const int AGITATOR_GOTO_OVERSHOOT_ALLOW_COUNTS_DEFAULT = 4;
+const int AGITATOR_GOTO_MAX_TOL_COUNTS = (AGITATOR_ENCODER_COUNTS_PER_REV / 2) - 1;
 const unsigned long AGITATOR_GOTO_TIMEOUT_MS = 12000UL;
 const unsigned long AGITATOR_HOME_TIMEOUT_MS = 12000UL;
 float AGITATOR_PID_KP = 6.0f;
@@ -463,6 +466,8 @@ float agitatorPidIntegral = 0.0f;
 float agitatorPidPrevError = 0.0f;
 unsigned long agitatorPidLastMs = 0;
 unsigned long agitatorGotoStartMs = 0;
+int agitatorGotoReachedTolCounts = AGITATOR_GOTO_REACHED_TOL_COUNTS_DEFAULT;
+int agitatorGotoOvershootAllowCounts = AGITATOR_GOTO_OVERSHOOT_ALLOW_COUNTS_DEFAULT;
 bool agitatorAutotuneActive = false;
 int agitatorAutotuneTargetMod = 0;
 int agitatorAutotunePwmLo = AGITATOR_AUTOTUNE_DEFAULT_PWM_LO;
@@ -1793,6 +1798,10 @@ void agitatorEncoderStatus() {
   Serial.print(agitatorGotoActive ? 1 : 0);
   Serial.print(F(" target="));
   Serial.print(agitatorGotoTargetMod);
+  Serial.print(F(" tol_under="));
+  Serial.print(agitatorGotoReachedTolCounts);
+  Serial.print(F(" tol_over="));
+  Serial.print(agitatorGotoOvershootAllowCounts);
   Serial.print(F(" home_active="));
   Serial.print(agitatorHomeSeekActive ? 1 : 0);
   Serial.print(F(" autotune_active="));
@@ -1840,8 +1849,8 @@ void agitatorPositionService() {
 
   // Forward-only settle rule: near-target undershoot and small overshoot both
   // count as reached to avoid an unnecessary extra full wrap-around turn.
-  bool reachedFromBelow = (diffSigned >= 0 && diffSigned <= AGITATOR_GOTO_REACHED_TOL_COUNTS);
-  bool reachedBySmallOvershoot = (diffSigned < 0 && (-diffSigned) <= AGITATOR_GOTO_OVERSHOOT_ALLOW_COUNTS);
+  bool reachedFromBelow = (diffSigned >= 0 && diffSigned <= agitatorGotoReachedTolCounts);
+  bool reachedBySmallOvershoot = (diffSigned < 0 && (-diffSigned) <= agitatorGotoOvershootAllowCounts);
   if (reachedFromBelow || reachedBySmallOvershoot) {
     agitatorStop();
     Serial.print(F("[AGITATOR_ENC] goto reached target="));
@@ -2927,6 +2936,37 @@ void handleCommand(const String& cmd) {
     Serial.print(AGITATOR_PID_KI, 4);
     Serial.print(F(" kd="));
     Serial.println(AGITATOR_PID_KD, 4);
+
+  } else if (cmd.startsWith("AGITATOR_GOTO_TOL ")) {
+    // AGITATOR_GOTO_TOL <undershoot_counts> <overshoot_counts>
+    String args = cmd.substring(17);
+    args.trim();
+    int sp = args.indexOf(' ');
+    if (sp < 0) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: usage AGITATOR_GOTO_TOL <undershoot_counts> <overshoot_counts>"));
+      return;
+    }
+    int undershootTol = args.substring(0, sp).toInt();
+    int overshootTol = args.substring(sp + 1).toInt();
+    if (undershootTol < 0 || undershootTol > AGITATOR_GOTO_MAX_TOL_COUNTS) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: undershoot_counts must be 0-"));
+      Serial.println(AGITATOR_GOTO_MAX_TOL_COUNTS);
+      return;
+    }
+    if (overshootTol < 0 || overshootTol > AGITATOR_GOTO_MAX_TOL_COUNTS) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: overshoot_counts must be 0-"));
+      Serial.println(AGITATOR_GOTO_MAX_TOL_COUNTS);
+      return;
+    }
+    agitatorGotoReachedTolCounts = undershootTol;
+    agitatorGotoOvershootAllowCounts = overshootTol;
+    Serial.print(F("[AGITATOR_ENC] goto tol undershoot="));
+    Serial.print(agitatorGotoReachedTolCounts);
+    Serial.print(F(" overshoot="));
+    Serial.println(agitatorGotoOvershootAllowCounts);
 
   } else if (cmd.startsWith("AGITATOR_PID_AUTOTUNE ")) {
     // AGITATOR_PID_AUTOTUNE <target_count> [pwm_lo] [pwm_hi] [cycles]

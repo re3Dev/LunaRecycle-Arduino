@@ -1483,8 +1483,8 @@ def api_agitator_encoder_goto():
         body = request.get_json(silent=True) or {}
         target_count = int(body["target_count"])
         pwm_max = int(body.get("pwm_max", 220))
-        if target_count < 0 or target_count > 3959:
-            raise ValueError("target_count must be 0-3959")
+        if target_count < 0 or target_count > 7427:
+            raise ValueError("target_count must be 0-7427")
         if pwm_max < 45 or pwm_max > 255:
             raise ValueError("pwm_max must be 45-255")
         lines = arduino.send(f"AGITATOR_GOTO {target_count} {pwm_max}")
@@ -1519,8 +1519,8 @@ def api_agitator_encoder_home_trim():
             return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         body = request.get_json(silent=True) or {}
         counts = int(body.get("counts", 0))
-        if counts < 0 or counts > 3959:
-            raise ValueError("counts must be 0-3959")
+        if counts < 0 or counts > 7427:
+            raise ValueError("counts must be 0-7427")
         lines = arduino.send(f"AGITATOR_HOME_TRIM {counts}")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
@@ -1555,8 +1555,8 @@ def api_agitator_encoder_pid_autotune():
         pwm_hi = int(body.get("pwm_hi", 180))
         cycles = int(body.get("cycles", 6))
 
-        if target_count < 0 or target_count > 3959:
-            raise ValueError("target_count must be 0-3959")
+        if target_count < 0 or target_count > 7427:
+            raise ValueError("target_count must be 0-7427")
         if pwm_lo < 110 or pwm_lo > 255:
             raise ValueError("pwm_lo must be 110-255")
         if pwm_hi < 45 or pwm_hi > 255:

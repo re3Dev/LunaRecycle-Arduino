@@ -44,6 +44,7 @@
  *                                  optionally shift to pwm_after after
  *                                  pwm_after_ms within each spin.
  *   AGITATOR_ENC_HOME [pwm]        Seek hall rising edge and zero encoder
+ *   AGITATOR_ENC_CAL [pwm] [revs]  Measure raw encoder counts between hall marks
  *   AGITATOR_HOME_TRIM <0-3959>    Set forward offset (counts) past hall for home
  *   AGITATOR_GOTO <0-3959> [pwm_max] Forward-only PID move to encoder count
  *   AGITATOR_GOTO_TOL <undershoot_counts> <overshoot_counts>
@@ -272,6 +273,9 @@ const int AGITATOR_AUTOTUNE_MIN_PWM_SPAN = 20;
 const unsigned long AGITATOR_AUTOTUNE_TIMEOUT_MS = 30000UL;
 const unsigned long AGITATOR_AUTOTUNE_STALL_MS = 1200UL;
 const float AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS = 1.0f;
+const int AGITATOR_CAL_DEFAULT_PWM = 120;
+const int AGITATOR_CAL_DEFAULT_REVS = 3;
+const int AGITATOR_CAL_MAX_REVS = 10;
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -2138,6 +2142,76 @@ bool agitatorWaitForHallState(bool targetHome) {
   return true;
 }
 
+bool agitatorCalibrateCountsPerRev(int pwm, int revolutions) {
+  int clampedPwm = constrain(pwm, AGITATOR_GOTO_MIN_PWM, 255);
+  int clampedRevs = constrain(revolutions, 1, AGITATOR_CAL_MAX_REVS);
+
+  agitatorCancelClosedLoop();
+  agitatorDriveRawPwm(clampedPwm, true);
+
+  Serial.print(F("[AGITATOR_ENC] cal start pwm="));
+  Serial.print(clampedPwm);
+  Serial.print(F(" revs="));
+  Serial.println(clampedRevs);
+
+  // If already on the hall mark, leave it first so the next trigger is a new reference.
+  if (agitatorHallHomeDetected() && !agitatorWaitForHallState(false)) {
+    agitatorStop();
+    Serial.println(F("[AGITATOR_ENC] cal stopped"));
+    return false;
+  }
+
+  // Acquire a clean starting hall mark.
+  if (!agitatorWaitForHallState(true)) {
+    agitatorStop();
+    Serial.println(F("[AGITATOR_ENC] cal stopped"));
+    return false;
+  }
+
+  long markerCount = agitatorEncoderRead();
+  long totalCounts = 0;
+
+  for (int rev = 0; rev < clampedRevs; rev++) {
+    if (!agitatorWaitForHallState(false) || !agitatorWaitForHallState(true)) {
+      agitatorStop();
+      Serial.println(F("[AGITATOR_ENC] cal stopped"));
+      return false;
+    }
+
+    long nextMarkerCount = agitatorEncoderRead();
+    long deltaCounts = nextMarkerCount - markerCount;
+    long absCounts = labs(deltaCounts);
+    if (absCounts <= 0) {
+      agitatorStop();
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: cal measured zero counts"));
+      return false;
+    }
+
+    totalCounts += absCounts;
+    markerCount = nextMarkerCount;
+
+    Serial.print(F("[AGITATOR_ENC] cal rev="));
+    Serial.print(rev + 1);
+    Serial.print(F(" counts="));
+    Serial.print(absCounts);
+    Serial.print(F(" signed="));
+    Serial.println(deltaCounts);
+  }
+
+  agitatorStop();
+  agitatorHomeFromHallRisingEdge();
+
+  float averageCounts = (float)totalCounts / (float)clampedRevs;
+  Serial.print(F("[AGITATOR_ENC] cal avg_counts_per_rev="));
+  Serial.print(averageCounts, 3);
+  Serial.print(F(" configured="));
+  Serial.print(AGITATOR_ENCODER_COUNTS_PER_REV);
+  Serial.print(F(" revs="));
+  Serial.println(clampedRevs);
+  return true;
+}
+
 void agitatorDriveRawPwm(int pwm, bool fwd) {
   int clampedPwm = constrain(pwm, 0, 255);
   agitatorFwd = fwd;
@@ -2960,6 +3034,38 @@ void handleCommand(const String& cmd) {
       return;
     }
     agitatorStartEncoderHome(pwm);
+
+  } else if (cmd.startsWith("AGITATOR_ENC_CAL")) {
+    // AGITATOR_ENC_CAL [pwm] [revs]
+    int pwm = AGITATOR_CAL_DEFAULT_PWM;
+    int revs = AGITATOR_CAL_DEFAULT_REVS;
+    if (cmd.length() > 16) {
+      String args = cmd.substring(16);
+      args.trim();
+      int sp = args.indexOf(' ');
+      if (sp < 0) {
+        if (args.length() > 0) pwm = args.toInt();
+      } else {
+        pwm = args.substring(0, sp).toInt();
+        revs = args.substring(sp + 1).toInt();
+      }
+    }
+    if (pwm < AGITATOR_GOTO_MIN_PWM || pwm > 255) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: pwm must be "));
+      Serial.print(AGITATOR_GOTO_MIN_PWM);
+      Serial.println(F("-255"));
+      return;
+    }
+    if (revs < 1 || revs > AGITATOR_CAL_MAX_REVS) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: revs must be 1-"));
+      Serial.println(AGITATOR_CAL_MAX_REVS);
+      return;
+    }
+    if (!agitatorCalibrateCountsPerRev(pwm, revs)) {
+      systemDiagFlagError();
+    }
 
   } else if (cmd.startsWith("AGITATOR_GOTO ")) {
     // AGITATOR_GOTO <0-3959> [pwm_max]

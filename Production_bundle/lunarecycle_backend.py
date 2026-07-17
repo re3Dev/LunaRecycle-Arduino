@@ -672,9 +672,10 @@ class ArduinoBridge:
         # unique [BLASTGATE_DONE] marker. Give them a longer read window.
         is_blastgate = cmd.strip().upper().startswith("BLASTGATE_")
         is_agitator_move = cmd.strip().upper().startswith("AGITATOR_MOVE ")
+        is_agitator_cal = cmd.strip().upper().startswith("AGITATOR_ENC_CAL")
         if is_blastgate:
             total_timeout = BLASTGATE_TIMEOUT
-        elif is_agitator_move:
+        elif is_agitator_move or is_agitator_cal:
             total_timeout = AGITATOR_MOVE_TIMEOUT
         else:
             total_timeout = ARDUINO_TIMEOUT
@@ -1447,6 +1448,24 @@ def api_agitator_encoder_home():
         if pwm < 1 or pwm > 255:
             raise ValueError("pwm must be 1-255")
         lines = arduino.send(f"AGITATOR_ENC_HOME {pwm}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/agitator/encoder/calibrate", methods=["POST"])
+def api_agitator_encoder_calibrate():
+    try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
+        body = request.get_json(silent=True) or {}
+        pwm = int(body.get("pwm", 120))
+        revs = int(body.get("revs", 3))
+        if pwm < 45 or pwm > 255:
+            raise ValueError("pwm must be 45-255")
+        if revs < 1 or revs > 10:
+            raise ValueError("revs must be 1-10")
+        lines = arduino.send(f"AGITATOR_ENC_CAL {pwm} {revs}")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500

@@ -44,8 +44,8 @@
  *                                  optionally shift to pwm_after after
  *                                  pwm_after_ms within each spin.
  *   AGITATOR_ENC_HOME [pwm]        Seek hall rising edge and zero encoder
- *   AGITATOR_HOME_TRIM <0-63>      Set forward offset (counts) past hall for home
- *   AGITATOR_GOTO <0-63> [pwm_max] Forward-only PID move to encoder count
+ *   AGITATOR_HOME_TRIM <0-255>     Set forward offset (counts) past hall for home
+ *   AGITATOR_GOTO <0-255> [pwm_max] Forward-only PID move to encoder count
  *   AGITATOR_GOTO_TOL <undershoot_counts> <overshoot_counts>
  *                                  Set forward-only goto settle tolerances
  *   AGITATOR_PID <kp> <ki> <kd>    Set PID gains for AGITATOR_GOTO
@@ -100,7 +100,7 @@
  *     RPWM / LPWM      ->  D12 / D13
  *     R_EN / L_EN      ->  D42 / D43
  *     Hall home sensor ->  D50 (INPUT_PULLUP)
- *     Encoder A / B    ->  D18 / D19 (A rising-edge count, interrupt)
+ *     Encoder A / B    ->  D18 / D19 (full quadrature decode, interrupt)
  *
  *   Mixer vacuum motor:
  *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
@@ -150,8 +150,8 @@ const int Mixer_agitatorMotor_LPWM = 13;   // LPWM (reverse PWM)
 const int Mixer_agitatorMotor_REN  = 42;   // R_EN (enable high)
 const int Mixer_agitatorMotor_LEN  = 43;   // L_EN (enable high)
 const int Mixer_agitatorHallSensor = 50;  // Hall home sensor input (INPUT_PULLUP)
-const int Mixer_agitatorEncoderA   = 18;  // Encoder channel A (interrupt rising-edge count)
-const int Mixer_agitatorEncoderB   = 19;  // Encoder channel B (direction sample)
+const int Mixer_agitatorEncoderA   = 18;  // Encoder channel A (interrupt)
+const int Mixer_agitatorEncoderB   = 19;  // Encoder channel B (interrupt)
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
@@ -248,7 +248,7 @@ const unsigned long AGITATOR_REVERSE_PAUSE_MS = 5000; // [tune] full-stop pause 
 const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
 const bool AGITATOR_HALL_ACTIVE_LOW = true;
 const unsigned long AGITATOR_MOVE_HALL_FAILSAFE_MS = 20000UL;
-const int AGITATOR_ENCODER_COUNTS_PER_REV = 64;
+const int AGITATOR_ENCODER_COUNTS_PER_REV = 256;
 const bool AGITATOR_ENCODER_B_HIGH_IS_FWD = true;
 const int AGITATOR_GOTO_DEFAULT_MAX_PWM = 220;
 const int AGITATOR_GOTO_MIN_PWM = 45;
@@ -460,6 +460,7 @@ int  agitatorPwm       = 0;      // 0..255
 bool agitatorFwd       = true;   // true = FWD, false = REV
 bool agitatorHallLastState = false;
 volatile long agitatorEncoderCount = 0;
+volatile uint8_t agitatorEncoderPrevState = 0;
 bool agitatorEncoderHomed = false;
 bool agitatorEncoderHallPrevRaw = false;
 bool agitatorHomeSeekActive = false;
@@ -1570,13 +1571,39 @@ void agitatorSetDirectionPins(bool fwd) {
   analogWrite(Mixer_agitatorMotor_LPWM, 0);
 }
 
-void agitatorEncoderOnA() {
-  bool bHigh = (digitalRead(Mixer_agitatorEncoderB) == HIGH);
-  if (bHigh == AGITATOR_ENCODER_B_HIGH_IS_FWD) {
-    agitatorEncoderCount++;
-  } else {
-    agitatorEncoderCount--;
+void agitatorEncoderUpdateFromPins() {
+  uint8_t a = (digitalRead(Mixer_agitatorEncoderA) == HIGH) ? 1 : 0;
+  uint8_t b = (digitalRead(Mixer_agitatorEncoderB) == HIGH) ? 1 : 0;
+  uint8_t state = (a << 1) | b;
+  uint8_t transition = (agitatorEncoderPrevState << 2) | state;
+
+  // Full quadrature transition table: +1 for forward Gray-code steps, -1 for reverse.
+  switch (transition) {
+    case 0b0001:
+    case 0b0111:
+    case 0b1110:
+    case 0b1000:
+      agitatorEncoderCount += AGITATOR_ENCODER_B_HIGH_IS_FWD ? 1 : -1;
+      break;
+    case 0b0010:
+    case 0b0100:
+    case 0b1101:
+    case 0b1011:
+      agitatorEncoderCount += AGITATOR_ENCODER_B_HIGH_IS_FWD ? -1 : 1;
+      break;
+    default:
+      break;
   }
+
+  agitatorEncoderPrevState = state;
+}
+
+void agitatorEncoderOnA() {
+  agitatorEncoderUpdateFromPins();
+}
+
+void agitatorEncoderOnB() {
+  agitatorEncoderUpdateFromPins();
 }
 
 long agitatorEncoderRead() {
@@ -2935,7 +2962,7 @@ void handleCommand(const String& cmd) {
     agitatorStartEncoderHome(pwm);
 
   } else if (cmd.startsWith("AGITATOR_GOTO ")) {
-    // AGITATOR_GOTO <0-63> [pwm_max]
+    // AGITATOR_GOTO <0-255> [pwm_max]
     String args = cmd.substring(14);
     args.trim();
     int sp = args.indexOf(' ');
@@ -2955,7 +2982,8 @@ void handleCommand(const String& cmd) {
     }
     if (target < 0 || target >= AGITATOR_ENCODER_COUNTS_PER_REV) {
       systemDiagFlagError();
-      Serial.println(F("[AGITATOR_ENC] ERROR: target must be 0-63"));
+      Serial.print(F("[AGITATOR_ENC] ERROR: target must be 0-"));
+      Serial.println(AGITATOR_ENCODER_COUNTS_PER_REV - 1);
       return;
     }
     if (pwmMax < AGITATOR_GOTO_MIN_PWM || pwmMax > 255) {
@@ -2968,7 +2996,7 @@ void handleCommand(const String& cmd) {
     agitatorStartGotoPosition(target, pwmMax);
 
   } else if (cmd.startsWith("AGITATOR_HOME_TRIM ")) {
-    // AGITATOR_HOME_TRIM <0-63>
+    // AGITATOR_HOME_TRIM <0-255>
     int trimCounts = cmd.substring(19).toInt();
     if (trimCounts < 0 || trimCounts > AGITATOR_HOME_TRIM_MAX_COUNTS) {
       systemDiagFlagError();
@@ -3076,7 +3104,8 @@ void handleCommand(const String& cmd) {
 
     if (target < 0 || target >= AGITATOR_ENCODER_COUNTS_PER_REV) {
       systemDiagFlagError();
-      Serial.println(F("[AGITATOR_ENC] ERROR: target_count must be 0-63"));
+      Serial.print(F("[AGITATOR_ENC] ERROR: target_count must be 0-"));
+      Serial.println(AGITATOR_ENCODER_COUNTS_PER_REV - 1);
       return;
     }
     if (pwmLo < AGITATOR_AUTOTUNE_MIN_PWM_LO || pwmLo > 255) {
@@ -3328,7 +3357,10 @@ void setup() {
   pinMode(Mixer_agitatorHallSensor, INPUT_PULLUP);
   pinMode(Mixer_agitatorEncoderA, INPUT_PULLUP);
   pinMode(Mixer_agitatorEncoderB, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(Mixer_agitatorEncoderA), agitatorEncoderOnA, RISING);
+  agitatorEncoderPrevState = ((digitalRead(Mixer_agitatorEncoderA) == HIGH) ? 0b10 : 0) |
+                             ((digitalRead(Mixer_agitatorEncoderB) == HIGH) ? 0b01 : 0);
+  attachInterrupt(digitalPinToInterrupt(Mixer_agitatorEncoderA), agitatorEncoderOnA, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(Mixer_agitatorEncoderB), agitatorEncoderOnB, CHANGE);
   agitatorHallLastState = agitatorHallHomeDetected();
   agitatorEncoderHallPrevRaw = agitatorHallLastState;
   agitatorStop();

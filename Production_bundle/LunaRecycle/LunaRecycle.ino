@@ -43,6 +43,12 @@
  *                                  Run N hall-homed revolutions at raw PWM,
  *                                  optionally shift to pwm_after after
  *                                  pwm_after_ms within each spin.
+ *   AGITATOR_ENC_HOME [pwm]        Seek hall rising edge and zero encoder
+ *   AGITATOR_GOTO <0-63> [pwm_max] Forward-only PID move to encoder count
+ *   AGITATOR_PID <kp> <ki> <kd>    Set PID gains for AGITATOR_GOTO
+ *   AGITATOR_PID_AUTOTUNE <target_count> [pwm_lo] [pwm_hi] [cycles]
+ *                                  Relay autotune around target, then apply PID
+ *   AGITATOR_ENC_STATUS            Print encoder/PID status
  *   AGITATOR_STOP                   Stop the agitator
  *   AGITATOR_STATUS                 Print agitator power / direction
  *
@@ -91,6 +97,7 @@
  *     RPWM / LPWM      ->  D12 / D13
  *     R_EN / L_EN      ->  D42 / D43
  *     Hall home sensor ->  D50 (INPUT_PULLUP)
+ *     Encoder A / B    ->  D18 / D19 (A rising-edge count)
  *
  *   Mixer vacuum motor:
  *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
@@ -140,6 +147,8 @@ const int Mixer_agitatorMotor_LPWM = 13;   // LPWM (reverse PWM)
 const int Mixer_agitatorMotor_REN  = 42;   // R_EN (enable high)
 const int Mixer_agitatorMotor_LEN  = 43;   // L_EN (enable high)
 const int Mixer_agitatorHallSensor = 50;  // Hall home sensor input (INPUT_PULLUP)
+const int Mixer_agitatorEncoderA   = 18;  // Encoder channel A (interrupt)
+const int Mixer_agitatorEncoderB   = 19;  // Encoder channel B (direction sample)
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
@@ -236,6 +245,22 @@ const unsigned long AGITATOR_REVERSE_PAUSE_MS = 5000; // [tune] full-stop pause 
 const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
 const bool AGITATOR_HALL_ACTIVE_LOW = true;
 const unsigned long AGITATOR_MOVE_HALL_FAILSAFE_MS = 20000UL;
+const int AGITATOR_ENCODER_COUNTS_PER_REV = 64;
+const bool AGITATOR_ENCODER_B_HIGH_IS_FWD = true;
+const int AGITATOR_GOTO_DEFAULT_MAX_PWM = 220;
+const int AGITATOR_GOTO_MIN_PWM = 45;
+const unsigned long AGITATOR_GOTO_TIMEOUT_MS = 12000UL;
+const unsigned long AGITATOR_HOME_TIMEOUT_MS = 12000UL;
+float AGITATOR_PID_KP = 6.0f;
+float AGITATOR_PID_KI = 0.02f;
+float AGITATOR_PID_KD = 0.35f;
+const int AGITATOR_AUTOTUNE_DEFAULT_PWM_LO = 70;
+const int AGITATOR_AUTOTUNE_DEFAULT_PWM_HI = 180;
+const int AGITATOR_AUTOTUNE_DEFAULT_CYCLES = 6;
+const int AGITATOR_AUTOTUNE_MIN_CYCLES = 4;
+const int AGITATOR_AUTOTUNE_MAX_CYCLES = 20;
+const unsigned long AGITATOR_AUTOTUNE_TIMEOUT_MS = 30000UL;
+const float AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS = 1.0f;
 
 // Mixer vacuum motor: DS3502 digital-pot wiper full-scale (7-bit, 0..127 =
 // 0..100% speed reference).
@@ -423,6 +448,31 @@ int  agitatorPercent   = 0;      // 0..100
 int  agitatorPwm       = 0;      // 0..255
 bool agitatorFwd       = true;   // true = FWD, false = REV
 bool agitatorHallLastState = false;
+volatile long agitatorEncoderCount = 0;
+bool agitatorEncoderHomed = false;
+bool agitatorEncoderHallPrevRaw = false;
+bool agitatorHomeSeekActive = false;
+unsigned long agitatorHomeSeekStartMs = 0;
+int agitatorHomeSeekPwm = 0;
+bool agitatorGotoActive = false;
+int agitatorGotoTargetMod = 0;
+int agitatorGotoMaxPwm = AGITATOR_GOTO_DEFAULT_MAX_PWM;
+float agitatorPidIntegral = 0.0f;
+float agitatorPidPrevError = 0.0f;
+unsigned long agitatorPidLastMs = 0;
+unsigned long agitatorGotoStartMs = 0;
+bool agitatorAutotuneActive = false;
+int agitatorAutotuneTargetMod = 0;
+int agitatorAutotunePwmLo = AGITATOR_AUTOTUNE_DEFAULT_PWM_LO;
+int agitatorAutotunePwmHi = AGITATOR_AUTOTUNE_DEFAULT_PWM_HI;
+int agitatorAutotuneCyclesRequested = AGITATOR_AUTOTUNE_DEFAULT_CYCLES;
+int agitatorAutotuneCrossings = 0;
+int agitatorAutotuneState = 1;
+unsigned long agitatorAutotuneStartMs = 0;
+unsigned long agitatorAutotuneLastCrossMs = 0;
+float agitatorAutotunePeriodAccMs = 0.0f;
+float agitatorAutotunePeakMax = -1000000.0f;
+float agitatorAutotunePeakMin = 1000000.0f;
 
 // Mixer vacuum motor state (DS3502 digipot).
 int  vacuumPercent   = 0;        // 0..100
@@ -1503,6 +1553,317 @@ void agitatorSetDirectionPins(bool fwd) {
   analogWrite(Mixer_agitatorMotor_LPWM, 0);
 }
 
+void agitatorEncoderOnA() {
+  bool bHigh = (digitalRead(Mixer_agitatorEncoderB) == HIGH);
+  if (bHigh == AGITATOR_ENCODER_B_HIGH_IS_FWD) {
+    agitatorEncoderCount++;
+  } else {
+    agitatorEncoderCount--;
+  }
+}
+
+long agitatorEncoderRead() {
+  noInterrupts();
+  long count = agitatorEncoderCount;
+  interrupts();
+  return count;
+}
+
+void agitatorEncoderWrite(long value) {
+  noInterrupts();
+  agitatorEncoderCount = value;
+  interrupts();
+}
+
+int agitatorEncoderModCount(long count) {
+  long mod = count % AGITATOR_ENCODER_COUNTS_PER_REV;
+  if (mod < 0) mod += AGITATOR_ENCODER_COUNTS_PER_REV;
+  return (int)mod;
+}
+
+int agitatorEncoderCurrentPos() {
+  return agitatorEncoderModCount(agitatorEncoderRead());
+}
+
+void agitatorResetPidState() {
+  agitatorPidIntegral = 0.0f;
+  agitatorPidPrevError = 0.0f;
+  agitatorPidLastMs = millis();
+}
+
+void agitatorResetAutotuneState() {
+  agitatorAutotuneCrossings = 0;
+  agitatorAutotuneState = 1;
+  agitatorAutotuneStartMs = millis();
+  agitatorAutotuneLastCrossMs = 0;
+  agitatorAutotunePeriodAccMs = 0.0f;
+  agitatorAutotunePeakMax = -1000000.0f;
+  agitatorAutotunePeakMin = 1000000.0f;
+}
+
+float agitatorForwardErrorCounts(int targetMod, int currentPos) {
+  return (float)((targetMod - currentPos + AGITATOR_ENCODER_COUNTS_PER_REV) % AGITATOR_ENCODER_COUNTS_PER_REV);
+}
+
+float agitatorSignedErrorForControl(int targetMod, int currentPos) {
+  float forwardError = agitatorForwardErrorCounts(targetMod, currentPos);
+  if (forwardError > (AGITATOR_ENCODER_COUNTS_PER_REV / 2)) {
+    forwardError -= AGITATOR_ENCODER_COUNTS_PER_REV;
+  }
+  return forwardError;
+}
+
+void agitatorStartPidAutotune(int targetMod, int pwmLo, int pwmHi, int cycles) {
+  int clampedTarget = constrain(targetMod, 0, AGITATOR_ENCODER_COUNTS_PER_REV - 1);
+  int clampedLo = constrain(pwmLo, AGITATOR_GOTO_MIN_PWM, 255);
+  int clampedHi = constrain(pwmHi, AGITATOR_GOTO_MIN_PWM, 255);
+  int clampedCycles = constrain(cycles, AGITATOR_AUTOTUNE_MIN_CYCLES, AGITATOR_AUTOTUNE_MAX_CYCLES);
+  if (clampedHi <= clampedLo) clampedHi = min(255, clampedLo + 20);
+
+  agitatorCancelClosedLoop();
+  agitatorAutotuneTargetMod = clampedTarget;
+  agitatorAutotunePwmLo = clampedLo;
+  agitatorAutotunePwmHi = clampedHi;
+  agitatorAutotuneCyclesRequested = clampedCycles;
+  agitatorAutotuneActive = true;
+  agitatorResetAutotuneState();
+
+  agitatorDriveRawPwm(agitatorAutotunePwmHi, true);
+  Serial.print(F("[AGITATOR_ENC] autotune start target="));
+  Serial.print(agitatorAutotuneTargetMod);
+  Serial.print(F(" pwm_lo="));
+  Serial.print(agitatorAutotunePwmLo);
+  Serial.print(F(" pwm_hi="));
+  Serial.print(agitatorAutotunePwmHi);
+  Serial.print(F(" cycles="));
+  Serial.println(agitatorAutotuneCyclesRequested);
+}
+
+void agitatorFinishAutotuneWithError(const __FlashStringHelper* msg) {
+  agitatorStop();
+  systemDiagFlagError();
+  Serial.print(F("[AGITATOR_ENC] ERROR: autotune "));
+  Serial.println(msg);
+}
+
+void agitatorApplyAutotunedPid(float ku, float puSec) {
+  if (ku <= 0.0f || puSec <= 0.0f) {
+    agitatorFinishAutotuneWithError(F("invalid ku/pu"));
+    return;
+  }
+
+  // Tyreus-Luyben PI-D style values (conservative vs classic ZN on DC motors).
+  float kp = 0.31f * ku;
+  float ti = 2.2f * puSec;
+  float td = 0.168f * puSec;
+  float ki = (ti > 0.0f) ? (kp / ti) : 0.0f;
+  float kd = kp * td;
+
+  AGITATOR_PID_KP = max(0.0f, kp);
+  AGITATOR_PID_KI = max(0.0f, ki);
+  AGITATOR_PID_KD = max(0.0f, kd);
+  agitatorResetPidState();
+
+  Serial.print(F("[AGITATOR_ENC] autotune done ku="));
+  Serial.print(ku, 5);
+  Serial.print(F(" pu="));
+  Serial.print(puSec, 5);
+  Serial.print(F(" kp="));
+  Serial.print(AGITATOR_PID_KP, 5);
+  Serial.print(F(" ki="));
+  Serial.print(AGITATOR_PID_KI, 5);
+  Serial.print(F(" kd="));
+  Serial.println(AGITATOR_PID_KD, 5);
+}
+
+void agitatorAutotuneService() {
+  if (!agitatorAutotuneActive) return;
+
+  unsigned long now = millis();
+  if (now - agitatorAutotuneStartMs > AGITATOR_AUTOTUNE_TIMEOUT_MS) {
+    agitatorAutotuneActive = false;
+    agitatorFinishAutotuneWithError(F("timeout"));
+    return;
+  }
+
+  int currentPos = agitatorEncoderCurrentPos();
+  float error = agitatorSignedErrorForControl(agitatorAutotuneTargetMod, currentPos);
+  agitatorAutotunePeakMax = max(agitatorAutotunePeakMax, error);
+  agitatorAutotunePeakMin = min(agitatorAutotunePeakMin, error);
+
+  bool switched = false;
+  if (agitatorAutotuneState > 0 && error > AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS) {
+    agitatorAutotuneState = -1;
+    agitatorDriveRawPwm(agitatorAutotunePwmLo, true);
+    switched = true;
+  } else if (agitatorAutotuneState < 0 && error < -AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS) {
+    agitatorAutotuneState = 1;
+    agitatorDriveRawPwm(agitatorAutotunePwmHi, true);
+    switched = true;
+  }
+
+  if (switched) {
+    agitatorAutotuneCrossings++;
+    if (agitatorAutotuneLastCrossMs != 0) {
+      agitatorAutotunePeriodAccMs += (float)(now - agitatorAutotuneLastCrossMs);
+    }
+    agitatorAutotuneLastCrossMs = now;
+  }
+
+  int requiredCrossings = max(2, agitatorAutotuneCyclesRequested * 2);
+  if (agitatorAutotuneCrossings < requiredCrossings) return;
+
+  agitatorAutotuneActive = false;
+  agitatorStop();
+
+  int periodSamples = agitatorAutotuneCrossings - 1;
+  if (periodSamples <= 0) {
+    agitatorFinishAutotuneWithError(F("no period samples"));
+    return;
+  }
+
+  float halfPeriodMs = agitatorAutotunePeriodAccMs / (float)periodSamples;
+  float puSec = (2.0f * halfPeriodMs) / 1000.0f;
+  float amplitude = (agitatorAutotunePeakMax - agitatorAutotunePeakMin) * 0.5f;
+  if (amplitude < 0.2f) {
+    agitatorFinishAutotuneWithError(F("oscillation amplitude too small"));
+    return;
+  }
+
+  float relayAmplitude = ((float)agitatorAutotunePwmHi - (float)agitatorAutotunePwmLo) * 0.5f;
+  if (relayAmplitude <= 0.0f) {
+    agitatorFinishAutotuneWithError(F("invalid pwm span"));
+    return;
+  }
+
+  float ku = (4.0f * relayAmplitude) / (3.1415926f * amplitude);
+  agitatorApplyAutotunedPid(ku, puSec);
+}
+
+void agitatorCancelClosedLoop() {
+  agitatorHomeSeekActive = false;
+  agitatorGotoActive = false;
+  agitatorAutotuneActive = false;
+  agitatorResetPidState();
+}
+
+void agitatorHomeFromHallRisingEdge() {
+  agitatorEncoderWrite(0);
+  agitatorEncoderHomed = true;
+  Serial.println(F("[AGITATOR_ENC] zeroed on hall rising edge"));
+}
+
+void agitatorStartEncoderHome(int pwm) {
+  int seekPwm = constrain(pwm, AGITATOR_GOTO_MIN_PWM, 255);
+  agitatorCancelClosedLoop();
+  agitatorHomeSeekPwm = seekPwm;
+  agitatorHomeSeekStartMs = millis();
+  agitatorHomeSeekActive = true;
+  agitatorDriveRawPwm(seekPwm, true);
+  Serial.print(F("[AGITATOR_ENC] homing start pwm="));
+  Serial.println(seekPwm);
+}
+
+void agitatorStartGotoPosition(int targetMod, int maxPwm) {
+  int clampedTarget = constrain(targetMod, 0, AGITATOR_ENCODER_COUNTS_PER_REV - 1);
+  int clampedMaxPwm = constrain(maxPwm, AGITATOR_GOTO_MIN_PWM, 255);
+  agitatorCancelClosedLoop();
+  agitatorGotoTargetMod = clampedTarget;
+  agitatorGotoMaxPwm = clampedMaxPwm;
+  agitatorGotoStartMs = millis();
+  agitatorGotoActive = true;
+  agitatorResetPidState();
+  Serial.print(F("[AGITATOR_ENC] goto start target="));
+  Serial.print(agitatorGotoTargetMod);
+  Serial.print(F(" max_pwm="));
+  Serial.println(agitatorGotoMaxPwm);
+}
+
+void agitatorEncoderStatus() {
+  int pos = agitatorEncoderCurrentPos();
+  Serial.print(F("[AGITATOR_ENC] homed="));
+  Serial.print(agitatorEncoderHomed ? 1 : 0);
+  Serial.print(F(" count="));
+  Serial.print(agitatorEncoderRead());
+  Serial.print(F(" pos="));
+  Serial.print(pos);
+  Serial.print(F(" goto_active="));
+  Serial.print(agitatorGotoActive ? 1 : 0);
+  Serial.print(F(" target="));
+  Serial.print(agitatorGotoTargetMod);
+  Serial.print(F(" home_active="));
+  Serial.print(agitatorHomeSeekActive ? 1 : 0);
+  Serial.print(F(" autotune_active="));
+  Serial.print(agitatorAutotuneActive ? 1 : 0);
+  Serial.print(F(" pwm="));
+  Serial.println(agitatorPwm);
+}
+
+void agitatorPositionService() {
+  unsigned long now = millis();
+
+  if (agitatorHomeSeekActive) {
+    if (now - agitatorHomeSeekStartMs > AGITATOR_HOME_TIMEOUT_MS) {
+      agitatorStop();
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: home timeout"));
+      return;
+    }
+    if (agitatorHallHomeDetected()) {
+      agitatorStop();
+      agitatorHomeSeekActive = false;
+      agitatorHomeFromHallRisingEdge();
+      Serial.println(F("[AGITATOR_ENC] homing complete"));
+      return;
+    }
+    agitatorDriveRawPwm(agitatorHomeSeekPwm, true);
+  }
+
+  if (agitatorAutotuneActive) {
+    agitatorAutotuneService();
+    return;
+  }
+
+  if (!agitatorGotoActive) return;
+
+  if (now - agitatorGotoStartMs > AGITATOR_GOTO_TIMEOUT_MS) {
+    agitatorStop();
+    systemDiagFlagError();
+    Serial.println(F("[AGITATOR_ENC] ERROR: goto timeout"));
+    return;
+  }
+
+  int currentPos = agitatorEncoderCurrentPos();
+  int diffSigned = (int)agitatorSignedErrorForControl(agitatorGotoTargetMod, currentPos);
+
+  // For forward-only control, a small overshoot still counts as reached.
+  if (abs(diffSigned) <= 1) {
+    agitatorStop();
+    Serial.print(F("[AGITATOR_ENC] goto reached target="));
+    Serial.print(agitatorGotoTargetMod);
+    Serial.print(F(" pos="));
+    Serial.println(currentPos);
+    return;
+  }
+
+  int forwardError = (int)agitatorForwardErrorCounts(agitatorGotoTargetMod, currentPos);
+
+  float dt = (float)(now - agitatorPidLastMs) / 1000.0f;
+  if (dt <= 0.0f) dt = 0.001f;
+  agitatorPidLastMs = now;
+
+  float error = (float)forwardError;
+  agitatorPidIntegral += error * dt;
+  agitatorPidIntegral = constrain(agitatorPidIntegral, 0.0f, 200.0f);
+  float derivative = (error - agitatorPidPrevError) / dt;
+  agitatorPidPrevError = error;
+
+  float output = AGITATOR_PID_KP * error + AGITATOR_PID_KI * agitatorPidIntegral + AGITATOR_PID_KD * derivative;
+  int pwm = (int)output;
+  pwm = constrain(pwm, AGITATOR_GOTO_MIN_PWM, agitatorGotoMaxPwm);
+  agitatorDriveRawPwm(pwm, true);
+}
+
 void agitatorApply() {
   int percent = constrain(agitatorPercent, 0, 100);
   if (percent == 0) {
@@ -1525,6 +1886,7 @@ void agitatorApply() {
 }
 
 void agitatorSet(int percent, bool fwd) {
+  agitatorCancelClosedLoop();
   int target = constrain(percent, 0, 100);
   int step = max(1, AGITATOR_RAMP_STEP_PERCENT);
 
@@ -1576,6 +1938,7 @@ void agitatorSet(int percent, bool fwd) {
 }
 
 void agitatorStop() {
+  agitatorCancelClosedLoop();
   agitatorPercent = 0;
   agitatorApply();
 }
@@ -1589,7 +1952,11 @@ void agitatorStatus() {
   Serial.print(agitatorFwd ? F("FWD") : F("REV"));
   Serial.print(F(" hall="));
   bool hallHome = (digitalRead(Mixer_agitatorHallSensor) == (AGITATOR_HALL_ACTIVE_LOW ? LOW : HIGH));
-  Serial.println(hallHome ? F("HOME") : F("AWAY"));
+  Serial.print(hallHome ? F("HOME") : F("AWAY"));
+  Serial.print(F(" enc="));
+  Serial.print(agitatorEncoderCurrentPos());
+  Serial.print(F(" homed="));
+  Serial.println(agitatorEncoderHomed ? 1 : 0);
 }
 
 bool agitatorHallHomeDetected() {
@@ -1640,6 +2007,11 @@ bool agitatorStopOrEStopRequested() {
 
 void agitatorMonitorHall() {
   bool hallHome = agitatorHallHomeDetected();
+  if (hallHome && !agitatorEncoderHallPrevRaw) {
+    agitatorHomeFromHallRisingEdge();
+  }
+  agitatorEncoderHallPrevRaw = hallHome;
+
   if (hallHome != agitatorHallLastState) {
     agitatorHallLastState = hallHome;
     Serial.print(F("[AGITATOR_HALL] "));
@@ -1688,6 +2060,7 @@ void agitatorDriveRawPwm(int pwm, bool fwd) {
 }
 
 bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd, long pwmShiftAfterMs, int pwmAfter) {
+  agitatorCancelClosedLoop();
   if (spins <= 0) return true;
   for (int i = 0; i < spins; i++) {
     unsigned long moveStart = millis();
@@ -2472,6 +2845,155 @@ void handleCommand(const String& cmd) {
       systemDiagFlagError();
     }
 
+  } else if (cmd.startsWith("AGITATOR_ENC_HOME")) {
+    // AGITATOR_ENC_HOME [pwm]
+    int pwm = 120;
+    if (cmd.length() > 17) {
+      String arg = cmd.substring(17);
+      arg.trim();
+      if (arg.length() > 0) pwm = arg.toInt();
+    }
+    if (pwm < 1 || pwm > 255) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: pwm must be 1-255"));
+      return;
+    }
+    agitatorStartEncoderHome(pwm);
+
+  } else if (cmd.startsWith("AGITATOR_GOTO ")) {
+    // AGITATOR_GOTO <0-63> [pwm_max]
+    String args = cmd.substring(14);
+    args.trim();
+    int sp = args.indexOf(' ');
+    int target = 0;
+    int pwmMax = AGITATOR_GOTO_DEFAULT_MAX_PWM;
+    if (sp < 0) {
+      target = args.toInt();
+    } else {
+      target = args.substring(0, sp).toInt();
+      pwmMax = args.substring(sp + 1).toInt();
+    }
+
+    if (!agitatorEncoderHomed) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: not homed (run AGITATOR_ENC_HOME first)"));
+      return;
+    }
+    if (target < 0 || target >= AGITATOR_ENCODER_COUNTS_PER_REV) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: target must be 0-63"));
+      return;
+    }
+    if (pwmMax < AGITATOR_GOTO_MIN_PWM || pwmMax > 255) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: pwm_max must be "));
+      Serial.print(AGITATOR_GOTO_MIN_PWM);
+      Serial.println(F("-255"));
+      return;
+    }
+    agitatorStartGotoPosition(target, pwmMax);
+
+  } else if (cmd.startsWith("AGITATOR_PID ")) {
+    // AGITATOR_PID <kp> <ki> <kd>
+    String args = cmd.substring(13);
+    args.trim();
+    int sp1 = args.indexOf(' ');
+    int sp2 = (sp1 >= 0) ? args.indexOf(' ', sp1 + 1) : -1;
+    if (sp1 < 0 || sp2 < 0) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: usage AGITATOR_PID <kp> <ki> <kd>"));
+      return;
+    }
+    float kp = args.substring(0, sp1).toFloat();
+    float ki = args.substring(sp1 + 1, sp2).toFloat();
+    float kd = args.substring(sp2 + 1).toFloat();
+    if (kp < 0.0f || ki < 0.0f || kd < 0.0f) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: gains must be >= 0"));
+      return;
+    }
+    AGITATOR_PID_KP = kp;
+    AGITATOR_PID_KI = ki;
+    AGITATOR_PID_KD = kd;
+    agitatorResetPidState();
+    Serial.print(F("[AGITATOR_ENC] PID kp="));
+    Serial.print(AGITATOR_PID_KP, 4);
+    Serial.print(F(" ki="));
+    Serial.print(AGITATOR_PID_KI, 4);
+    Serial.print(F(" kd="));
+    Serial.println(AGITATOR_PID_KD, 4);
+
+  } else if (cmd.startsWith("AGITATOR_PID_AUTOTUNE ")) {
+    // AGITATOR_PID_AUTOTUNE <target_count> [pwm_lo] [pwm_hi] [cycles]
+    String args = cmd.substring(22);
+    args.trim();
+
+    String tok[4];
+    int tokCount = 0;
+    int idx = 0;
+    while (idx < args.length() && tokCount < 4) {
+      while (idx < args.length() && args.charAt(idx) == ' ') idx++;
+      if (idx >= args.length()) break;
+      int end = args.indexOf(' ', idx);
+      if (end < 0) end = args.length();
+      tok[tokCount++] = args.substring(idx, end);
+      idx = end + 1;
+    }
+
+    if (tokCount < 1) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: usage AGITATOR_PID_AUTOTUNE <target_count> [pwm_lo] [pwm_hi] [cycles]"));
+      return;
+    }
+    if (!agitatorEncoderHomed) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: not homed (run AGITATOR_ENC_HOME first)"));
+      return;
+    }
+
+    int target = tok[0].toInt();
+    int pwmLo = (tokCount > 1) ? tok[1].toInt() : AGITATOR_AUTOTUNE_DEFAULT_PWM_LO;
+    int pwmHi = (tokCount > 2) ? tok[2].toInt() : AGITATOR_AUTOTUNE_DEFAULT_PWM_HI;
+    int cycles = (tokCount > 3) ? tok[3].toInt() : AGITATOR_AUTOTUNE_DEFAULT_CYCLES;
+
+    if (target < 0 || target >= AGITATOR_ENCODER_COUNTS_PER_REV) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: target_count must be 0-63"));
+      return;
+    }
+    if (pwmLo < AGITATOR_GOTO_MIN_PWM || pwmLo > 255) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: pwm_lo must be "));
+      Serial.print(AGITATOR_GOTO_MIN_PWM);
+      Serial.println(F("-255"));
+      return;
+    }
+    if (pwmHi < AGITATOR_GOTO_MIN_PWM || pwmHi > 255) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: pwm_hi must be "));
+      Serial.print(AGITATOR_GOTO_MIN_PWM);
+      Serial.println(F("-255"));
+      return;
+    }
+    if (pwmHi <= pwmLo) {
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: pwm_hi must be > pwm_lo"));
+      return;
+    }
+    if (cycles < AGITATOR_AUTOTUNE_MIN_CYCLES || cycles > AGITATOR_AUTOTUNE_MAX_CYCLES) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: cycles must be "));
+      Serial.print(AGITATOR_AUTOTUNE_MIN_CYCLES);
+      Serial.print(F("-"));
+      Serial.println(AGITATOR_AUTOTUNE_MAX_CYCLES);
+      return;
+    }
+
+    agitatorStartPidAutotune(target, pwmLo, pwmHi, cycles);
+
+  } else if (cmd == "AGITATOR_ENC_STATUS") {
+    agitatorEncoderStatus();
+
   } else if (cmd == "AGITATOR_STOP") {
     agitatorStop();
     Serial.println(F("[AGITATOR] STOPPED"));
@@ -2685,7 +3207,11 @@ void setup() {
   pinMode(Mixer_agitatorMotor_REN, OUTPUT);
   pinMode(Mixer_agitatorMotor_LEN, OUTPUT);
   pinMode(Mixer_agitatorHallSensor, INPUT_PULLUP);
+  pinMode(Mixer_agitatorEncoderA, INPUT_PULLUP);
+  pinMode(Mixer_agitatorEncoderB, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(Mixer_agitatorEncoderA), agitatorEncoderOnA, RISING);
   agitatorHallLastState = agitatorHallHomeDetected();
+  agitatorEncoderHallPrevRaw = agitatorHallLastState;
   agitatorStop();
 
   // Mixer blast gates - hold RC neutral (1500 us) so the RoboClaw arms;
@@ -2730,6 +3256,9 @@ void loop() {
 
   // Emit a single serial line when the agitator hall sensor becomes active.
   agitatorMonitorHall();
+
+  // Non-blocking encoder home and forward-only PID position control.
+  agitatorPositionService();
 
   readSerial();
 

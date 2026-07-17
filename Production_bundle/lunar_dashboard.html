@@ -908,6 +908,28 @@
                 <div class="act-actions">
                   <button class="btn mini primary" id="btnAgMove">Move Spins</button>
                 </div>
+                <div class="act-row-4" style="margin-top:6px;">
+                  <div class="act-mini"><label>Enc Home PWM</label><input type="number" id="manAgEncHomePwm" min="1" max="255" value="120" /></div>
+                  <div class="act-mini"><label>Enc Target (0-63)</label><input type="number" id="manAgEncTarget" min="0" max="63" value="0" /></div>
+                  <div class="act-mini"><label>Goto Max PWM</label><input type="number" id="manAgEncPwmMax" min="45" max="255" value="220" /></div>
+                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncStatus">Encoder Status</button></div>
+                </div>
+                <div class="act-row-4">
+                  <div class="act-mini"><label>PID Kp</label><input type="number" id="manAgPidKp" min="0" step="0.01" value="6.0" /></div>
+                  <div class="act-mini"><label>PID Ki</label><input type="number" id="manAgPidKi" min="0" step="0.001" value="0.02" /></div>
+                  <div class="act-mini"><label>PID Kd</label><input type="number" id="manAgPidKd" min="0" step="0.01" value="0.35" /></div>
+                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncPid">Set PID</button></div>
+                </div>
+                <div class="act-row-4">
+                  <div class="act-mini"><label>Autotune PWM Low</label><input type="number" id="manAgAtPwmLo" min="45" max="255" value="70" /></div>
+                  <div class="act-mini"><label>Autotune PWM High</label><input type="number" id="manAgAtPwmHi" min="45" max="255" value="180" /></div>
+                  <div class="act-mini"><label>Autotune Cycles</label><input type="number" id="manAgAtCycles" min="4" max="20" value="6" /></div>
+                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncPidAutotune">PID Autotune</button></div>
+                </div>
+                <div class="act-actions">
+                  <button class="btn mini" id="btnAgEncHome">Encoder Home</button>
+                  <button class="btn mini primary" id="btnAgEncGoto">Goto Count</button>
+                </div>
               </div>
 
               <div class="act-block">
@@ -1342,6 +1364,25 @@
         pwm: Math.max(0, Math.min(255, Math.round(getNum("manAgPwm", 180)))),
         dir: getSel("manAgMoveDir", "FWD")
       }, "POST", 30000));
+      on("btnAgEncHome", "click", ()=>manualAction("Agitator encoder home", "/agitator/encoder/home", {
+        pwm: Math.max(1, Math.min(255, Math.round(getNum("manAgEncHomePwm", 120))))
+      }));
+      on("btnAgEncGoto", "click", ()=>manualAction("Agitator encoder goto", "/agitator/encoder/goto", {
+        target_count: Math.max(0, Math.min(63, Math.round(getNum("manAgEncTarget", 0)))),
+        pwm_max: Math.max(45, Math.min(255, Math.round(getNum("manAgEncPwmMax", 220))))
+      }, "POST", 30000));
+      on("btnAgEncPid", "click", ()=>manualAction("Agitator encoder PID", "/agitator/encoder/pid", {
+        kp: Math.max(0, Number(getNum("manAgPidKp", 6.0))),
+        ki: Math.max(0, Number(getNum("manAgPidKi", 0.02))),
+        kd: Math.max(0, Number(getNum("manAgPidKd", 0.35)))
+      }));
+      on("btnAgEncPidAutotune", "click", ()=>manualAction("Agitator PID autotune", "/agitator/encoder/pid_autotune", {
+        target_count: Math.max(0, Math.min(63, Math.round(getNum("manAgEncTarget", 0)))),
+        pwm_lo: Math.max(45, Math.min(255, Math.round(getNum("manAgAtPwmLo", 70)))),
+        pwm_hi: Math.max(45, Math.min(255, Math.round(getNum("manAgAtPwmHi", 180)))),
+        cycles: Math.max(4, Math.min(20, Math.round(getNum("manAgAtCycles", 6))))
+      }, "POST", 45000));
+      on("btnAgEncStatus", "click", ()=>manualAction("Agitator encoder status", "/agitator/encoder/status", {}, "POST"));
 
       on("btnVacSet", "click", ()=>manualAction("Vacuum set", "/vacuum/set", {
         percent: Math.max(0, Math.min(100, Math.round(getNum("manVacPct", 40))))

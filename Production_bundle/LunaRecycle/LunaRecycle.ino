@@ -1713,11 +1713,13 @@ void agitatorAutotuneService() {
   agitatorAutotunePeakMin = min(agitatorAutotunePeakMin, error);
 
   bool switched = false;
-  if (agitatorAutotuneState > 0 && error > AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS) {
+  // Relay logic: hold higher drive while below target (positive error), then
+  // switch to lower drive after crossing above target (negative error).
+  if (agitatorAutotuneState > 0 && error < -AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS) {
     agitatorAutotuneState = -1;
     agitatorDriveRawPwm(agitatorAutotunePwmLo, true);
     switched = true;
-  } else if (agitatorAutotuneState < 0 && error < -AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS) {
+  } else if (agitatorAutotuneState < 0 && error > AGITATOR_AUTOTUNE_NOISE_BAND_COUNTS) {
     agitatorAutotuneState = 1;
     agitatorDriveRawPwm(agitatorAutotunePwmHi, true);
     switched = true;

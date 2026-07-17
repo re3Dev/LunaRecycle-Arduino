@@ -44,6 +44,7 @@
  *                                  optionally shift to pwm_after after
  *                                  pwm_after_ms within each spin.
  *   AGITATOR_ENC_HOME [pwm]        Seek hall rising edge and zero encoder
+ *   AGITATOR_HOME_TRIM <0-63>      Set forward offset (counts) past hall for home
  *   AGITATOR_GOTO <0-63> [pwm_max] Forward-only PID move to encoder count
  *   AGITATOR_GOTO_TOL <undershoot_counts> <overshoot_counts>
  *                                  Set forward-only goto settle tolerances
@@ -251,6 +252,8 @@ const int AGITATOR_ENCODER_COUNTS_PER_REV = 64;
 const bool AGITATOR_ENCODER_B_HIGH_IS_FWD = true;
 const int AGITATOR_GOTO_DEFAULT_MAX_PWM = 220;
 const int AGITATOR_GOTO_MIN_PWM = 45;
+const int AGITATOR_HOME_TRIM_DEFAULT_COUNTS = 0;
+const int AGITATOR_HOME_TRIM_MAX_COUNTS = AGITATOR_ENCODER_COUNTS_PER_REV - 1;
 const int AGITATOR_GOTO_REACHED_TOL_COUNTS_DEFAULT = 1;
 const int AGITATOR_GOTO_OVERSHOOT_ALLOW_COUNTS_DEFAULT = 4;
 const int AGITATOR_GOTO_MAX_TOL_COUNTS = (AGITATOR_ENCODER_COUNTS_PER_REV / 2) - 1;
@@ -460,6 +463,8 @@ bool agitatorEncoderHallPrevRaw = false;
 bool agitatorHomeSeekActive = false;
 unsigned long agitatorHomeSeekStartMs = 0;
 int agitatorHomeSeekPwm = 0;
+bool agitatorHomeTrimActive = false;
+int agitatorHomeTrimCounts = AGITATOR_HOME_TRIM_DEFAULT_COUNTS;
 bool agitatorGotoActive = false;
 int agitatorGotoTargetMod = 0;
 int agitatorGotoMaxPwm = AGITATOR_GOTO_DEFAULT_MAX_PWM;
@@ -1758,15 +1763,18 @@ void agitatorAutotuneService() {
 
 void agitatorCancelClosedLoop() {
   agitatorHomeSeekActive = false;
+  agitatorHomeTrimActive = false;
   agitatorGotoActive = false;
   agitatorAutotuneActive = false;
   agitatorResetPidState();
 }
 
 void agitatorHomeFromHallRisingEdge() {
-  agitatorEncoderWrite(0);
+  // Keep hall as a repeatable index but map logical home by configured trim.
+  agitatorEncoderWrite(-agitatorHomeTrimCounts);
   agitatorEncoderHomed = true;
-  Serial.println(F("[AGITATOR_ENC] zeroed on hall rising edge"));
+  Serial.print(F("[AGITATOR_ENC] indexed on hall rising edge trim="));
+  Serial.println(agitatorHomeTrimCounts);
 }
 
 void agitatorStartEncoderHome(int pwm) {
@@ -1807,12 +1815,16 @@ void agitatorEncoderStatus() {
   Serial.print(agitatorGotoActive ? 1 : 0);
   Serial.print(F(" target="));
   Serial.print(agitatorGotoTargetMod);
+  Serial.print(F(" home_trim="));
+  Serial.print(agitatorHomeTrimCounts);
   Serial.print(F(" tol_under="));
   Serial.print(agitatorGotoReachedTolCounts);
   Serial.print(F(" tol_over="));
   Serial.print(agitatorGotoOvershootAllowCounts);
   Serial.print(F(" home_active="));
   Serial.print(agitatorHomeSeekActive ? 1 : 0);
+  Serial.print(F(" home_trim_active="));
+  Serial.print(agitatorHomeTrimActive ? 1 : 0);
   Serial.print(F(" autotune_active="));
   Serial.print(agitatorAutotuneActive ? 1 : 0);
   Serial.print(F(" pwm="));
@@ -1830,13 +1842,40 @@ void agitatorPositionService() {
       return;
     }
     if (agitatorHallHomeDetected()) {
-      agitatorStop();
       agitatorHomeSeekActive = false;
       agitatorHomeFromHallRisingEdge();
+      if (agitatorHomeTrimCounts > 0) {
+        agitatorHomeTrimActive = true;
+        agitatorDriveRawPwm(agitatorHomeSeekPwm, true);
+        Serial.print(F("[AGITATOR_ENC] homing trim advance counts="));
+        Serial.println(agitatorHomeTrimCounts);
+        return;
+      }
+      agitatorStop();
       Serial.println(F("[AGITATOR_ENC] homing complete"));
       return;
     }
     agitatorDriveRawPwm(agitatorHomeSeekPwm, true);
+  }
+
+  if (agitatorHomeTrimActive) {
+    if (now - agitatorHomeSeekStartMs > AGITATOR_HOME_TIMEOUT_MS) {
+      agitatorStop();
+      systemDiagFlagError();
+      Serial.println(F("[AGITATOR_ENC] ERROR: home trim timeout"));
+      return;
+    }
+    int currentPos = agitatorEncoderCurrentPos();
+    int remaining = (int)agitatorForwardErrorCounts(0, currentPos);
+    if (remaining <= agitatorGotoReachedTolCounts) {
+      agitatorStop();
+      agitatorHomeTrimActive = false;
+      agitatorEncoderWrite(0);
+      Serial.println(F("[AGITATOR_ENC] homing complete"));
+      return;
+    }
+    agitatorDriveRawPwm(agitatorHomeSeekPwm, true);
+    return;
   }
 
   if (agitatorAutotuneActive) {
@@ -2915,6 +2954,19 @@ void handleCommand(const String& cmd) {
       return;
     }
     agitatorStartGotoPosition(target, pwmMax);
+
+  } else if (cmd.startsWith("AGITATOR_HOME_TRIM ")) {
+    // AGITATOR_HOME_TRIM <0-63>
+    int trimCounts = cmd.substring(19).toInt();
+    if (trimCounts < 0 || trimCounts > AGITATOR_HOME_TRIM_MAX_COUNTS) {
+      systemDiagFlagError();
+      Serial.print(F("[AGITATOR_ENC] ERROR: home trim must be 0-"));
+      Serial.println(AGITATOR_HOME_TRIM_MAX_COUNTS);
+      return;
+    }
+    agitatorHomeTrimCounts = trimCounts;
+    Serial.print(F("[AGITATOR_ENC] home trim counts="));
+    Serial.println(agitatorHomeTrimCounts);
 
   } else if (cmd.startsWith("AGITATOR_PID ")) {
     // AGITATOR_PID <kp> <ki> <kd>

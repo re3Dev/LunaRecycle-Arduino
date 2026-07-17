@@ -1489,6 +1489,21 @@ def api_agitator_encoder_goto_tolerance():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/agitator/encoder/home_trim", methods=["POST"])
+def api_agitator_encoder_home_trim():
+    try:
+        if ratio_test.status().get("running"):
+            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
+        body = request.get_json(silent=True) or {}
+        counts = int(body.get("counts", 0))
+        if counts < 0 or counts > 63:
+            raise ValueError("counts must be 0-63")
+        lines = arduino.send(f"AGITATOR_HOME_TRIM {counts}")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/api/agitator/encoder/pid", methods=["POST"])
 def api_agitator_encoder_pid():
     try:

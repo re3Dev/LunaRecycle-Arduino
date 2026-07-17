@@ -915,6 +915,10 @@
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncStatus">Encoder Status</button></div>
                 </div>
                 <div class="act-row-4">
+                  <div class="act-mini"><label>Home Trim Counts</label><input type="number" id="manAgHomeTrimCounts" min="0" max="63" value="0" /></div>
+                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgHomeTrim">Set Home Trim</button></div>
+                </div>
+                <div class="act-row-4">
                   <div class="act-mini"><label>Goto Tol Under</label><input type="number" id="manAgGotoTolUnder" min="0" max="31" value="1" /></div>
                   <div class="act-mini"><label>Goto Tol Over</label><input type="number" id="manAgGotoTolOver" min="0" max="31" value="4" /></div>
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgGotoTol">Set Goto Tol</button></div>
@@ -1376,6 +1380,9 @@
         target_count: Math.max(0, Math.min(63, Math.round(getNum("manAgEncTarget", 0)))),
         pwm_max: Math.max(45, Math.min(255, Math.round(getNum("manAgEncPwmMax", 220))))
       }, "POST", 30000));
+      on("btnAgHomeTrim", "click", ()=>manualAction("Agitator home trim", "/agitator/encoder/home_trim", {
+        counts: Math.max(0, Math.min(63, Math.round(getNum("manAgHomeTrimCounts", 0))))
+      }));
       on("btnAgGotoTol", "click", ()=>manualAction("Agitator goto tolerance", "/agitator/encoder/goto_tolerance", {
         undershoot_counts: Math.max(0, Math.min(31, Math.round(getNum("manAgGotoTolUnder", 1)))),
         overshoot_counts: Math.max(0, Math.min(31, Math.round(getNum("manAgGotoTolOver", 4))))

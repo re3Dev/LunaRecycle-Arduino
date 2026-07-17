@@ -79,17 +79,18 @@
  *
  * -- Pin map (Mega 2560) ------------------------------------------------------
  *
- *   Gate servo L / R   ->  D9  / D10
- *   Screw motor ENA    ->  D3  (PWM)
- *   Screw motor IN1/2  ->  D7  / D8
+ *   Mixer motor (HW-039 / BTS7960):
+ *     RPWM / LPWM      ->  D10 / D11
+ *     R_EN / L_EN      ->  D27 / D28
  *   INA219             ->  D20 (SDA) / D21 (SCL)   [hardware I2C]
  *
  *   Mixer screw RPM (hall effect):
  *     US5881 sensor    ->  D2 (INT0)   [FALLING-edge pulse count]
  *
- *   Mixer agitator (2nd H-bridge channel):
- *     ENB / IN3 / IN4  ->  D11 / D42 / D43
- *     Hall home sensor ->  D44 (update if rewired)
+ *   Mixer agitator (HW-039 / BTS7960):
+ *     RPWM / LPWM      ->  D12 / D13
+ *     R_EN / L_EN      ->  D42 / D43
+ *     Hall home sensor ->  D50 (INPUT_PULLUP)
  *
  *   Mixer vacuum motor:
  *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
@@ -123,18 +124,21 @@
 const int Mixer_shredderGateLeftServoMotor_pin = 6;
 const int Mixer_shredderGateRightServoMotor_pin = 7;
 
-const int Mixer_motorController_ENA   = 10;   // ENA on module (Timer 2 PWM)
-const int Mixer_motorController_IN1   = 27;   // IN1 on module
-const int Mixer_motorController_IN2   = 28;   // IN2 on module
+// Mixer screw motor - HW-039/BTS7960 interface.
+const int Mixer_motorController_RPWM  = 10;   // RPWM (forward PWM)
+const int Mixer_motorController_LPWM  = 11;   // LPWM (reverse PWM)
+const int Mixer_motorController_REN   = 27;   // R_EN (enable high)
+const int Mixer_motorController_LEN   = 28;   // L_EN (enable high)
 
 // Mixer screw RPM - US5881 hall-effect sensor on D2 (INT0). Counts one pulse
 // per magnet per revolution via a hardware interrupt (pinmap_mega2560.md).
 const int Mixer_screwRotationSensor   = 2;    // D2 = INT0
 
-// Mixer agitator - second channel of the mixer H-bridge (Interface List).
-const int Mixer_agitatorMotor_ENB = 11;    // ENB enable (PWM)
-const int Mixer_agitatorMotor_IN3 = 42;   // IN3
-const int Mixer_agitatorMotor_IN4 = 43;   // IN4
+// Mixer agitator - HW-039/BTS7960 interface.
+const int Mixer_agitatorMotor_RPWM = 12;   // RPWM (forward PWM)
+const int Mixer_agitatorMotor_LPWM = 13;   // LPWM (reverse PWM)
+const int Mixer_agitatorMotor_REN  = 42;   // R_EN (enable high)
+const int Mixer_agitatorMotor_LEN  = 43;   // L_EN (enable high)
 const int Mixer_agitatorHallSensor = 50;  // Hall home sensor input (INPUT_PULLUP)
 
 // Trash conveyor (pinmap_mega2560.md).
@@ -583,23 +587,23 @@ void gateStatus() {
 // ============================================================================
 
 void motorApply() {
+  // BTS7960/HW-039: keep both enables HIGH while using RPWM/LPWM for direction.
+  digitalWrite(Mixer_motorController_REN, HIGH);
+  digitalWrite(Mixer_motorController_LEN, HIGH);
+
   if (motorPwm == 0) {
-    // Disable ENA first so output transistors are off before touching
-    // direction pins — prevents shoot-through on the L298N/TB6612.
-    analogWrite(Mixer_motorController_ENA, 0);
-    digitalWrite(Mixer_motorController_IN1, LOW);
-    digitalWrite(Mixer_motorController_IN2, LOW);
+    analogWrite(Mixer_motorController_RPWM, 0);
+    analogWrite(Mixer_motorController_LPWM, 0);
     return;
   }
-  // Set direction while ENA is still off, then enable.
+
   if (motorFwd) {
-    digitalWrite(Mixer_motorController_IN1, HIGH);
-    digitalWrite(Mixer_motorController_IN2, LOW);
+    analogWrite(Mixer_motorController_RPWM, motorPwm);
+    analogWrite(Mixer_motorController_LPWM, 0);
   } else {
-    digitalWrite(Mixer_motorController_IN1, LOW);
-    digitalWrite(Mixer_motorController_IN2, HIGH);
+    analogWrite(Mixer_motorController_RPWM, 0);
+    analogWrite(Mixer_motorController_LPWM, motorPwm);
   }
-  analogWrite(Mixer_motorController_ENA, motorPwm);
 }
 
 void motorStop() {
@@ -608,16 +612,17 @@ void motorStop() {
   Serial.println(F("[MOTOR] STOPPED"));
 }
 
-// MOTOR_TEST: bypass PWM entirely — drives ENA fully HIGH via digitalWrite
-// to isolate whether the H-bridge responds at all.
+// MOTOR_TEST: full-speed forward on the BTS7960 path for quick wiring checks.
 void motorTest() {
-  Serial.println(F("[MOTOR_TEST] Setting IN1=HIGH IN2=LOW ENA=HIGH (full on FWD)"));
-  digitalWrite(Mixer_motorController_IN1, HIGH);
-  digitalWrite(Mixer_motorController_IN2, LOW);
-  digitalWrite(Mixer_motorController_ENA, HIGH);
+  Serial.println(F("[MOTOR_TEST] Setting R_EN/L_EN HIGH, RPWM=255, LPWM=0 (full FWD)"));
+  digitalWrite(Mixer_motorController_REN, HIGH);
+  digitalWrite(Mixer_motorController_LEN, HIGH);
+  analogWrite(Mixer_motorController_RPWM, 255);
+  analogWrite(Mixer_motorController_LPWM, 0);
   delay(2000);
-  digitalWrite(Mixer_motorController_ENA, LOW);
-  Serial.println(F("[MOTOR_TEST] Done. ENA back LOW."));
+  analogWrite(Mixer_motorController_RPWM, 0);
+  analogWrite(Mixer_motorController_LPWM, 0);
+  Serial.println(F("[MOTOR_TEST] Done. RPWM/LPWM back to 0."));
 }
 
 void motorStatus() {
@@ -1485,19 +1490,17 @@ void shredderSetDirection(bool fwd) {
 // ============================================================================
 
 void agitatorNeutral() {
-  analogWrite(Mixer_agitatorMotor_ENB, 0);
-  digitalWrite(Mixer_agitatorMotor_IN3, LOW);
-  digitalWrite(Mixer_agitatorMotor_IN4, LOW);
+  digitalWrite(Mixer_agitatorMotor_REN, HIGH);
+  digitalWrite(Mixer_agitatorMotor_LEN, HIGH);
+  analogWrite(Mixer_agitatorMotor_RPWM, 0);
+  analogWrite(Mixer_agitatorMotor_LPWM, 0);
 }
 
 void agitatorSetDirectionPins(bool fwd) {
-  if (fwd) {
-    digitalWrite(Mixer_agitatorMotor_IN3, HIGH);
-    digitalWrite(Mixer_agitatorMotor_IN4, LOW);
-  } else {
-    digitalWrite(Mixer_agitatorMotor_IN3, LOW);
-    digitalWrite(Mixer_agitatorMotor_IN4, HIGH);
-  }
+  agitatorFwd = fwd;
+  // Direction is selected by active PWM lane on BTS7960.
+  analogWrite(Mixer_agitatorMotor_RPWM, 0);
+  analogWrite(Mixer_agitatorMotor_LPWM, 0);
 }
 
 void agitatorApply() {
@@ -1508,10 +1511,17 @@ void agitatorApply() {
     agitatorNeutral();
     return;
   }
-  agitatorSetDirectionPins(agitatorFwd);
+  digitalWrite(Mixer_agitatorMotor_REN, HIGH);
+  digitalWrite(Mixer_agitatorMotor_LEN, HIGH);
   int pwm = (int)((long)percent * 255 / 100);   // percent of full duty
   agitatorPwm = pwm;
-  analogWrite(Mixer_agitatorMotor_ENB, pwm);
+  if (agitatorFwd) {
+    analogWrite(Mixer_agitatorMotor_RPWM, pwm);
+    analogWrite(Mixer_agitatorMotor_LPWM, 0);
+  } else {
+    analogWrite(Mixer_agitatorMotor_RPWM, 0);
+    analogWrite(Mixer_agitatorMotor_LPWM, pwm);
+  }
 }
 
 void agitatorSet(int percent, bool fwd) {
@@ -1666,8 +1676,15 @@ void agitatorDriveRawPwm(int pwm, bool fwd) {
   }
   agitatorPercent = (int)((long)clampedPwm * 100 / 255);
   agitatorPwm = clampedPwm;
-  agitatorSetDirectionPins(agitatorFwd);
-  analogWrite(Mixer_agitatorMotor_ENB, clampedPwm);
+  digitalWrite(Mixer_agitatorMotor_REN, HIGH);
+  digitalWrite(Mixer_agitatorMotor_LEN, HIGH);
+  if (agitatorFwd) {
+    analogWrite(Mixer_agitatorMotor_RPWM, clampedPwm);
+    analogWrite(Mixer_agitatorMotor_LPWM, 0);
+  } else {
+    analogWrite(Mixer_agitatorMotor_RPWM, 0);
+    analogWrite(Mixer_agitatorMotor_LPWM, clampedPwm);
+  }
 }
 
 bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd, long pwmShiftAfterMs, int pwmAfter) {
@@ -2622,10 +2639,11 @@ void setup() {
   Mixer_shredderGateLeftServoMotor.write(GATE_CLOSE_DEG);
   Mixer_shredderGateRightServoMotor.write(GATE_CLOSE_DEG);
 
-  // Motor driver - start stopped
-  pinMode(Mixer_motorController_ENA, OUTPUT);
-  pinMode(Mixer_motorController_IN1, OUTPUT);
-  pinMode(Mixer_motorController_IN2, OUTPUT);
+  // Mixer motor driver (HW-039/BTS7960) - start stopped.
+  pinMode(Mixer_motorController_RPWM, OUTPUT);
+  pinMode(Mixer_motorController_LPWM, OUTPUT);
+  pinMode(Mixer_motorController_REN, OUTPUT);
+  pinMode(Mixer_motorController_LEN, OUTPUT);
   motorStop();
 
   // Mixer screw RPM - hall-effect sensor on D2 (INT0), FALLING-edge pulses.
@@ -2661,10 +2679,11 @@ void setup() {
   pinMode(Shredder_motorController_direction, OUTPUT);
   shredderOff();
 
-  // Mixer agitator (2nd H-bridge channel) - stopped at boot
-  pinMode(Mixer_agitatorMotor_ENB, OUTPUT);
-  pinMode(Mixer_agitatorMotor_IN3, OUTPUT);
-  pinMode(Mixer_agitatorMotor_IN4, OUTPUT);
+  // Mixer agitator driver (HW-039/BTS7960) - stopped at boot.
+  pinMode(Mixer_agitatorMotor_RPWM, OUTPUT);
+  pinMode(Mixer_agitatorMotor_LPWM, OUTPUT);
+  pinMode(Mixer_agitatorMotor_REN, OUTPUT);
+  pinMode(Mixer_agitatorMotor_LEN, OUTPUT);
   pinMode(Mixer_agitatorHallSensor, INPUT_PULLUP);
   agitatorHallLastState = agitatorHallHomeDetected();
   agitatorStop();

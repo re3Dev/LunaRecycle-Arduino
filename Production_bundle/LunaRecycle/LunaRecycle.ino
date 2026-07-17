@@ -44,8 +44,8 @@
  *                                  optionally shift to pwm_after after
  *                                  pwm_after_ms within each spin.
  *   AGITATOR_ENC_HOME [pwm]        Seek hall rising edge and zero encoder
- *   AGITATOR_HOME_TRIM <0-255>     Set forward offset (counts) past hall for home
- *   AGITATOR_GOTO <0-255> [pwm_max] Forward-only PID move to encoder count
+ *   AGITATOR_HOME_TRIM <0-3959>    Set forward offset (counts) past hall for home
+ *   AGITATOR_GOTO <0-3959> [pwm_max] Forward-only PID move to encoder count
  *   AGITATOR_GOTO_TOL <undershoot_counts> <overshoot_counts>
  *                                  Set forward-only goto settle tolerances
  *   AGITATOR_PID <kp> <ki> <kd>    Set PID gains for AGITATOR_GOTO
@@ -248,7 +248,7 @@ const unsigned long AGITATOR_REVERSE_PAUSE_MS = 5000; // [tune] full-stop pause 
 const unsigned long AGITATOR_DIR_SETTLE_MS = 250;     // [tune] hold new dir with PWM off before re-energizing
 const bool AGITATOR_HALL_ACTIVE_LOW = true;
 const unsigned long AGITATOR_MOVE_HALL_FAILSAFE_MS = 20000UL;
-const int AGITATOR_ENCODER_COUNTS_PER_REV = 256;
+const int AGITATOR_ENCODER_COUNTS_PER_REV = 3960;
 const bool AGITATOR_ENCODER_B_HIGH_IS_FWD = true;
 const int AGITATOR_GOTO_DEFAULT_MAX_PWM = 220;
 const int AGITATOR_GOTO_MIN_PWM = 45;
@@ -2962,7 +2962,7 @@ void handleCommand(const String& cmd) {
     agitatorStartEncoderHome(pwm);
 
   } else if (cmd.startsWith("AGITATOR_GOTO ")) {
-    // AGITATOR_GOTO <0-255> [pwm_max]
+    // AGITATOR_GOTO <0-3959> [pwm_max]
     String args = cmd.substring(14);
     args.trim();
     int sp = args.indexOf(' ');
@@ -2996,7 +2996,7 @@ void handleCommand(const String& cmd) {
     agitatorStartGotoPosition(target, pwmMax);
 
   } else if (cmd.startsWith("AGITATOR_HOME_TRIM ")) {
-    // AGITATOR_HOME_TRIM <0-255>
+    // AGITATOR_HOME_TRIM <0-3959>
     int trimCounts = cmd.substring(19).toInt();
     if (trimCounts < 0 || trimCounts > AGITATOR_HOME_TRIM_MAX_COUNTS) {
       systemDiagFlagError();

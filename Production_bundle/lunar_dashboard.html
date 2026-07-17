@@ -910,12 +910,12 @@
                 </div>
                 <div class="act-row-4" style="margin-top:6px;">
                   <div class="act-mini"><label>Enc Home PWM</label><input type="number" id="manAgEncHomePwm" min="1" max="255" value="120" /></div>
-                  <div class="act-mini"><label>Enc Target (0-255)</label><input type="number" id="manAgEncTarget" min="0" max="255" value="0" /></div>
+                  <div class="act-mini"><label>Enc Target (0-3959)</label><input type="number" id="manAgEncTarget" min="0" max="3959" value="0" /></div>
                   <div class="act-mini"><label>Goto Max PWM</label><input type="number" id="manAgEncPwmMax" min="45" max="255" value="220" /></div>
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncStatus">Encoder Status</button></div>
                 </div>
                 <div class="act-row-4">
-                  <div class="act-mini"><label>Home Trim Counts</label><input type="number" id="manAgHomeTrimCounts" min="0" max="255" value="0" /></div>
+                  <div class="act-mini"><label>Home Trim Counts</label><input type="number" id="manAgHomeTrimCounts" min="0" max="3959" value="0" /></div>
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgHomeTrim">Set Home Trim</button></div>
                 </div>
                 <div class="act-row-4">
@@ -1377,11 +1377,11 @@
         pwm: Math.max(1, Math.min(255, Math.round(getNum("manAgEncHomePwm", 120))))
       }));
       on("btnAgEncGoto", "click", ()=>manualAction("Agitator encoder goto", "/agitator/encoder/goto", {
-        target_count: Math.max(0, Math.min(255, Math.round(getNum("manAgEncTarget", 0)))),
+        target_count: Math.max(0, Math.min(3959, Math.round(getNum("manAgEncTarget", 0)))),
         pwm_max: Math.max(45, Math.min(255, Math.round(getNum("manAgEncPwmMax", 220))))
       }, "POST", 30000));
       on("btnAgHomeTrim", "click", ()=>manualAction("Agitator home trim", "/agitator/encoder/home_trim", {
-        counts: Math.max(0, Math.min(255, Math.round(getNum("manAgHomeTrimCounts", 0))))
+        counts: Math.max(0, Math.min(3959, Math.round(getNum("manAgHomeTrimCounts", 0))))
       }));
       on("btnAgGotoTol", "click", ()=>manualAction("Agitator goto tolerance", "/agitator/encoder/goto_tolerance", {
         undershoot_counts: Math.max(0, Math.min(31, Math.round(getNum("manAgGotoTolUnder", 1)))),
@@ -1393,7 +1393,7 @@
         kd: Math.max(0, Number(getNum("manAgPidKd", 0.35)))
       }));
       on("btnAgEncPidAutotune", "click", ()=>manualAction("Agitator PID autotune", "/agitator/encoder/pid_autotune", {
-        target_count: Math.max(0, Math.min(255, Math.round(getNum("manAgEncTarget", 0)))),
+        target_count: Math.max(0, Math.min(3959, Math.round(getNum("manAgEncTarget", 0)))),
         pwm_lo: Math.max(110, Math.min(255, Math.round(getNum("manAgAtPwmLo", 120)))),
         pwm_hi: Math.max(
           Math.max(45, Math.min(255, Math.round(getNum("manAgAtPwmLo", 120)))) + 20,

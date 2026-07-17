@@ -99,7 +99,7 @@
  *     RPWM / LPWM      ->  D12 / D13
  *     R_EN / L_EN      ->  D42 / D43
  *     Hall home sensor ->  D50 (INPUT_PULLUP)
- *     Encoder A / B    ->  D18 / D19 (A rising-edge count)
+ *     Encoder A / B    ->  D45 / D47 (A rising-edge count, polled)
  *
  *   Mixer vacuum motor:
  *     DS3502 digipot   ->  I2C (sets the vacuum motor speed, 0-127)
@@ -149,8 +149,8 @@ const int Mixer_agitatorMotor_LPWM = 13;   // LPWM (reverse PWM)
 const int Mixer_agitatorMotor_REN  = 42;   // R_EN (enable high)
 const int Mixer_agitatorMotor_LEN  = 43;   // L_EN (enable high)
 const int Mixer_agitatorHallSensor = 50;  // Hall home sensor input (INPUT_PULLUP)
-const int Mixer_agitatorEncoderA   = 18;  // Encoder channel A (interrupt)
-const int Mixer_agitatorEncoderB   = 19;  // Encoder channel B (direction sample)
+const int Mixer_agitatorEncoderA   = 45;  // Encoder channel A (polled rising-edge count)
+const int Mixer_agitatorEncoderB   = 47;  // Encoder channel B (direction sample)
 
 // Trash conveyor (pinmap_mega2560.md).
 const int TC_stepperMotorController_step   = 4;
@@ -454,6 +454,7 @@ int  agitatorPwm       = 0;      // 0..255
 bool agitatorFwd       = true;   // true = FWD, false = REV
 bool agitatorHallLastState = false;
 volatile long agitatorEncoderCount = 0;
+bool agitatorEncoderALastState = false;
 bool agitatorEncoderHomed = false;
 bool agitatorEncoderHallPrevRaw = false;
 bool agitatorHomeSeekActive = false;
@@ -1567,6 +1568,14 @@ void agitatorEncoderOnA() {
   } else {
     agitatorEncoderCount--;
   }
+}
+
+void agitatorEncoderPoll() {
+  bool aHigh = (digitalRead(Mixer_agitatorEncoderA) == HIGH);
+  if (aHigh && !agitatorEncoderALastState) {
+    agitatorEncoderOnA();
+  }
+  agitatorEncoderALastState = aHigh;
 }
 
 long agitatorEncoderRead() {
@@ -3254,7 +3263,7 @@ void setup() {
   pinMode(Mixer_agitatorHallSensor, INPUT_PULLUP);
   pinMode(Mixer_agitatorEncoderA, INPUT_PULLUP);
   pinMode(Mixer_agitatorEncoderB, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(Mixer_agitatorEncoderA), agitatorEncoderOnA, RISING);
+  agitatorEncoderALastState = (digitalRead(Mixer_agitatorEncoderA) == HIGH);
   agitatorHallLastState = agitatorHallHomeDetected();
   agitatorEncoderHallPrevRaw = agitatorHallLastState;
   agitatorStop();
@@ -3298,6 +3307,10 @@ void loop() {
   // Watch the hall-sensor interrupt for an EMI-driven edge storm and pause it if
   // it fires impossibly fast, so mixer-motor noise can never freeze the board.
   mixerGuardHall();
+
+  // Decode encoder A rising edges in the main loop so any digital pin mapping
+  // works (D45/D47 are not external-interrupt pins on Mega).
+  agitatorEncoderPoll();
 
   // Emit a single serial line when the agitator hall sensor becomes active.
   agitatorMonitorHall();

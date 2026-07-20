@@ -982,6 +982,7 @@ class DryerModbus:
         )
         self._lock = threading.Lock()
         self.connected = False
+        self._target_setpoint_reached_logged_for: Optional[int] = None
 
     def connect(self) -> bool:
         with self._lock:
@@ -997,6 +998,7 @@ class DryerModbus:
         with self._lock:
             self.client.close()
             self.connected = False
+            self._target_setpoint_reached_logged_for = None
 
     def read_input(self, addr: int, count: int = 1) -> list[int]:
         with self._lock:
@@ -1063,6 +1065,9 @@ class DryerModbus:
         after = self.get_run_state_raw()
         if before in (0, 100) and after in (0, 100) and before != after:
             event_logger.log_actuator_state("dryer", after == 100)
+            if after != 100:
+                with self._lock:
+                    self._target_setpoint_reached_logged_for = None
 
     # ── Composite reads ───────────────────────────────────────────────────────
 
@@ -1094,6 +1099,21 @@ class DryerModbus:
         dew_sp            = self.get_dewpoint_setpoint()
         status_word       = self.get_status_word()
         output_word       = self.get_output_word()
+
+        if run_state == 100:
+            with self._lock:
+                if process_temp >= process_sp and self._target_setpoint_reached_logged_for != process_sp:
+                    event_logger.log_actuator_action(
+                        "dryer",
+                        "TARGET_SETPOINT_REACHED",
+                        process_temp=process_temp,
+                        process_setpoint=process_sp,
+                        run_state=run_state,
+                    )
+                    self._target_setpoint_reached_logged_for = process_sp
+        else:
+            with self._lock:
+                self._target_setpoint_reached_logged_for = None
 
         return {
             "connected":          self.connected,

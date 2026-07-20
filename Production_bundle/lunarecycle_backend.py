@@ -709,6 +709,55 @@ class ArduinoBridge:
         elif cmd == "BLASTGATE_STOP":
             event_logger.log_actuator_action("blast_gate", "STOP")
 
+    @staticmethod
+    def _track_async_firmware_line(line: str) -> None:
+        if not isinstance(line, str) or not line:
+            return
+
+        if line.startswith("[TC] Sequence started - moving to "):
+            bag = line.replace("[TC] Sequence started - moving to ", "").strip()
+            event_logger.log_actuator_action("tc_stepper", "MOVE_TO_POSITION", target=bag)
+            return
+
+        if line.startswith("[TC] Limit hit - moving to Bag 1"):
+            event_logger.log_actuator_action("tc_stepper", "MOVE_TO_POSITION", target="Bag 1")
+            return
+
+        if line.startswith("[TC] Homed - at Bag 1"):
+            event_logger.log_actuator_action("tc_stepper", "HOME_COMPLETE", target="Bag 1")
+            return
+
+        if line.startswith("[TC] Next pick: "):
+            rest = line.replace("[TC] Next pick: ", "", 1).strip()
+            bag = rest.split("|", 1)[0].strip()
+            event_logger.log_actuator_action("tc_stepper", "MOVE_TO_POSITION", target=bag)
+            return
+
+        if line.startswith("[TC] Pick complete - moving to shredder"):
+            event_logger.log_actuator_action("tc_stepper", "MOVE_TO_SHREDDER")
+            return
+
+        if line.startswith("[TC] Dropped "):
+            event_logger.log_actuator_action("tc_stepper", "DROP_AT_SHREDDER", detail=line.replace("[TC] ", "", 1))
+            return
+
+        if line.startswith("[TC] Vacuum detected at servo "):
+            angle = line.replace("[TC] Vacuum detected at servo ", "").replace(" deg", "").strip()
+            event_logger.log_actuator_action("tc_stepper", "VACUUM_DETECTED", angle_deg=angle)
+            return
+
+        if line == "[TC] Servo down":
+            event_logger.log_actuator_action("tc_stepper", "SERVO_DOWN")
+            return
+
+        if line == "[TC] Servo up":
+            event_logger.log_actuator_action("tc_stepper", "SERVO_UP")
+            return
+
+        if line == "[TC] Manual move complete":
+            event_logger.log_actuator_action("tc_stepper", "MOVE_COMPLETE")
+            return
+
     def _reset_serial_locked(self) -> None:
         """Close and drop the serial handle. Caller must hold self._lock."""
         try:
@@ -770,6 +819,8 @@ class ArduinoBridge:
                     line = raw.decode("latin-1", errors="replace").strip()
                 if not line:
                     continue
+
+                self._track_async_firmware_line(line)
 
                 if is_status:
                     # STATUS prints a "[STATUS] ..." line immediately followed by

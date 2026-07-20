@@ -1026,6 +1026,7 @@ bool tcPickAtBag() {
   // Prime the vacuum pump, then descend; grab as soon as the cup seals.
   tcPumpOn();
   delay(TC_pumpPrimeMs);
+  Serial.println(F("[TC] Servo down"));
 
   bool bagGrabbed = false;
   for (int angle = TC_servoUpDeg; angle <= TC_servoDownDeg; angle += TC_servoPickStepDeg) {
@@ -1047,6 +1048,7 @@ bool tcPickAtBag() {
   }
 
   tcReturnServoToUp();
+  Serial.println(F("[TC] Servo up"));
   return true;
 }
 

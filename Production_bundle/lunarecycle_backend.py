@@ -672,10 +672,9 @@ class ArduinoBridge:
         # unique [BLASTGATE_DONE] marker. Give them a longer read window.
         is_blastgate = cmd.strip().upper().startswith("BLASTGATE_")
         is_agitator_move = cmd.strip().upper().startswith("AGITATOR_MOVE ")
-        is_agitator_cal = cmd.strip().upper().startswith("AGITATOR_ENC_CAL")
         if is_blastgate:
             total_timeout = BLASTGATE_TIMEOUT
-        elif is_agitator_move or is_agitator_cal:
+        elif is_agitator_move:
             total_timeout = AGITATOR_MOVE_TIMEOUT
         else:
             total_timeout = ARDUINO_TIMEOUT
@@ -683,7 +682,7 @@ class ArduinoBridge:
         # firmware streams every 500 ms; for non-STATUS commands it must be skipped
         # so it isn't mistaken for the command's response (e.g. TC_PUMP_ON replies
         # with a [TC] line, not [ENERGY]).
-        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[AGITATOR_ENC]", "[AGITATOR_ENC_CAL_DONE]", "[VACUUM]", "[BLASTGATE_DONE]", "[SIZERED]", "[SYSTEM]")
+        reply_tags = ("[STATUS]", "[GATE]", "[MOTOR]", "[TC]", "[SHREDDER]", "[AGITATOR]", "[AGITATOR_HOME]", "[VACUUM]", "[BLASTGATE_DONE]", "[SIZERED]", "[SYSTEM]")
 
         lines: list[str] = []
         seen_status = False
@@ -713,10 +712,6 @@ class ArduinoBridge:
                 if line.startswith("[ENERGY]"):
                     continue
                 lines.append(line)
-                if is_agitator_cal:
-                    if line.startswith("[AGITATOR_ENC_CAL_DONE]"):
-                        break
-                    continue
                 if line.startswith(reply_tags):
                     break
             else:
@@ -1442,8 +1437,8 @@ def api_agitator_status():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/api/agitator/encoder/home", methods=["POST"])
-def api_agitator_encoder_home():
+@app.route("/api/agitator/home", methods=["POST"])
+def api_agitator_home():
     try:
         if ratio_test.status().get("running"):
             return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
@@ -1451,132 +1446,49 @@ def api_agitator_encoder_home():
         pwm = int(body.get("pwm", 120))
         if pwm < 1 or pwm > 255:
             raise ValueError("pwm must be 1-255")
-        lines = arduino.send(f"AGITATOR_ENC_HOME {pwm}")
+        lines = arduino.send(f"AGITATOR_HOME {pwm}")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/api/agitator/encoder/calibrate", methods=["POST"])
-def api_agitator_encoder_calibrate():
-    try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        body = request.get_json(silent=True) or {}
-        pwm = int(body.get("pwm", 120))
-        revs = int(body.get("revs", 3))
-        if pwm < 45 or pwm > 255:
-            raise ValueError("pwm must be 45-255")
-        if revs < 1 or revs > 10:
-            raise ValueError("revs must be 1-10")
-        lines = arduino.send(f"AGITATOR_ENC_CAL {pwm} {revs}")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/encoder/goto", methods=["POST"])
-def api_agitator_encoder_goto():
+@app.route("/api/agitator/goto", methods=["POST"])
+def api_agitator_goto():
     try:
         if ratio_test.status().get("running"):
             return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         body = request.get_json(silent=True) or {}
         target_count = int(body["target_count"])
         pwm_max = int(body.get("pwm_max", 220))
-        if target_count < 0 or target_count > 7427:
-            raise ValueError("target_count must be 0-7427")
-        if pwm_max < 45 or pwm_max > 255:
-            raise ValueError("pwm_max must be 45-255")
+        if target_count < 0 or target_count > 7199:
+            raise ValueError("target_count must be 0-7199")
+        if pwm_max < 1 or pwm_max > 255:
+            raise ValueError("pwm_max must be 1-255")
         lines = arduino.send(f"AGITATOR_GOTO {target_count} {pwm_max}")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/api/agitator/encoder/goto_tolerance", methods=["POST"])
-def api_agitator_encoder_goto_tolerance():
-    try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        body = request.get_json(silent=True) or {}
-        undershoot_counts = int(body.get("undershoot_counts", 1))
-        overshoot_counts = int(body.get("overshoot_counts", 4))
-        if undershoot_counts < 0 or undershoot_counts > 31:
-            raise ValueError("undershoot_counts must be 0-31")
-        if overshoot_counts < 0 or overshoot_counts > 31:
-            raise ValueError("overshoot_counts must be 0-31")
-        cmd = f"AGITATOR_GOTO_TOL {undershoot_counts} {overshoot_counts}"
-        lines = arduino.send(cmd)
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/encoder/home_trim", methods=["POST"])
-def api_agitator_encoder_home_trim():
+@app.route("/api/agitator/home_trim", methods=["POST"])
+def api_agitator_home_trim():
     try:
         if ratio_test.status().get("running"):
             return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         body = request.get_json(silent=True) or {}
         counts = int(body.get("counts", 0))
-        if counts < 0 or counts > 7427:
-            raise ValueError("counts must be 0-7427")
+        if counts < 0 or counts > 7199:
+            raise ValueError("counts must be 0-7199")
         lines = arduino.send(f"AGITATOR_HOME_TRIM {counts}")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-@app.route("/api/agitator/encoder/pid", methods=["POST"])
-def api_agitator_encoder_pid():
+@app.route("/api/agitator/home/status", methods=["POST"])
+def api_agitator_home_status():
     try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        body = request.get_json(silent=True) or {}
-        kp = float(body["kp"])
-        ki = float(body["ki"])
-        kd = float(body["kd"])
-        if kp < 0 or ki < 0 or kd < 0:
-            raise ValueError("kp, ki, kd must be >= 0")
-        lines = arduino.send(f"AGITATOR_PID {kp:.6f} {ki:.6f} {kd:.6f}")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/encoder/pid_autotune", methods=["POST"])
-def api_agitator_encoder_pid_autotune():
-    try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        body = request.get_json(silent=True) or {}
-        target_count = int(body["target_count"])
-        pwm_lo = int(body.get("pwm_lo", 120))
-        pwm_hi = int(body.get("pwm_hi", 180))
-        cycles = int(body.get("cycles", 6))
-
-        if target_count < 0 or target_count > 7427:
-            raise ValueError("target_count must be 0-7427")
-        if pwm_lo < 110 or pwm_lo > 255:
-            raise ValueError("pwm_lo must be 110-255")
-        if pwm_hi < 45 or pwm_hi > 255:
-            raise ValueError("pwm_hi must be 45-255")
-        if pwm_hi < (pwm_lo + 20):
-            raise ValueError("pwm_hi must be at least pwm_lo+20")
-        if cycles < 4 or cycles > 20:
-            raise ValueError("cycles must be 4-20")
-
-        cmd = f"AGITATOR_PID_AUTOTUNE {target_count} {pwm_lo} {pwm_hi} {cycles}"
-        lines = arduino.send(cmd)
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/encoder/status", methods=["POST"])
-def api_agitator_encoder_status():
-    try:
-        lines = arduino.send("AGITATOR_ENC_STATUS")
+        lines = arduino.send("AGITATOR_HOME_STATUS")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500

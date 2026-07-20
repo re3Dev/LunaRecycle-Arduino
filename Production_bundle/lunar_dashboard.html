@@ -909,45 +909,18 @@
                   <button class="btn mini primary" id="btnAgMove">Move Spins</button>
                 </div>
                 <div class="act-row-4" style="margin-top:6px;">
-                  <div class="act-mini"><label>Enc Home PWM</label><input type="number" id="manAgEncHomePwm" min="1" max="255" value="120" /></div>
-                  <div class="act-mini"><label>Enc Target (0-7427)</label><input type="number" id="manAgEncTarget" min="0" max="7427" value="0" /></div>
-                  <div class="act-mini"><label>Goto Max PWM</label><input type="number" id="manAgEncPwmMax" min="45" max="255" value="220" /></div>
-                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncStatus">Encoder Status</button></div>
+                  <div class="act-mini"><label>Home Speed</label><input type="number" id="manAgHomePwm" min="1" max="255" value="120" /></div>
+                  <div class="act-mini"><label>Target Step (0-7199)</label><input type="number" id="manAgTarget" min="0" max="7199" value="0" /></div>
+                  <div class="act-mini"><label>Goto Max Speed</label><input type="number" id="manAgPwmMax" min="1" max="255" value="220" /></div>
+                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgHomeStatus">Home Status</button></div>
                 </div>
                 <div class="act-row-4">
-                  <div class="act-mini"><label>Cal PWM</label><input type="number" id="manAgEncCalPwm" min="45" max="255" value="120" /></div>
-                  <div class="act-mini"><label>Cal Revs</label><input type="number" id="manAgEncCalRevs" min="1" max="10" value="3" /></div>
-                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncCal">Measure CPR</button></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Measured CPR</label><input type="text" id="manAgEncCalAvg" value="—" readonly /></div>
-                  <div class="act-mini"><label>Configured CPR</label><input type="text" id="manAgEncCalCfg" value="—" readonly /></div>
-                  <div class="act-mini"><label>Cal Detail</label><input type="text" id="manAgEncCalDetail" value="—" readonly /></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Home Trim Counts</label><input type="number" id="manAgHomeTrimCounts" min="0" max="7427" value="0" /></div>
+                  <div class="act-mini"><label>Home Trim Counts</label><input type="number" id="manAgHomeTrimCounts" min="0" max="7199" value="0" /></div>
                   <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgHomeTrim">Set Home Trim</button></div>
                 </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Goto Tol Under</label><input type="number" id="manAgGotoTolUnder" min="0" max="31" value="1" /></div>
-                  <div class="act-mini"><label>Goto Tol Over</label><input type="number" id="manAgGotoTolOver" min="0" max="31" value="4" /></div>
-                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgGotoTol">Set Goto Tol</button></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>PID Kp</label><input type="number" id="manAgPidKp" min="0" step="0.01" value="6.0" /></div>
-                  <div class="act-mini"><label>PID Ki</label><input type="number" id="manAgPidKi" min="0" step="0.001" value="0.02" /></div>
-                  <div class="act-mini"><label>PID Kd</label><input type="number" id="manAgPidKd" min="0" step="0.01" value="0.35" /></div>
-                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncPid">Set PID</button></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Autotune PWM Low</label><input type="number" id="manAgAtPwmLo" min="110" max="255" value="120" /></div>
-                  <div class="act-mini"><label>Autotune PWM High</label><input type="number" id="manAgAtPwmHi" min="45" max="255" value="180" /></div>
-                  <div class="act-mini"><label>Autotune Cycles</label><input type="number" id="manAgAtCycles" min="4" max="20" value="6" /></div>
-                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgEncPidAutotune">PID Autotune</button></div>
-                </div>
                 <div class="act-actions">
-                  <button class="btn mini" id="btnAgEncHome">Encoder Home</button>
-                  <button class="btn mini primary" id="btnAgEncGoto">Goto Count</button>
+                  <button class="btn mini" id="btnAgHome">Home</button>
+                  <button class="btn mini primary" id="btnAgGoto">Goto Step</button>
                 </div>
               </div>
 
@@ -1166,10 +1139,6 @@
       vacuumPct: "—",
       bgLeft: "—",
       bgRight: "—",
-      agitatorCalAvg: "—",
-      agitatorCalConfigured: "—",
-      agitatorCalDetail: "—",
-
       // Size Reduction automation status (parsed from SR_STATUS)
       srRun: "—",
       srPhase: "—",
@@ -1335,21 +1304,6 @@
       return "";
     }
 
-    function captureAgitatorCalibration(res){
-      const lines = Array.isArray(res?.response) ? res.response : [];
-      if(!lines.length) return;
-      const avgLine = lines.find(line => /avg_counts_per_rev=/i.test(String(line))) || "";
-      const revLine = [...lines].reverse().find(line => /cal rev=/i.test(String(line))) || "";
-      const avgMatch = avgLine.match(/avg_counts_per_rev=([0-9.]+)/i);
-      const configuredMatch = avgLine.match(/configured=([0-9.]+)/i);
-      const revMatch = revLine.match(/rev=([0-9]+)\s+counts=([0-9.]+)/i);
-      if(avgMatch) S.agitatorCalAvg = avgMatch[1];
-      if(configuredMatch) S.agitatorCalConfigured = configuredMatch[1];
-      if(revMatch) S.agitatorCalDetail = `rev ${revMatch[1]}: ${revMatch[2]} counts`;
-      else if(avgLine) S.agitatorCalDetail = avgLine.replace(/^\[AGITATOR_ENC\]\s*/i, "");
-      renderArduino();
-    }
-
     async function manualAction(label, path, body=null, method="POST", timeoutMs=12000){
       if(!S.arduinoConnected){
         log(`${label}: Arduino not connected.`, "bad");
@@ -1402,55 +1356,17 @@
         pwm: Math.max(0, Math.min(255, Math.round(getNum("manAgPwm", 180)))),
         dir: getSel("manAgMoveDir", "FWD")
       }, "POST", 30000));
-      on("btnAgEncHome", "click", ()=>manualAction("Agitator encoder home", "/agitator/encoder/home", {
-        pwm: Math.max(1, Math.min(255, Math.round(getNum("manAgEncHomePwm", 120))))
+      on("btnAgHome", "click", ()=>manualAction("Agitator home", "/agitator/home", {
+        pwm: Math.max(1, Math.min(255, Math.round(getNum("manAgHomePwm", 120))))
       }));
-      on("btnAgEncCal", "click", async ()=>{
-        if(!S.arduinoConnected){
-          log("Agitator encoder calibrate: Arduino not connected.", "bad");
-          return;
-        }
-        try{
-          const res = await apiArduino("/agitator/encoder/calibrate", {
-            method: "POST",
-            body: JSON.stringify({
-              pwm: Math.max(45, Math.min(255, Math.round(getNum("manAgEncCalPwm", 120)))),
-              revs: Math.max(1, Math.min(10, Math.round(getNum("manAgEncCalRevs", 3))))
-            })
-          }, 45000);
-          captureAgitatorCalibration(res);
-          log("Agitator encoder calibrate OK.", "good", summarizeResponse(res));
-          await arduinoRefreshStatus(true);
-        }catch(err){
-          log(`Agitator encoder calibrate failed: ${err.message}`, "bad");
-        }
-      });
-      on("btnAgEncGoto", "click", ()=>manualAction("Agitator encoder goto", "/agitator/encoder/goto", {
-        target_count: Math.max(0, Math.min(7427, Math.round(getNum("manAgEncTarget", 0)))),
-        pwm_max: Math.max(45, Math.min(255, Math.round(getNum("manAgEncPwmMax", 220))))
+      on("btnAgGoto", "click", ()=>manualAction("Agitator goto", "/agitator/goto", {
+        target_count: Math.max(0, Math.min(7199, Math.round(getNum("manAgTarget", 0)))),
+        pwm_max: Math.max(1, Math.min(255, Math.round(getNum("manAgPwmMax", 220))))
       }, "POST", 30000));
-      on("btnAgHomeTrim", "click", ()=>manualAction("Agitator home trim", "/agitator/encoder/home_trim", {
-        counts: Math.max(0, Math.min(7427, Math.round(getNum("manAgHomeTrimCounts", 0))))
+      on("btnAgHomeTrim", "click", ()=>manualAction("Agitator home trim", "/agitator/home_trim", {
+        counts: Math.max(0, Math.min(7199, Math.round(getNum("manAgHomeTrimCounts", 0))))
       }));
-      on("btnAgGotoTol", "click", ()=>manualAction("Agitator goto tolerance", "/agitator/encoder/goto_tolerance", {
-        undershoot_counts: Math.max(0, Math.min(31, Math.round(getNum("manAgGotoTolUnder", 1)))),
-        overshoot_counts: Math.max(0, Math.min(31, Math.round(getNum("manAgGotoTolOver", 4))))
-      }));
-      on("btnAgEncPid", "click", ()=>manualAction("Agitator encoder PID", "/agitator/encoder/pid", {
-        kp: Math.max(0, Number(getNum("manAgPidKp", 6.0))),
-        ki: Math.max(0, Number(getNum("manAgPidKi", 0.02))),
-        kd: Math.max(0, Number(getNum("manAgPidKd", 0.35)))
-      }));
-      on("btnAgEncPidAutotune", "click", ()=>manualAction("Agitator PID autotune", "/agitator/encoder/pid_autotune", {
-        target_count: Math.max(0, Math.min(7427, Math.round(getNum("manAgEncTarget", 0)))),
-        pwm_lo: Math.max(110, Math.min(255, Math.round(getNum("manAgAtPwmLo", 120)))),
-        pwm_hi: Math.max(
-          Math.max(45, Math.min(255, Math.round(getNum("manAgAtPwmLo", 120)))) + 20,
-          Math.min(255, Math.round(getNum("manAgAtPwmHi", 180)))
-        ),
-        cycles: Math.max(4, Math.min(20, Math.round(getNum("manAgAtCycles", 6))))
-      }, "POST", 45000));
-      on("btnAgEncStatus", "click", ()=>manualAction("Agitator encoder status", "/agitator/encoder/status", {}, "POST"));
+      on("btnAgHomeStatus", "click", ()=>manualAction("Agitator home status", "/agitator/home/status", {}, "POST"));
 
       on("btnVacSet", "click", ()=>manualAction("Vacuum set", "/vacuum/set", {
         percent: Math.max(0, Math.min(100, Math.round(getNum("manVacPct", 40))))
@@ -1668,10 +1584,6 @@
         S.ratioTest.mixer_every_cycles > 0 ? String(S.ratioTest.mixer_every_cycles) : "—"
       );
       setText("ratioTestMsgText", S.ratioTest.message || "—");
-      setText("manAgEncCalAvg", S.agitatorCalAvg || "—");
-      setText("manAgEncCalCfg", S.agitatorCalConfigured || "—");
-      setText("manAgEncCalDetail", S.agitatorCalDetail || "—");
-
       const rtChip = document.getElementById("ratioTestChip");
       if(rtChip){
         const running = !!S.ratioTest.running;

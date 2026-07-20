@@ -9,9 +9,9 @@
 // ============================================================================
 // Pin Assignments (Change variables as needed)
 // ============================================================================
-int pin_PUL  = 2;   // To Driver PUL+ (PUL- to GND)
-int pin_DIR  = 3;   // To Driver DIR+ (DIR- to GND)
-int pin_HALL = 18;  // To Hall Signal Out (Natively supports hardware interrupts)
+int pin_PUL  = 19;  // To Driver PUL+ (PUL- to GND)
+int pin_DIR  = 18;  // To Driver DIR+ (DIR- to GND)
+int pin_HALL = 3;   // To Hall Signal Out (hardware interrupt input)
 
 // ============================================================================
 // Gearbox & Driver Physical Parameters
@@ -136,7 +136,7 @@ void setup() {
   SubsystemStepper.setAcceleration(4000); // Sharp, responsive stopping deceleration
   SubsystemStepper.disableOutputs();
 
-  // Attach our precise hardware edge-detection routine to Pin 18
+  // Attach our precise hardware edge-detection routine to the hall input pin
   attachInterrupt(digitalPinToInterrupt(pin_HALL), hallSensorISR, HALL_TRIGGER_EDGE);
 
   Serial.println(F("[SYSTEM] Test Environment Online. Send 'G' to run cycle."));

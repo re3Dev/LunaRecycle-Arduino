@@ -1519,16 +1519,6 @@
       setText("rtVacText", String(S.ratioTest.vacuum_pct ?? "—"));
       setText("rtHomeCountText", String(S.ratioTest.home_sequences_completed ?? "—"));
       setText("ratioTestMsgText", S.ratioTest.message || "—");
-      const ratioTestInput = document.getElementById("ratioTestSpinsPerHome");
-      if(ratioTestInput && document.activeElement !== ratioTestInput){
-        const nextSpins = S.ratioTest.spins_per_home ?? Number(ratioTestInput.value || 10);
-        ratioTestInput.value = String(nextSpins);
-      }
-      const ratioTestVacuumInput = document.getElementById("ratioTestVacuumPct");
-      if(ratioTestVacuumInput && document.activeElement !== ratioTestVacuumInput){
-        const nextVacuum = S.ratioTest.vacuum_pct ?? Number(ratioTestVacuumInput.value || 15);
-        ratioTestVacuumInput.value = String(nextVacuum);
-      }
       const rtChip = document.getElementById("ratioTestChip");
       if(rtChip){
         const running = !!S.ratioTest.running;

@@ -38,16 +38,10 @@
  *   SHREDDER_ON / _OFF     Switch the shredder motor on / off
  *   SHREDDER_FWD / _REV    Set shredder motor direction
  *
- *   AGITATOR_SET <0-100> <FWD|REV>  Run air-lock stepper continuously as % speed
- *   AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV] [pwm_after_ms] [pwm_after]
- *                                  Run N hall-indexed rotations, then park at
- *                                  the configured trim offset past the hall mark.
- *   AGITATOR_HOME [pwm]            Seek hall edge, zero step position, park at trim
- *   AGITATOR_HOME_TRIM <0-7199>    Set step offset past hall for logical home
- *   AGITATOR_GOTO <0-7199> [pwm_max] Forward-only indexed move after homing
- *   AGITATOR_HOME_STATUS           Print hall/home/stepper status
+ *   AGITATOR_HOME                  Seek hall edge, then park at the fixed
+ *                                  offset past the hall mark.
  *   AGITATOR_STOP                  Stop the agitator immediately
- *   AGITATOR_STATUS                Print agitator speed / direction / home state
+ *   AGITATOR_STATUS                Print air-lock home state
  *
  *   VACUUM_SET <0-100>              Run vacuum motor (DS3502 wiper 0-127)
  *   VACUUM_STOP                     Stop the vacuum motor
@@ -230,22 +224,17 @@ const unsigned long ShredderReversePauseMs = 5000;
 // so the drive latches a stable direction signal before it energizes.
 const unsigned long ShredderDirSettleMs = 1000;   // [tune]
 
-// Mixer agitator / air lock stepper. Legacy AGITATOR_SET percent and
-// AGITATOR_MOVE pwm values now scale the configured maximum step rate.
+// Mixer agitator / air lock stepper. This production build only exposes the
+// fixed-speed hall-home sequence used by the isolated integration sketch.
 const bool AGITATOR_HALL_ACTIVE_LOW = true;
 const int AGITATOR_HALL_TRIGGER_EDGE = FALLING;
-const unsigned long AGITATOR_MOVE_HALL_FAILSAFE_MS = 20000UL;
 const float AGITATOR_GEAR_RATIO = 18.0f;
 const float AGITATOR_DRIVER_PULSES_PER_REV = 400.0f;
 const float AGITATOR_MAX_OUTPUT_RPM = 17.0f;
 const float AGITATOR_HOME_OFFSET_DEGREES = 5.75f;
 const long AGITATOR_STEPS_PER_REV = (long)(AGITATOR_GEAR_RATIO * AGITATOR_DRIVER_PULSES_PER_REV);
 const float AGITATOR_MAX_SPEED_HZ = (AGITATOR_MAX_OUTPUT_RPM * AGITATOR_GEAR_RATIO * AGITATOR_DRIVER_PULSES_PER_REV) / 60.0f;
-const int AGITATOR_GOTO_DEFAULT_MAX_PWM = 220;
-const int AGITATOR_GOTO_MIN_PWM = 1;
-const int AGITATOR_HOME_TRIM_DEFAULT_COUNTS = (int)((AGITATOR_HOME_OFFSET_DEGREES / 360.0f) * AGITATOR_GEAR_RATIO * AGITATOR_DRIVER_PULSES_PER_REV);
-const int AGITATOR_HOME_TRIM_MAX_COUNTS = AGITATOR_STEPS_PER_REV - 1;
-const unsigned long AGITATOR_GOTO_TIMEOUT_MS = 12000UL;
+const long AGITATOR_HOME_OFFSET_STEPS = (long)((AGITATOR_HOME_OFFSET_DEGREES / 360.0f) * AGITATOR_GEAR_RATIO * AGITATOR_DRIVER_PULSES_PER_REV);
 const unsigned long AGITATOR_HOME_TIMEOUT_MS = 12000UL;
 const float AGITATOR_ACCEL_STEPS_PER_SEC2 = 4000.0f;
 const int AGITATOR_MIN_PULSE_WIDTH_US = 2;
@@ -436,29 +425,15 @@ unsigned long systemDiagBootHoldUntilMs = 0;
 
 enum AgitatorRunState {
   AGITATOR_IDLE,
-  AGITATOR_CONTINUOUS,
   AGITATOR_SEEKING_HALL,
   AGITATOR_MOVING_TO_TARGET
 };
 
-enum AgitatorAction {
-  AGITATOR_ACTION_NONE,
-  AGITATOR_ACTION_HOME,
-  AGITATOR_ACTION_GOTO
-};
-
-int  agitatorPercent = 0;      // 0..100 legacy speed field
-int  agitatorPwm     = 0;      // 0..255 legacy speed field
-bool agitatorFwd     = true;   // true = FWD, false = REV
 bool agitatorHallLastState = false;
 volatile bool agitatorHallEdgeDetected = false;
 bool agitatorHomed = false;
-int agitatorHomeTrimCounts = AGITATOR_HOME_TRIM_DEFAULT_COUNTS;
-int agitatorGotoTargetMod = 0;
-int agitatorGotoMaxPwm = AGITATOR_GOTO_DEFAULT_MAX_PWM;
 unsigned long agitatorMotionStartMs = 0;
 AgitatorRunState agitatorRunState = AGITATOR_IDLE;
-AgitatorAction agitatorPendingAction = AGITATOR_ACTION_NONE;
 
 // Mixer vacuum motor state (DS3502 digipot).
 int  vacuumPercent   = 0;        // 0..100
@@ -1547,7 +1522,6 @@ int agitatorStepCurrentPos() {
 
 const __FlashStringHelper* agitatorStateName() {
   switch (agitatorRunState) {
-    case AGITATOR_CONTINUOUS: return F("CONT");
     case AGITATOR_SEEKING_HALL: return F("SEEK");
     case AGITATOR_MOVING_TO_TARGET: return F("TARGET");
     case AGITATOR_IDLE:
@@ -1564,7 +1538,6 @@ bool agitatorHallHomeDetected() {
 }
 
 void agitatorCancelClosedLoop() {
-  agitatorPendingAction = AGITATOR_ACTION_NONE;
 }
 
 void agitatorDisableMotion() {
@@ -1573,124 +1546,46 @@ void agitatorDisableMotion() {
   Mixer_agitatorStepper.setSpeed(0.0f);
   Mixer_agitatorStepper.disableOutputs();
   agitatorRunState = AGITATOR_IDLE;
-  agitatorPercent = 0;
-  agitatorPwm = 0;
 }
 
-void agitatorPrepareContinuous(float speedHz, bool fwd, int pwmEquivalent, int percentEquivalent) {
-  float clampedHz = speedHz;
-  if (clampedHz < 1.0f) clampedHz = 1.0f;
+void agitatorStartSeekMotion() {
   Mixer_agitatorStepper.enableOutputs();
-  Mixer_agitatorStepper.setMaxSpeed(clampedHz);
-  Mixer_agitatorStepper.setSpeed(fwd ? clampedHz : -clampedHz);
-  agitatorFwd = fwd;
-  agitatorPwm = constrain(pwmEquivalent, 0, 255);
-  agitatorPercent = constrain(percentEquivalent, 0, 100);
-}
-
-void agitatorSet(int percent, bool fwd) {
-  int target = constrain(percent, 0, 100);
-  agitatorCancelClosedLoop();
-  if (target == 0) {
-    agitatorDisableMotion();
-    return;
-  }
-
-  float speedHz = agitatorPercentToSpeedHz(target);
-  int pwmEquivalent = (int)((long)target * 255L / 100L);
-  agitatorPrepareContinuous(speedHz, fwd, pwmEquivalent, target);
-  agitatorRunState = AGITATOR_CONTINUOUS;
-}
-
-void agitatorDriveRawPwm(int pwm, bool fwd) {
-  int clampedPwm = constrain(pwm, 0, 255);
-  agitatorCancelClosedLoop();
-  if (clampedPwm == 0) {
-    agitatorDisableMotion();
-    return;
-  }
-
-  float speedHz = agitatorPwmToSpeedHz(clampedPwm);
-  int percentEquivalent = (int)((long)clampedPwm * 100L / 255L);
-  agitatorPrepareContinuous(speedHz, fwd, clampedPwm, percentEquivalent);
-  agitatorRunState = AGITATOR_CONTINUOUS;
+  Mixer_agitatorStepper.setMaxSpeed(AGITATOR_MAX_SPEED_HZ);
+  Mixer_agitatorStepper.setSpeed(AGITATOR_MAX_SPEED_HZ);
 }
 
 void agitatorHomeFromHallRisingEdge() {
   Mixer_agitatorStepper.setCurrentPosition(0);
   agitatorHomed = true;
-  Serial.print(F("[AGITATOR_HOME] indexed on hall trim="));
-  Serial.println(agitatorHomeTrimCounts);
+  Serial.print(F("[AGITATOR_HOME] indexed on hall offset="));
+  Serial.println(AGITATOR_HOME_OFFSET_STEPS);
 }
 
-void agitatorStartHome(int pwm) {
-  int seekPwm = constrain(pwm, AGITATOR_GOTO_MIN_PWM, 255);
+void agitatorStartHome() {
   agitatorDisableMotion();
-  agitatorPendingAction = AGITATOR_ACTION_HOME;
-  agitatorGotoMaxPwm = seekPwm;
   agitatorMotionStartMs = millis();
   agitatorHallEdgeDetected = false;
   agitatorHomed = false;
-  agitatorDriveRawPwm(seekPwm, true);
+  agitatorStartSeekMotion();
   agitatorRunState = AGITATOR_SEEKING_HALL;
-  Serial.print(F("[AGITATOR_HOME] homing start pwm="));
-  Serial.println(seekPwm);
+  Serial.println(F("[AGITATOR_HOME] sequence start"));
 }
 
-void agitatorStartGotoPosition(int targetMod, int maxPwm) {
-  int clampedTarget = constrain(targetMod, 0, AGITATOR_STEPS_PER_REV - 1);
-  int clampedMaxPwm = constrain(maxPwm, AGITATOR_GOTO_MIN_PWM, 255);
-  long currentAbs = Mixer_agitatorStepper.currentPosition();
-  int currentMod = agitatorStepCurrentPos();
-  long forwardDelta = (long)((clampedTarget - currentMod + AGITATOR_STEPS_PER_REV) % AGITATOR_STEPS_PER_REV);
-
-  agitatorDisableMotion();
-  agitatorPendingAction = AGITATOR_ACTION_GOTO;
-  agitatorGotoTargetMod = clampedTarget;
-  agitatorGotoMaxPwm = clampedMaxPwm;
-  agitatorMotionStartMs = millis();
-
-  float speedHz = agitatorPwmToSpeedHz(clampedMaxPwm);
-  if (speedHz < 1.0f) speedHz = 1.0f;
-  Mixer_agitatorStepper.enableOutputs();
-  Mixer_agitatorStepper.setMaxSpeed(speedHz);
-  Mixer_agitatorStepper.setAcceleration(AGITATOR_ACCEL_STEPS_PER_SEC2);
-  Mixer_agitatorStepper.moveTo(currentAbs + forwardDelta);
-  agitatorFwd = true;
-  agitatorPwm = clampedMaxPwm;
-  agitatorPercent = (int)((long)clampedMaxPwm * 100L / 255L);
-  agitatorRunState = AGITATOR_MOVING_TO_TARGET;
-
-  Serial.print(F("[AGITATOR_HOME] goto start target="));
-  Serial.print(agitatorGotoTargetMod);
-  Serial.print(F(" max_pwm="));
-  Serial.println(agitatorGotoMaxPwm);
-}
-
-void agitatorHomeStatus() {
-  Serial.print(F("[AGITATOR_HOME] homed="));
+void agitatorStatus() {
+  Serial.print(F("[AGITATOR] homed="));
   Serial.print(agitatorHomed ? 1 : 0);
+  Serial.print(F(" hall="));
+  Serial.print(agitatorHallHomeDetected() ? F("HOME") : F("AWAY"));
   Serial.print(F(" pos="));
   Serial.print(agitatorStepCurrentPos());
-  Serial.print(F(" abs="));
-  Serial.print(Mixer_agitatorStepper.currentPosition());
-  Serial.print(F(" target="));
-  Serial.print(agitatorGotoTargetMod);
-  Serial.print(F(" home_trim="));
-  Serial.print(agitatorHomeTrimCounts);
+  Serial.print(F(" offset="));
+  Serial.print(AGITATOR_HOME_OFFSET_STEPS);
   Serial.print(F(" state="));
-  Serial.print(agitatorStateName());
-  Serial.print(F(" pwm="));
-  Serial.println(agitatorPwm);
+  Serial.println(agitatorStateName());
 }
 
 void agitatorPositionService() {
   unsigned long now = millis();
-
-  if (agitatorRunState == AGITATOR_CONTINUOUS) {
-    Mixer_agitatorStepper.runSpeed();
-    return;
-  }
 
   if (agitatorRunState == AGITATOR_SEEKING_HALL) {
     if (now - agitatorMotionStartMs > AGITATOR_HOME_TIMEOUT_MS) {
@@ -1705,70 +1600,31 @@ void agitatorPositionService() {
 
     agitatorHallEdgeDetected = false;
     agitatorHomeFromHallRisingEdge();
-
-    if (agitatorHomeTrimCounts == 0) {
-      agitatorDisableMotion();
-      Serial.println(F("[AGITATOR_HOME] homing complete"));
-      return;
-    }
-
-    float speedHz = agitatorPwmToSpeedHz(agitatorGotoMaxPwm);
-    if (speedHz < 1.0f) speedHz = 1.0f;
-    Mixer_agitatorStepper.setMaxSpeed(speedHz);
     Mixer_agitatorStepper.setAcceleration(AGITATOR_ACCEL_STEPS_PER_SEC2);
-    Mixer_agitatorStepper.moveTo(agitatorHomeTrimCounts);
+    Mixer_agitatorStepper.moveTo(AGITATOR_HOME_OFFSET_STEPS);
     agitatorRunState = AGITATOR_MOVING_TO_TARGET;
     return;
   }
 
   if (agitatorRunState != AGITATOR_MOVING_TO_TARGET) return;
 
-  if (now - agitatorMotionStartMs > AGITATOR_GOTO_TIMEOUT_MS) {
+  if (now - agitatorMotionStartMs > AGITATOR_HOME_TIMEOUT_MS) {
     agitatorDisableMotion();
     systemDiagFlagError();
-    Serial.println(F("[AGITATOR_HOME] ERROR: goto timeout"));
+    Serial.println(F("[AGITATOR_HOME] ERROR: offset timeout"));
     return;
   }
 
   Mixer_agitatorStepper.run();
   if (Mixer_agitatorStepper.distanceToGo() != 0) return;
 
-  AgitatorAction completedAction = agitatorPendingAction;
-  int finalPos = agitatorStepCurrentPos();
   agitatorDisableMotion();
-  agitatorPendingAction = AGITATOR_ACTION_NONE;
-
-  if (completedAction == AGITATOR_ACTION_HOME) {
-    Serial.println(F("[AGITATOR_HOME] homing complete"));
-  } else if (completedAction == AGITATOR_ACTION_GOTO) {
-    Serial.print(F("[AGITATOR_HOME] goto reached target="));
-    Serial.print(agitatorGotoTargetMod);
-    Serial.print(F(" pos="));
-    Serial.println(finalPos);
-  }
+  Serial.println(F("[AGITATOR_HOME] homing complete"));
 }
 
 void agitatorStop() {
   agitatorCancelClosedLoop();
   agitatorDisableMotion();
-}
-
-void agitatorStatus() {
-  Serial.print(F("[AGITATOR] percent="));
-  Serial.print(agitatorPercent);
-  Serial.print(F(" pwm="));
-  Serial.print(agitatorPwm);
-  Serial.print(F(" dir="));
-  Serial.print(agitatorFwd ? F("FWD") : F("REV"));
-  Serial.print(F(" hall="));
-  bool hallHome = (digitalRead(Mixer_agitatorHallSensor) == (AGITATOR_HALL_ACTIVE_LOW ? LOW : HIGH));
-  Serial.print(hallHome ? F("HOME") : F("AWAY"));
-  Serial.print(F(" pos="));
-  Serial.print(agitatorStepCurrentPos());
-  Serial.print(F(" homed="));
-  Serial.print(agitatorHomed ? 1 : 0);
-  Serial.print(F(" state="));
-  Serial.println(agitatorStateName());
 }
 
 bool agitatorStopOrEStopRequested() {
@@ -1788,7 +1644,7 @@ bool agitatorStopOrEStopRequested() {
     }
 
     if (safetyCmdBuffer == "ESTOP") {
-      // Mirror main ESTOP behavior so a blocked AGITATOR_MOVE remains
+      // Mirror main ESTOP behavior so an air-lock home sequence remains
       // safety-stop responsive while waiting on hall transitions.
       systemDiagFlagError(30000UL);
       motorStop();
@@ -1826,114 +1682,6 @@ void agitatorMonitorHall() {
   }
 }
 
-bool agitatorRunUntilHallState(bool targetHome,
-                               bool fwd,
-                               unsigned long moveStart,
-                               long pwmShiftAfterMs,
-                               int pwmAfter,
-                               bool& pwmShifted) {
-  while (agitatorHallHomeDetected() != targetHome) {
-    if (agitatorStopOrEStopRequested()) return false;
-    if (!pwmShifted && pwmShiftAfterMs >= 0 && millis() - moveStart >= (unsigned long)pwmShiftAfterMs) {
-      agitatorDriveRawPwm(pwmAfter, fwd);
-      pwmShifted = true;
-    }
-    if (millis() - moveStart > AGITATOR_MOVE_HALL_FAILSAFE_MS) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: hall wait timeout"));
-      return false;
-    }
-    Mixer_agitatorStepper.runSpeed();
-    agitatorMonitorHall();
-  }
-  return true;
-}
-
-void agitatorDriveRawPwm(int pwm, bool fwd) {
-  int clampedPwm = constrain(pwm, 0, 255);
-  agitatorFwd = fwd;
-  if (clampedPwm == 0) {
-    agitatorPercent = 0;
-    agitatorPwm = 0;
-    agitatorNeutral();
-    return;
-  }
-  agitatorPercent = (int)((long)clampedPwm * 100 / 255);
-  agitatorPwm = clampedPwm;
-  digitalWrite(Mixer_agitatorMotor_REN, HIGH);
-  digitalWrite(Mixer_agitatorMotor_LEN, HIGH);
-  if (agitatorFwd) {
-    analogWrite(Mixer_agitatorMotor_RPWM, clampedPwm);
-    analogWrite(Mixer_agitatorMotor_LPWM, 0);
-  } else {
-    analogWrite(Mixer_agitatorMotor_RPWM, 0);
-    analogWrite(Mixer_agitatorMotor_LPWM, clampedPwm);
-  }
-}
-
-bool agitatorMoveSpins(int spins, unsigned long pauseMs, int pwm, bool fwd, long pwmShiftAfterMs, int pwmAfter) {
-  agitatorDisableMotion();
-  if (spins <= 0) return true;
-  for (int i = 0; i < spins; i++) {
-    unsigned long moveStart = millis();
-    bool pwmShifted = (pwmShiftAfterMs < 0);
-    agitatorDriveRawPwm(pwm, fwd);
-
-    // If we are currently on the home mark, first move off it so the next
-    // home transition is one complete revolution.
-    if (agitatorHallHomeDetected()) {
-      if (!agitatorRunUntilHallState(false, fwd, moveStart, pwmShiftAfterMs, pwmAfter, pwmShifted)) {
-        agitatorStop();
-        Serial.println(F("[AGITATOR] MOVE stopped"));
-        return false;
-      }
-    }
-
-    if (!agitatorRunUntilHallState(true, fwd, moveStart, pwmShiftAfterMs, pwmAfter, pwmShifted)) {
-      agitatorStop();
-      Serial.println(F("[AGITATOR] MOVE stopped"));
-      return false;
-    }
-
-    agitatorHomeFromHallRisingEdge();
-    if (agitatorHomeTrimCounts != 0) {
-      float stepSpeedHz = agitatorPwmToSpeedHz(agitatorPwm);
-      if (stepSpeedHz < 1.0f) stepSpeedHz = 1.0f;
-      long trimTarget = fwd ? agitatorHomeTrimCounts : -agitatorHomeTrimCounts;
-      Mixer_agitatorStepper.setMaxSpeed(stepSpeedHz);
-      Mixer_agitatorStepper.setAcceleration(AGITATOR_ACCEL_STEPS_PER_SEC2);
-      Mixer_agitatorStepper.moveTo(trimTarget);
-      while (Mixer_agitatorStepper.distanceToGo() != 0) {
-        if (agitatorStopOrEStopRequested()) {
-          agitatorStop();
-          Serial.println(F("[AGITATOR] MOVE stopped"));
-          return false;
-        }
-        if (millis() - moveStart > AGITATOR_MOVE_HALL_FAILSAFE_MS) {
-          systemDiagFlagError();
-          Serial.println(F("[AGITATOR] ERROR: offset move timeout"));
-          agitatorStop();
-          Serial.println(F("[AGITATOR] MOVE stopped"));
-          return false;
-        }
-        Mixer_agitatorStepper.run();
-      }
-    }
-
-    agitatorDisableMotion();
-    if (pauseMs > 0 && i < spins - 1) {
-      unsigned long startPause = millis();
-      while (millis() - startPause < pauseMs) {
-        if (agitatorStopOrEStopRequested()) {
-          agitatorStop();
-          Serial.println(F("[AGITATOR] MOVE stopped"));
-          return false;
-        }
-      }
-    }
-  }
-  return true;
-}
 
 // ============================================================================
 //  Mixer Vacuum Motor - DS3502 digital-pot speed control (I2C)
@@ -2521,197 +2269,8 @@ void handleCommand(const String& cmd) {
     shredderSetDirection(false);
     Serial.println(F("[SHREDDER] Direction REV"));
 
-  } else if (cmd.startsWith("AGITATOR_SET ")) {
-    // AGITATOR_SET <0-100> <FWD|REV>
-    String args = cmd.substring(13);
-    args.trim();
-    int sp = args.indexOf(' ');
-    if (sp < 0) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: usage AGITATOR_SET <0-100> <FWD|REV>"));
-      return;
-    }
-    int pct = args.substring(0, sp).toInt();
-    String dir = args.substring(sp + 1);
-    dir.trim();
-    if (pct < 0 || pct > 100) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: percent must be 0-100"));
-      return;
-    }
-    if (dir != "FWD" && dir != "REV") {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: direction must be FWD or REV"));
-      return;
-    }
-    agitatorSet(pct, dir == "FWD");
-    agitatorStatus();
-
-  } else if (cmd.startsWith("AGITATOR_MOVE ")) {
-    // AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV] [pwm_after_ms] [pwm_after]
-    String args = cmd.substring(14);
-    args.trim();
-
-    String tok[6];
-    int tokCount = 0;
-    int idx = 0;
-    while (idx < args.length() && tokCount < 6) {
-      while (idx < args.length() && args.charAt(idx) == ' ') idx++;
-      if (idx >= args.length()) break;
-      int end = args.indexOf(' ', idx);
-      if (end < 0) end = args.length();
-      tok[tokCount++] = args.substring(idx, end);
-      idx = end + 1;
-    }
-
-    if (tokCount < 3) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: usage AGITATOR_MOVE <spins> <pause_ms> <pwm> [FWD|REV] [pwm_after_ms] [pwm_after]"));
-      return;
-    }
-
-    int spins = tok[0].toInt();
-    long pauseMs = tok[1].toInt();
-    int pwm = tok[2].toInt();
-
-    bool fwd = agitatorFwd;
-    int extraIdx = 3;
-    if (tokCount > 3) {
-      String dir = tok[3];
-      dir.trim();
-      if (dir != "FWD" && dir != "REV") {
-        // Direction omitted; keep current direction and treat token 4 as
-        // pwm_after_ms for backward-compatible compact syntax.
-      } else {
-        fwd = (dir == "FWD");
-        extraIdx = 4;
-      }
-    }
-
-    long pwmShiftAfterMs = -1;
-    int pwmAfter = 0;
-    int remaining = tokCount - extraIdx;
-    if (remaining != 0 && remaining != 2) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: optional pwm_after args must be <pwm_after_ms> <pwm_after>"));
-      return;
-    }
-    if (remaining == 2) {
-      pwmShiftAfterMs = tok[extraIdx].toInt();
-      pwmAfter = tok[extraIdx + 1].toInt();
-    }
-
-    if (spins <= 0) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: spins must be > 0"));
-      return;
-    }
-    if (pauseMs < 0 || pauseMs > 600000L) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: pause_ms must be 0-600000"));
-      return;
-    }
-    if (pwm < 0 || pwm > 255) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: pwm must be 0-255"));
-      return;
-    }
-    if (pwmShiftAfterMs > 600000L) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: pwm_after_ms must be 0-600000"));
-      return;
-    }
-    if (pwmShiftAfterMs >= 0 && (pwmAfter < 0 || pwmAfter > 255)) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR] ERROR: pwm_after must be 0-255"));
-      return;
-    }
-
-    bool ok = agitatorMoveSpins(spins, (unsigned long)pauseMs, pwm, fwd, pwmShiftAfterMs, pwmAfter);
-    if (ok) {
-      Serial.print(F("[AGITATOR] MOVE done spins="));
-      Serial.print(spins);
-      Serial.print(F(" pause_ms="));
-      Serial.print((unsigned long)pauseMs);
-      Serial.print(F(" pwm="));
-      Serial.print(pwm);
-      if (pwmShiftAfterMs >= 0) {
-        Serial.print(F(" pwm_after_ms="));
-        Serial.print((unsigned long)pwmShiftAfterMs);
-        Serial.print(F(" pwm_after="));
-        Serial.print(pwmAfter);
-      }
-      Serial.print(F(" dir="));
-      Serial.println(fwd ? F("FWD") : F("REV"));
-      agitatorStatus();
-    } else {
-      systemDiagFlagError();
-    }
-
-  } else if (cmd.startsWith("AGITATOR_HOME")) {
-    // AGITATOR_HOME [pwm]
-    int pwm = 120;
-    if (cmd.length() > 13) {
-      String arg = cmd.substring(13);
-      arg.trim();
-      if (arg.length() > 0) pwm = arg.toInt();
-    }
-    if (pwm < 1 || pwm > 255) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR_HOME] ERROR: pwm must be 1-255"));
-      return;
-    }
-    agitatorStartHome(pwm);
-
-  } else if (cmd.startsWith("AGITATOR_GOTO ")) {
-    // AGITATOR_GOTO <0-7427> [pwm_max]
-    String args = cmd.substring(14);
-    args.trim();
-    int sp = args.indexOf(' ');
-    int target = 0;
-    int pwmMax = AGITATOR_GOTO_DEFAULT_MAX_PWM;
-    if (sp < 0) {
-      target = args.toInt();
-    } else {
-      target = args.substring(0, sp).toInt();
-      pwmMax = args.substring(sp + 1).toInt();
-    }
-
-    if (!agitatorHomed) {
-      systemDiagFlagError();
-      Serial.println(F("[AGITATOR_HOME] ERROR: not homed (run AGITATOR_HOME first)"));
-      return;
-    }
-    if (target < 0 || target >= AGITATOR_STEPS_PER_REV) {
-      systemDiagFlagError();
-      Serial.print(F("[AGITATOR_HOME] ERROR: target must be 0-"));
-      Serial.println(AGITATOR_STEPS_PER_REV - 1);
-      return;
-    }
-    if (pwmMax < AGITATOR_GOTO_MIN_PWM || pwmMax > 255) {
-      systemDiagFlagError();
-      Serial.print(F("[AGITATOR_HOME] ERROR: pwm_max must be "));
-      Serial.print(AGITATOR_GOTO_MIN_PWM);
-      Serial.println(F("-255"));
-      return;
-    }
-    agitatorStartGotoPosition(target, pwmMax);
-
-  } else if (cmd.startsWith("AGITATOR_HOME_TRIM ")) {
-    // AGITATOR_HOME_TRIM <0-7199>
-    int trimCounts = cmd.substring(19).toInt();
-    if (trimCounts < 0 || trimCounts > AGITATOR_HOME_TRIM_MAX_COUNTS) {
-      systemDiagFlagError();
-      Serial.print(F("[AGITATOR_HOME] ERROR: home trim must be 0-"));
-      Serial.println(AGITATOR_HOME_TRIM_MAX_COUNTS);
-      return;
-    }
-    agitatorHomeTrimCounts = trimCounts;
-    Serial.print(F("[AGITATOR_HOME] home trim counts="));
-    Serial.println(agitatorHomeTrimCounts);
-
-  } else if (cmd == "AGITATOR_HOME_STATUS") {
-    agitatorHomeStatus();
+  } else if (cmd == "AGITATOR_HOME") {
+    agitatorStartHome();
 
   } else if (cmd == "AGITATOR_STOP") {
     agitatorStop();

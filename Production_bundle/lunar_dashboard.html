@@ -890,38 +890,12 @@
 
               <div class="act-block">
                 <div class="act-head">Air Lock</div>
-                <div class="act-row">
-                  <div class="act-mini"><label>Percent (0-100)</label><input type="number" id="manAgPct" min="0" max="100" value="60" /></div>
-                  <div class="act-mini"><label>Dir</label><select id="manAgDir"><option>FWD</option><option>REV</option></select></div>
-                </div>
                 <div class="act-actions">
-                  <button class="btn mini primary" id="btnAgSet">Set</button>
+                  <button class="btn mini primary" id="btnAgHome">Run Home Sequence</button>
                   <button class="btn mini" id="btnAgStop">Stop</button>
                   <button class="btn mini" id="btnAgStatus">Status</button>
                 </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Spins</label><input type="number" id="manAgSpins" min="1" value="1" /></div>
-                  <div class="act-mini"><label>Pause ms</label><input type="number" id="manAgPause" min="0" value="0" /></div>
-                  <div class="act-mini"><label>PWM</label><input type="number" id="manAgPwm" min="0" max="255" value="180" /></div>
-                  <div class="act-mini"><label>Move Dir</label><select id="manAgMoveDir"><option>FWD</option><option selected>REV</option></select></div>
-                </div>
-                <div class="act-actions">
-                  <button class="btn mini primary" id="btnAgMove">Move Spins</button>
-                </div>
-                <div class="act-row-4" style="margin-top:6px;">
-                  <div class="act-mini"><label>Home Speed</label><input type="number" id="manAgHomePwm" min="1" max="255" value="120" /></div>
-                  <div class="act-mini"><label>Target Step (0-7199)</label><input type="number" id="manAgTarget" min="0" max="7199" value="0" /></div>
-                  <div class="act-mini"><label>Goto Max Speed</label><input type="number" id="manAgPwmMax" min="1" max="255" value="220" /></div>
-                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgHomeStatus">Home Status</button></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Home Trim Counts</label><input type="number" id="manAgHomeTrimCounts" min="0" max="7199" value="0" /></div>
-                  <div class="act-mini"><label>&nbsp;</label><button class="btn mini" id="btnAgHomeTrim">Set Home Trim</button></div>
-                </div>
-                <div class="act-actions">
-                  <button class="btn mini" id="btnAgHome">Home</button>
-                  <button class="btn mini primary" id="btnAgGoto">Goto Step</button>
-                </div>
+                <div class="hint" style="margin-top:6px;">Runs the fixed hall-seek and offset parking sequence from the isolated air-lock integration sketch.</div>
               </div>
 
               <div class="act-block">
@@ -974,35 +948,11 @@
                   <div class="kv"><div class="k">Live Position (E)</div><div class="v" id="mrLiveEText">—</div></div>
                   <div class="kv"><div class="k">Extruder Rot Total</div><div class="v" id="mrRotTotalText">—</div></div>
                 </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Extruder Rot/Cycle</label><input type="number" id="rtExtRotCycle" min="0.01" step="0.01" value="10" /></div>
-                  <div class="act-mini"><label>Consecutive Air Lock Rot</label><input type="number" id="rtAgRotCycle" min="1" step="1" value="1" /></div>
-                  <div class="act-mini"><label>Air Lock PWM</label><input type="number" id="rtAgPwm" min="0" max="255" value="180" /></div>
-                  <div class="act-mini"><label>Air Lock Dir</label><select id="rtAgDir"><option>FWD</option><option>REV</option></select></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Air Lock Pause ms</label><input type="number" id="rtAgPauseMs" min="0" step="1" value="0" /></div>
-                  <div class="act-mini"><label>Air Lock PWM After ms</label><input type="number" id="rtAgPwmAfterStartMs" min="-1" step="1" value="-1" /></div>
-                  <div class="act-mini"><label>Air Lock PWM After</label><input type="number" id="rtAgPwmAfter" min="0" max="255" step="1" value="120" /></div>
-                  <div class="act-mini"><label>Blower Motor %</label><input type="number" id="rtVacPct" min="0" max="100" step="1" value="40" /></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Mixer Every Cycles</label><input type="number" id="rtMixerEveryCycles" min="0" step="1" value="0" /></div>
-                  <div class="act-mini"><label>Mixer State</label><input type="text" id="rtMixerStateText" value="DISABLED" readonly /></div>
-                </div>
-                <div class="act-row-4">
-                  <div class="act-mini"><label>Pending Ext Rot</label><input type="text" id="rtPendingText" value="—" readonly /></div>
-                  <div class="act-mini"><label>Air Lock Rot Cmd</label><input type="text" id="rtAgCmdText" value="—" readonly /></div>
-                  <div class="act-mini"><label>Air Lock Cycles</label><input type="text" id="rtAgCycleText" value="—" readonly /></div>
-                  <div class="act-mini"><label>Mixer Start At</label><input type="text" id="rtMixerStartText" value="—" readonly /></div>
-                </div>
                 <div class="act-actions">
-                  <button class="btn mini primary" id="btnRatioTestStart">Start Ratio Test</button>
-                  <button class="btn mini danger" id="btnRatioTestStop">Stop Ratio Test</button>
                   <button class="btn mini" id="btnRatioTestRefresh">Refresh</button>
-                  <span class="statechip" id="ratioTestChip">IDLE</span>
+                  <span class="statechip warn" id="ratioTestChip">DISABLED</span>
                 </div>
-                <div class="hint" id="ratioTestMsgText" style="margin-top:4px;">—</div>
+                <div class="hint" id="ratioTestMsgText" style="margin-top:4px;">Air-lock ratio test is disabled in the home-sequence-only production build.</div>
               </div>
             </div>
           </div>
@@ -1344,29 +1294,9 @@
       on("btnShredderFwd", "click", ()=>manualAction("Shredder FWD", "/shredder/fwd"));
       on("btnShredderRev", "click", ()=>manualAction("Shredder REV", "/shredder/rev"));
 
-      on("btnAgSet", "click", ()=>manualAction("Agitator set", "/agitator/set", {
-        percent: Math.max(0, Math.min(100, Math.round(getNum("manAgPct", 60)))),
-        dir: getSel("manAgDir", "FWD")
-      }));
       on("btnAgStop", "click", ()=>manualAction("Agitator stop", "/agitator/stop"));
       on("btnAgStatus", "click", ()=>manualAction("Agitator status", "/agitator/status", {}, "POST"));
-      on("btnAgMove", "click", ()=>manualAction("Agitator move", "/agitator/move", {
-        spins: Math.max(1, Math.round(getNum("manAgSpins", 1))),
-        pause_ms: Math.max(0, Math.round(getNum("manAgPause", 0))),
-        pwm: Math.max(0, Math.min(255, Math.round(getNum("manAgPwm", 180)))),
-        dir: getSel("manAgMoveDir", "FWD")
-      }, "POST", 30000));
-      on("btnAgHome", "click", ()=>manualAction("Agitator home", "/agitator/home", {
-        pwm: Math.max(1, Math.min(255, Math.round(getNum("manAgHomePwm", 120))))
-      }));
-      on("btnAgGoto", "click", ()=>manualAction("Agitator goto", "/agitator/goto", {
-        target_count: Math.max(0, Math.min(7199, Math.round(getNum("manAgTarget", 0)))),
-        pwm_max: Math.max(1, Math.min(255, Math.round(getNum("manAgPwmMax", 220))))
-      }, "POST", 30000));
-      on("btnAgHomeTrim", "click", ()=>manualAction("Agitator home trim", "/agitator/home_trim", {
-        counts: Math.max(0, Math.min(7199, Math.round(getNum("manAgHomeTrimCounts", 0))))
-      }));
-      on("btnAgHomeStatus", "click", ()=>manualAction("Agitator home status", "/agitator/home/status", {}, "POST"));
+      on("btnAgHome", "click", ()=>manualAction("Agitator home", "/agitator/home", {}, "POST", 20000));
 
       on("btnVacSet", "click", ()=>manualAction("Vacuum set", "/vacuum/set", {
         percent: Math.max(0, Math.min(100, Math.round(getNum("manVacPct", 40))))
@@ -1402,8 +1332,6 @@
       on("btnFeOff", "click", ()=>manualAction("Fume extractor off", "/fe/off"));
       on("btnFeStatus", "click", ()=>manualAction("Fume extractor status", "/fe/status", null, "GET"));
 
-      on("btnRatioTestStart", "click", ratioTestStart);
-      on("btnRatioTestStop", "click", ratioTestStop);
       on("btnRatioTestRefresh", "click", ()=>ratioTestRefreshStatus(false));
     }
 
@@ -2077,41 +2005,11 @@
     }
 
     async function ratioTestStart(){
-      if(!S.arduinoConnected){
-        log("Arduino not connected.", "bad");
-        return;
-      }
-      const body = {
-        extruder_rotations_per_cycle: Math.max(0.01, getNum("rtExtRotCycle", 10)),
-        agitator_consecutive_rotations: Math.max(1, Math.round(getNum("rtAgRotCycle", 1))),
-        agitator_pwm: Math.max(0, Math.min(255, Math.round(getNum("rtAgPwm", 180)))),
-        agitator_pwm_after_start_ms: Math.max(-1, Math.round(getNum("rtAgPwmAfterStartMs", -1))),
-        agitator_pwm_after: Math.max(0, Math.min(255, Math.round(getNum("rtAgPwmAfter", 120)))),
-        agitator_dir: getSel("rtAgDir", "FWD"),
-        agitator_pause_ms: Math.max(0, Math.round(getNum("rtAgPauseMs", 0))),
-        vacuum_pct: Math.max(0, Math.min(100, Math.round(getNum("rtVacPct", 40)))),
-        mixer_every_cycles: Math.max(0, Math.round(getNum("rtMixerEveryCycles", 0))),
-      };
-      try{
-        await apiArduino("/extrusion_ratio_test/start", {
-          method: "POST",
-          body: JSON.stringify(body),
-        }, 12000);
-        log("Extruder ratio test started.", "good");
-        await ratioTestRefreshStatus(true);
-      }catch(err){
-        log(`Extruder ratio test start failed: ${err.message}`, "bad");
-      }
+      log("Extruder ratio test is disabled in this build.", "warn");
     }
 
     async function ratioTestStop(){
-      try{
-        await apiArduino("/extrusion_ratio_test/stop", { method: "POST" });
-        log("Extruder ratio test stop requested.", "warn");
-        await ratioTestRefreshStatus(true);
-      }catch(err){
-        log(`Extruder ratio test stop failed: ${err.message}`, "bad");
-      }
+      log("Extruder ratio test is disabled in this build.", "warn");
     }
 
     async function dryerConnect(){

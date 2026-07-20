@@ -45,7 +45,6 @@ ARDUINO_PORT     = os.environ.get("LUNA_ARDUINO_PORT", "/dev/ttyACM0")
 ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "115200"))
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
 BLASTGATE_TIMEOUT = 12.0  # blast gate moves are blocking and can take seconds
-AGITATOR_MOVE_TIMEOUT = float(os.environ.get("LUNA_AGITATOR_MOVE_TIMEOUT", "45.0"))
 # How often the background supervisor retries a dropped Arduino connection.
 RECONNECT_INTERVAL = float(os.environ.get("LUNA_RECONNECT_INTERVAL", "3.0"))
 
@@ -605,22 +604,6 @@ class ArduinoBridge:
             event_logger.log_actuator_state("tc_pump", False)
         elif cmd == "AGITATOR_STOP":
             event_logger.log_actuator_state("agitator", False)
-        elif cmd == "AGITATOR_SET":
-            pct = 0
-            if len(parts) > 1:
-                try:
-                    pct = int(parts[1])
-                except ValueError:
-                    pct = 0
-            event_logger.log_actuator_state("agitator", pct > 0)
-        elif cmd == "AGITATOR_MOVE":
-            pwm = 0
-            if len(parts) > 3:
-                try:
-                    pwm = int(parts[3])
-                except ValueError:
-                    pwm = 0
-            event_logger.log_actuator_state("agitator", pwm > 0)
         elif cmd == "VACUUM_STOP":
             event_logger.log_actuator_state("vacuum", False)
         elif cmd == "VACUUM_SET":
@@ -671,11 +654,8 @@ class ArduinoBridge:
         # few seconds) and emit several [BLASTGATE ...] lines, ending with a
         # unique [BLASTGATE_DONE] marker. Give them a longer read window.
         is_blastgate = cmd.strip().upper().startswith("BLASTGATE_")
-        is_agitator_move = cmd.strip().upper().startswith("AGITATOR_MOVE ")
         if is_blastgate:
             total_timeout = BLASTGATE_TIMEOUT
-        elif is_agitator_move:
-            total_timeout = AGITATOR_MOVE_TIMEOUT
         else:
             total_timeout = ARDUINO_TIMEOUT
         # Tags that mark a genuine command reply. [ENERGY] is async telemetry the
@@ -1355,25 +1335,8 @@ def api_shredder_rev():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-# ─────────────────────────────────────────────────────────────────────────────#  Routes — Mixer agitator (2nd H-bridge channel)
+# ─────────────────────────────────────────────────────────────────────────────#  Routes — Air lock home sequence
 # ──────────────────────────────────────────────────────────────────
-
-@app.route("/api/agitator/set", methods=["POST"])
-def api_agitator_set():
-    try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        percent = int(request.json["percent"])
-        direction = str(request.json.get("dir", "FWD")).strip().upper()
-        if percent < 0 or percent > 100:
-            raise ValueError("percent must be 0-100")
-        if direction not in ("FWD", "REV"):
-            raise ValueError("dir must be FWD or REV")
-        lines = arduino.send(f"AGITATOR_SET {percent} {direction}")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
 
 @app.route("/api/agitator/stop", methods=["POST"])
 def api_agitator_stop():
@@ -1381,48 +1344,6 @@ def api_agitator_stop():
         if ratio_test.status().get("running"):
             return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         lines = arduino.send("AGITATOR_STOP")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/move", methods=["POST"])
-def api_agitator_move():
-    try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        spins = int(request.json["spins"])
-        pause_ms = int(request.json.get("pause_ms", 0))
-        pwm = int(request.json["pwm"])
-        direction = str(request.json.get("dir", "FWD")).strip().upper()
-        pwm_after_start_ms = request.json.get("pwm_after_start_ms")
-        pwm_after = request.json.get("pwm_after")
-
-        if spins <= 0:
-            raise ValueError("spins must be > 0")
-        if pause_ms < 0 or pause_ms > 600000:
-            raise ValueError("pause_ms must be 0-600000")
-        if pwm < 0 or pwm > 255:
-            raise ValueError("pwm must be 0-255")
-        if direction not in ("FWD", "REV"):
-            raise ValueError("dir must be FWD or REV")
-
-        use_pwm_shift = pwm_after_start_ms is not None or pwm_after is not None
-        if use_pwm_shift:
-            if pwm_after_start_ms is None or pwm_after is None:
-                raise ValueError("pwm_after_start_ms and pwm_after must both be provided")
-            pwm_after_start_ms = int(pwm_after_start_ms)
-            pwm_after = int(pwm_after)
-            if pwm_after_start_ms < 0 or pwm_after_start_ms > 600000:
-                raise ValueError("pwm_after_start_ms must be 0-600000")
-            if pwm_after < 0 or pwm_after > 255:
-                raise ValueError("pwm_after must be 0-255")
-
-        cmd = f"AGITATOR_MOVE {spins} {pause_ms} {pwm} {direction}"
-        if use_pwm_shift:
-            cmd += f" {pwm_after_start_ms} {pwm_after}"
-
-        lines = arduino.send(cmd)
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -1442,53 +1363,7 @@ def api_agitator_home():
     try:
         if ratio_test.status().get("running"):
             return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        body = request.get_json(silent=True) or {}
-        pwm = int(body.get("pwm", 120))
-        if pwm < 1 or pwm > 255:
-            raise ValueError("pwm must be 1-255")
-        lines = arduino.send(f"AGITATOR_HOME {pwm}")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/goto", methods=["POST"])
-def api_agitator_goto():
-    try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        body = request.get_json(silent=True) or {}
-        target_count = int(body["target_count"])
-        pwm_max = int(body.get("pwm_max", 220))
-        if target_count < 0 or target_count > 7199:
-            raise ValueError("target_count must be 0-7199")
-        if pwm_max < 1 or pwm_max > 255:
-            raise ValueError("pwm_max must be 1-255")
-        lines = arduino.send(f"AGITATOR_GOTO {target_count} {pwm_max}")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/home_trim", methods=["POST"])
-def api_agitator_home_trim():
-    try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
-        body = request.get_json(silent=True) or {}
-        counts = int(body.get("counts", 0))
-        if counts < 0 or counts > 7199:
-            raise ValueError("counts must be 0-7199")
-        lines = arduino.send(f"AGITATOR_HOME_TRIM {counts}")
-        return jsonify({"ok": True, "response": lines})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
-
-
-@app.route("/api/agitator/home/status", methods=["POST"])
-def api_agitator_home_status():
-    try:
-        lines = arduino.send("AGITATOR_HOME_STATUS")
+        lines = arduino.send("AGITATOR_HOME")
         return jsonify({"ok": True, "response": lines})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -2016,40 +1891,26 @@ class FeedController:
 
             use_moonraker_gating = moonraker.enabled
             if use_moonraker_gating:
-                # Moonraker-controlled mode: keep vacuum continuously on and only
-                # run the agitator when extrusion is actively happening.
+                # Moonraker-controlled mode: keep vacuum continuously on while
+                # extrusion is active; the air lock is no longer pulsed here.
                 with self._lock:
                     self.phase = "METERING"
-                    self.message = "Metering gated by live extruder activity."
+                    self.message = "Metering gated by live extruder activity (vacuum only)."
                 while not self._stop.is_set():
                     snap = moonraker.snapshot()
                     want = bool(snap.get("extruding"))
                     connected = bool(snap.get("connected"))
                     with self._lock:
-                        on = self.agitator_on
                         self.moonraker_connected = connected
                         self.moonraker_extruding = want
-                    if want and not on:
-                        self._arduino(f"AGITATOR_SET {agitator_pct} {FEED_AGITATOR_DIR}")
-                        with self._lock:
-                            self.agitator_on = True
-                    elif not want and on:
-                        self._arduino("AGITATOR_STOP")
-                        with self._lock:
-                            self.agitator_on = False
                     self._stop.wait(0.2)
 
-                self._arduino("AGITATOR_STOP")
                 self._arduino("VACUUM_STOP")
                 with self._lock:
-                    self.agitator_on = False
                     self.phase = "STOPPED"
                     self.message = "Feed stopped."
                 return
 
-            self._arduino(f"AGITATOR_SET {agitator_pct} {FEED_AGITATOR_DIR}")
-            with self._lock:
-                self.agitator_on = True
             end = time.monotonic() + prime_sec
             while not self._stop.is_set() and time.monotonic() < end:
                 self._stop.wait(0.2)
@@ -2057,34 +1918,16 @@ class FeedController:
             # ── Metering: vacuum steady, agitator pulses ─────────────────────
             with self._lock:
                 self.phase = "METERING"
-                self.message = "Metering material to the crammer."
-            self._arduino("AGITATOR_STOP")
-            with self._lock:
-                self.agitator_on = False
+                self.message = "Metering material to the crammer with vacuum only."
             cycle_start = time.monotonic()
             while not self._stop.is_set():
-                phase_t = (time.monotonic() - cycle_start) % meter_period
-                want = phase_t < meter_on
-                with self._lock:
-                    on = self.agitator_on
-                if want and not on:
-                    self._arduino(f"AGITATOR_SET {agitator_pct} {FEED_AGITATOR_DIR}")
-                    with self._lock:
-                        self.agitator_on = True
-                elif not want and on:
-                    self._arduino("AGITATOR_STOP")
-                    with self._lock:
-                        self.agitator_on = False
                 self._stop.wait(0.5)
 
-            self._arduino("AGITATOR_STOP")
             self._arduino("VACUUM_STOP")
             with self._lock:
-                self.agitator_on = False
                 self.phase = "STOPPED"
                 self.message = "Feed stopped."
         except Exception as exc:
-            self._arduino("AGITATOR_STOP")
             self._arduino("VACUUM_STOP")
             with self._lock:
                 self.phase = "ERROR"
@@ -2125,10 +1968,7 @@ feeder = FeedController()
 
 
 class ExtrusionRatioTestController:
-    """Manual test mode: run vacuum + hall-homed agitator based on live extruder ratio.
-
-    This is independent from /api/feed automation and intended for operator tuning.
-    """
+    """Disabled placeholder for the retired air-lock ratio test workflow."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -2137,8 +1977,8 @@ class ExtrusionRatioTestController:
         self._reset()
 
     def _reset(self):
-        self.phase = "IDLE"     # IDLE, RUNNING, STOPPED, ERROR
-        self.message = ""
+        self.phase = "DISABLED"
+        self.message = "Air-lock ratio test disabled in this build."
         self.running = False
         self.started_at = 0.0
         self.vacuum_pct = 0
@@ -2163,193 +2003,15 @@ class ExtrusionRatioTestController:
         self.live_extruder_velocity = 0.0
         self.live_extruder_rotations_total = 0.0
 
-    def _arduino(self, cmd: str):
-        arduino.send(cmd)
-
-    def _run(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_pwm_after_start_ms, agitator_pwm_after, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
-        baseline_rot = None
-        vacuum_boost_until = 0.0
-        vacuum_idle_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
-        vacuum_active_pct = vacuum_idle_pct
-        try:
-            with self._lock:
-                self.phase = "RUNNING"
-                self.running = True
-                self.started_at = time.monotonic()
-                self.vacuum_pct = vacuum_pct
-                self.vacuum_active_pct = vacuum_active_pct
-                self.vacuum_idle_pct = vacuum_idle_pct
-                self.vacuum_boost_sec = max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
-                self.vacuum_boost_remaining_sec = 0.0
-                self.agitator_pwm = agitator_pwm
-                self.agitator_pwm_after_start_ms = agitator_pwm_after_start_ms
-                self.agitator_pwm_after = agitator_pwm_after
-                self.agitator_dir = agitator_dir
-                self.agitator_pause_ms = agitator_pause_ms
-                self.extruder_rotations_per_cycle = extruder_rot_per_cycle
-                self.agitator_rotations_per_cycle = agitator_rot_per_cycle
-                self.extruder_rot_pending = 0.0
-                self.agitator_rotations_commanded = 0
-                self.agitator_cycles_completed = 0
-                self.mixer_every_cycles = mixer_every_cycles
-                self.mixer_eligible = False
-                self.mixer_active = False
-                self.message = "Waiting for Moonraker extrusion data."
-
-            # Start at idle vacuum. Boost to configured vacuum_pct only for a
-            # short window after each completed agitator spin command.
-            self._arduino(f"VACUUM_SET {vacuum_idle_pct}")
-            self._arduino("MOTOR_STOP")
-
-            while not self._stop.is_set():
-                now = time.monotonic()
-                snap = moonraker.snapshot()
-                connected = bool(snap.get("connected"))
-                try:
-                    live_vel = float(snap.get("live_extruder_velocity", 0.0) or 0.0)
-                except (TypeError, ValueError):
-                    live_vel = 0.0
-                try:
-                    live_rot = float(snap.get("extruder_rotations_total", 0.0) or 0.0)
-                except (TypeError, ValueError):
-                    live_rot = 0.0
-
-                with self._lock:
-                    self.moonraker_connected = connected
-                    self.live_extruder_velocity = live_vel
-                    self.live_extruder_rotations_total = live_rot
-                    self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - now)
-
-                if not connected:
-                    with self._lock:
-                        self.message = "Moonraker disconnected; waiting to resume."
-                    self._stop.wait(0.2)
-                    continue
-
-                if baseline_rot is None or live_rot < baseline_rot:
-                    baseline_rot = live_rot
-                    self._stop.wait(0.1)
-                    continue
-
-                delta_rot = max(0.0, live_rot - baseline_rot)
-                baseline_rot = live_rot
-
-                if delta_rot > 0.0:
-                    with self._lock:
-                        self.extruder_rot_pending += delta_rot
-
-                run_cycle = False
-                with self._lock:
-                    if self.extruder_rot_pending >= self.extruder_rotations_per_cycle:
-                        # Fire one burst when threshold is crossed, then drop
-                        # backlog so we do not "catch up" with endless queued
-                        # bursts after a long AGITATOR_MOVE cycle.
-                        self.extruder_rot_pending = 0.0
-                        run_cycle = True
-
-                if run_cycle:
-                    cmd = f"AGITATOR_MOVE {agitator_rot_per_cycle} {agitator_pause_ms} {agitator_pwm} {agitator_dir}"
-                    if agitator_pwm_after_start_ms >= 0:
-                        cmd += f" {agitator_pwm_after_start_ms} {agitator_pwm_after}"
-                    self._arduino(cmd)
-
-                    # After a completed spin cycle, hold configured vacuum for
-                    # a short window, then return to idle vacuum.
-                    self._arduino(f"VACUUM_SET {vacuum_pct}")
-                    vacuum_active_pct = vacuum_pct
-                    vacuum_boost_until = time.monotonic() + max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
-
-                    mixer_started = False
-                    with self._lock:
-                        self.agitator_cycles_completed += 1
-                        self.agitator_rotations_commanded += agitator_rot_per_cycle
-                        if (
-                            self.mixer_every_cycles > 0
-                            and self.agitator_cycles_completed >= self.mixer_every_cycles
-                        ):
-                            self.mixer_eligible = True
-                        if self.mixer_eligible and not self.mixer_active:
-                            self.mixer_active = True
-                            mixer_started = True
-                        self.vacuum_active_pct = vacuum_active_pct
-                        self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
-                    if mixer_started:
-                        self._arduino("MOTOR_SET 200 FWD")
-
-                    with self._lock:
-                        mixer_note = " Mixer running at 200 PWM FWD." if self.mixer_active else ""
-                        self.message = (
-                            f"Agitated {self.agitator_rotations_commanded} turns across "
-                            f"{self.agitator_cycles_completed} cycles at ratio "
-                            f"{self.extruder_rotations_per_cycle}:{self.agitator_rotations_per_cycle}."
-                            f"{mixer_note}"
-                        )
-                else:
-                    if vacuum_active_pct != vacuum_idle_pct and time.monotonic() >= vacuum_boost_until:
-                        self._arduino(f"VACUUM_SET {vacuum_idle_pct}")
-                        vacuum_active_pct = vacuum_idle_pct
-                        with self._lock:
-                            if self.mixer_active:
-                                self.mixer_active = False
-                                self._arduino("MOTOR_STOP")
-                    with self._lock:
-                        self.vacuum_active_pct = vacuum_active_pct
-                        self.vacuum_boost_remaining_sec = max(0.0, vacuum_boost_until - time.monotonic())
-                        mixer_note = (
-                            " Mixer ready for blower windows."
-                            if self.mixer_eligible and not self.mixer_active
-                            else f" Mixer armed for cycle {self.mixer_every_cycles}."
-                            if self.mixer_every_cycles > 0 and not self.mixer_eligible
-                            else " Mixer running at 200 PWM FWD."
-                            if self.mixer_active
-                            else ""
-                        )
-                        self.message = (
-                            f"Running ratio test ({self.extruder_rotations_per_cycle}:"
-                            f"{self.agitator_rotations_per_cycle})."
-                            f"{mixer_note}"
-                        )
-
-                self._stop.wait(0.1)
-
-            self._arduino("AGITATOR_STOP")
-            self._arduino("MOTOR_STOP")
-            self._arduino("VACUUM_STOP")
-            with self._lock:
-                self.phase = "STOPPED"
-                self.running = False
-                self.mixer_eligible = False
-                self.mixer_active = False
-                self.message = "Extruder-ratio test stopped."
-        except Exception as exc:
-            try:
-                self._arduino("AGITATOR_STOP")
-                self._arduino("MOTOR_STOP")
-                self._arduino("VACUUM_STOP")
-            except Exception:
-                pass
-            with self._lock:
-                self.phase = "ERROR"
-                self.running = False
-                self.mixer_eligible = False
-                self.mixer_active = False
-                self.message = f"Error: {exc}"
-
-    def start(self, extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_pwm_after_start_ms, agitator_pwm_after, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles):
-        with self._lock:
-            if self.running:
-                raise RuntimeError("Extruder-ratio test already running.")
-            self._reset()
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            args=(extruder_rot_per_cycle, agitator_rot_per_cycle, agitator_pwm, agitator_pwm_after_start_ms, agitator_pwm_after, agitator_dir, agitator_pause_ms, vacuum_pct, mixer_every_cycles),
-            daemon=True,
-        )
-        self._thread.start()
+    def start(self, *args, **kwargs):
+        raise RuntimeError("Air-lock ratio test is disabled in this build.")
 
     def stop(self):
         self._stop.set()
+        with self._lock:
+            self.running = False
+            self.phase = "DISABLED"
+            self.message = "Air-lock ratio test disabled in this build."
 
     def status(self) -> dict:
         with self._lock:
@@ -2392,61 +2054,7 @@ def api_moonraker_status():
 
 @app.route("/api/extrusion_ratio_test/start", methods=["POST"])
 def api_extrusion_ratio_test_start():
-    try:
-        if not moonraker.enabled:
-            return jsonify({"ok": False, "error": "Moonraker is disabled (set LUNA_MOONRAKER_WS_URL)."}), 400
-        if feeder.status().get("running"):
-            return jsonify({"ok": False, "error": "feed automation is running; stop it first"}), 400
-
-        body = request.get_json(silent=True) or {}
-        extruder_rot_per_cycle = float(body.get("extruder_rotations_per_cycle", 10.0))
-        agitator_rot_per_cycle = int(
-            body.get(
-                "agitator_consecutive_rotations",
-                body.get("agitator_rotations_per_cycle", 1),
-            )
-        )
-        agitator_pwm = int(body.get("agitator_pwm", 180))
-        agitator_pwm_after_start_ms = int(body.get("agitator_pwm_after_start_ms", -1))
-        agitator_pwm_after = int(body.get("agitator_pwm_after", 0))
-        agitator_dir = str(body.get("agitator_dir", "FWD")).strip().upper()
-        agitator_pause_ms = int(body.get("agitator_pause_ms", 0))
-        vacuum_pct = int(body.get("vacuum_pct", 40))
-        mixer_every_cycles = int(body.get("mixer_every_cycles", 0))
-
-        if extruder_rot_per_cycle <= 0:
-            return jsonify({"ok": False, "error": "extruder_rotations_per_cycle must be > 0"}), 400
-        if agitator_rot_per_cycle <= 0:
-            return jsonify({"ok": False, "error": "agitator_rotations_per_cycle must be > 0"}), 400
-        if not (0 <= agitator_pwm <= 255):
-            return jsonify({"ok": False, "error": "agitator_pwm must be 0-255"}), 400
-        if not (-1 <= agitator_pwm_after_start_ms <= 600000):
-            return jsonify({"ok": False, "error": "agitator_pwm_after_start_ms must be -1 or 0-600000"}), 400
-        if not (0 <= agitator_pwm_after <= 255):
-            return jsonify({"ok": False, "error": "agitator_pwm_after must be 0-255"}), 400
-        if agitator_dir not in ("FWD", "REV"):
-            return jsonify({"ok": False, "error": "agitator_dir must be FWD or REV"}), 400
-        if not (0 <= agitator_pause_ms <= 600000):
-            return jsonify({"ok": False, "error": "agitator_pause_ms must be 0-600000"}), 400
-        if not (0 <= vacuum_pct <= 100):
-            return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
-        if mixer_every_cycles < 0:
-            return jsonify({"ok": False, "error": "mixer_every_cycles must be >= 0"}), 400
-
-        ratio_test.start(
-            extruder_rot_per_cycle,
-            agitator_rot_per_cycle,
-            agitator_pwm,
-            agitator_pwm_after_start_ms,
-            agitator_pwm_after,
-            agitator_dir,
-            agitator_pause_ms,
-            vacuum_pct,
-            mixer_every_cycles,
-        )
-        return jsonify({"ok": True, "data": ratio_test.status()})
-    except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({"ok": False, "error": "Air-lock ratio test is disabled in this build."}), 400
 
 
 @app.route("/api/extrusion_ratio_test/stop", methods=["POST"])

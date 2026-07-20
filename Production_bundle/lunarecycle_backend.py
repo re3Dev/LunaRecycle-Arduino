@@ -74,7 +74,26 @@ VIEWER_PRINTER_CAM_URL = os.environ.get("LUNA_VIEWER_PRINTER_CAM_URL", "")
 VIEWER_PRINTER_API_URL = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "")
 
 # Moonraker (Klipper) live extrusion monitoring.
-MOONRAKER_WS_URL = os.environ.get("LUNA_MOONRAKER_WS_URL", "").strip()
+def _resolve_moonraker_ws_url() -> str:
+    explicit = os.environ.get("LUNA_MOONRAKER_WS_URL", "").strip()
+    if explicit:
+        return explicit
+
+    api_url = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "").strip()
+    if api_url:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(api_url)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            scheme = "wss" if parsed.scheme == "https" else "ws"
+            return f"{scheme}://{parsed.netloc}/websocket"
+
+    # Default to the local Pi install convention from DEPLOY_PI.md so Moonraker
+    # comes up automatically on the common same-host setup.
+    return "ws://127.0.0.1:7125/websocket"
+
+
+MOONRAKER_WS_URL = _resolve_moonraker_ws_url()
 MOONRAKER_EXTRUDER_VELOCITY_MIN = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_VEL_MIN", "0.01"))
 MOONRAKER_EXTRUDER_UNITS_PER_ROTATION = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_UNITS_PER_ROTATION", "1.0"))
 RATIO_TEST_SPINS_PER_HOME = int(os.environ.get("LUNA_RATIO_TEST_SPINS_PER_HOME", "10"))

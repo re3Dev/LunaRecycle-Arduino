@@ -77,6 +77,8 @@ VIEWER_PRINTER_API_URL = os.environ.get("LUNA_VIEWER_PRINTER_API_URL", "")
 MOONRAKER_WS_URL = os.environ.get("LUNA_MOONRAKER_WS_URL", "").strip()
 MOONRAKER_EXTRUDER_VELOCITY_MIN = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_VEL_MIN", "0.01"))
 MOONRAKER_EXTRUDER_UNITS_PER_ROTATION = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_UNITS_PER_ROTATION", "1.0"))
+RATIO_TEST_SPINS_PER_HOME = int(os.environ.get("LUNA_RATIO_TEST_SPINS_PER_HOME", "10"))
+RATIO_TEST_POLL_SEC = float(os.environ.get("LUNA_RATIO_TEST_POLL_SEC", "0.5"))
 RATIO_TEST_VACUUM_BOOST_SEC = float(os.environ.get("LUNA_RATIO_TEST_VACUUM_BOOST_SEC", "5.0"))
 RATIO_TEST_VACUUM_IDLE_PCT = int(os.environ.get("LUNA_RATIO_TEST_VACUUM_IDLE_PCT", "15"))
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
@@ -1968,7 +1970,7 @@ feeder = FeedController()
 
 
 class ExtrusionRatioTestController:
-    """Disabled placeholder for the retired air-lock ratio test workflow."""
+    """Watch Moonraker extrusion rotations and home the air lock on a spin threshold."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -1977,41 +1979,154 @@ class ExtrusionRatioTestController:
         self._reset()
 
     def _reset(self):
-        self.phase = "DISABLED"
-        self.message = "Air-lock ratio test disabled in this build."
+        self.phase = "IDLE"
+        self.message = "Ready."
         self.running = False
         self.started_at = 0.0
-        self.vacuum_pct = 0
-        self.vacuum_active_pct = 0
-        self.vacuum_idle_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
-        self.vacuum_boost_sec = max(0.0, RATIO_TEST_VACUUM_BOOST_SEC)
-        self.vacuum_boost_remaining_sec = 0.0
-        self.agitator_pwm = 0
-        self.agitator_pwm_after_start_ms = -1
-        self.agitator_pwm_after = 0
-        self.agitator_dir = "FWD"
-        self.agitator_pause_ms = 0
-        self.extruder_rotations_per_cycle = 10.0
-        self.agitator_rotations_per_cycle = 1
-        self.extruder_rot_pending = 0.0
-        self.agitator_rotations_commanded = 0
-        self.agitator_cycles_completed = 0
-        self.mixer_every_cycles = 0
-        self.mixer_eligible = False
-        self.mixer_active = False
+        self.spins_per_home = max(1, int(RATIO_TEST_SPINS_PER_HOME))
+        self.poll_sec = max(0.1, float(RATIO_TEST_POLL_SEC))
+        self.vacuum_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
         self.moonraker_connected = False
         self.live_extruder_velocity = 0.0
         self.live_extruder_rotations_total = 0.0
+        self.rotations_since_home = 0.0
+        self.rotations_until_home = float(self.spins_per_home)
+        self.home_sequences_completed = 0
+        self.last_home_rotations_total = 0.0
+        self.last_home_response: list[str] = []
+        self.last_error = ""
+        self.last_sample_rotations_total: Optional[float] = None
 
-    def start(self, *args, **kwargs):
-        raise RuntimeError("Air-lock ratio test is disabled in this build.")
+    def _arduino(self, cmd: str) -> list[str]:
+        try:
+            return arduino.send(cmd)
+        except Exception as exc:
+            raise RuntimeError(f"arduino '{cmd}' failed: {exc}") from exc
+
+    def _set_vacuum(self, percent: int) -> list[str]:
+        percent = max(0, min(100, int(percent)))
+        if percent <= 0:
+            return self._arduino("VACUUM_STOP")
+        return self._arduino(f"VACUUM_SET {percent}")
+
+    def start(self, spins_per_home: Optional[int] = None, poll_sec: Optional[float] = None, vacuum_pct: Optional[int] = None):
+        with self._lock:
+            if self.running:
+                raise RuntimeError("Extruder ratio test already running.")
+            if self._thread is not None and self._thread.is_alive():
+                raise RuntimeError("Extruder ratio test is still stopping.")
+            self._reset()
+            if spins_per_home is not None:
+                self.spins_per_home = max(1, int(spins_per_home))
+            if poll_sec is not None:
+                self.poll_sec = max(0.1, float(poll_sec))
+            if vacuum_pct is not None:
+                self.vacuum_pct = max(0, min(100, int(vacuum_pct)))
+            self.rotations_until_home = float(self.spins_per_home)
+            self.running = True
+            self.phase = "ARMED"
+            self.started_at = time.monotonic()
+            self.message = f"Watching Moonraker; homing every {self.spins_per_home} spins with vacuum at {self.vacuum_pct}%.")
+
+        self._stop.clear()
+        self._set_vacuum(self.vacuum_pct)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def stop(self):
         self._stop.set()
+        try:
+            self._arduino("VACUUM_STOP")
+        except Exception:
+            pass
         with self._lock:
             self.running = False
-            self.phase = "DISABLED"
-            self.message = "Air-lock ratio test disabled in this build."
+            if self.phase != "ERROR":
+                self.phase = "STOPPED"
+                self.message = "Stopped."
+
+    def _sample_snapshot(self) -> tuple[bool, float]:
+        snap = moonraker.snapshot()
+        connected = bool(snap.get("connected"))
+        rotations_total_raw = snap.get("extruder_rotations_total", 0.0)
+        try:
+            rotations_total = float(rotations_total_raw)
+        except (TypeError, ValueError):
+            rotations_total = 0.0
+        with self._lock:
+            self.moonraker_connected = connected
+            self.live_extruder_velocity = float(snap.get("live_extruder_velocity", 0.0) or 0.0)
+            self.live_extruder_rotations_total = rotations_total
+        return connected, rotations_total
+
+    def _trigger_home(self, rotations_total: float):
+        with self._lock:
+            self.phase = "HOMING"
+            self.message = f"Threshold reached at {rotations_total:.4f} spins; running air-lock home sequence."
+
+        response = self._arduino("AGITATOR_HOME")
+
+        with self._lock:
+            self.last_home_response = response
+            self.home_sequences_completed += 1
+            self.last_home_rotations_total = rotations_total
+            self.rotations_since_home = 0.0
+            self.rotations_until_home = float(self.spins_per_home)
+            self.last_sample_rotations_total = rotations_total
+            self.phase = "WATCHING"
+            self.message = f"Homed {self.home_sequences_completed} time(s); waiting for the next {self.spins_per_home} spins."
+
+    def _run(self):
+        try:
+            while not self._stop.is_set():
+                connected, rotations_total = self._sample_snapshot()
+                should_wait = False
+
+                with self._lock:
+                    if not connected:
+                        self.phase = "WAITING"
+                        self.message = "Waiting for Moonraker extrusion data."
+                        should_wait = True
+                    elif self.last_sample_rotations_total is None:
+                        self.last_sample_rotations_total = rotations_total
+                        self.phase = "WATCHING"
+                        self.message = f"Armed. Homing every {self.spins_per_home} spins."
+                    else:
+                        delta = rotations_total - self.last_sample_rotations_total
+                        self.last_sample_rotations_total = rotations_total
+                        if delta < 0.0 or delta > 1000.0:
+                            self.rotations_since_home = 0.0
+                        else:
+                            self.rotations_since_home += delta
+                        self.rotations_until_home = max(0.0, float(self.spins_per_home) - self.rotations_since_home)
+
+                if should_wait:
+                    self._stop.wait(self.poll_sec)
+                    continue
+
+                with self._lock:
+                    ready = self.rotations_since_home >= self.spins_per_home
+
+                if ready:
+                    self._trigger_home(rotations_total)
+                    self._stop.wait(self.poll_sec)
+                    continue
+
+                self._stop.wait(self.poll_sec)
+        except Exception as exc:
+            with self._lock:
+                self.phase = "ERROR"
+                self.running = False
+                self.last_error = str(exc)
+                self.message = f"Error: {exc}"
+        finally:
+            try:
+                self._arduino("VACUUM_STOP")
+            except Exception:
+                pass
+            with self._lock:
+                self.running = False
+                self._thread = None
 
     def status(self) -> dict:
         with self._lock:
@@ -2019,28 +2134,18 @@ class ExtrusionRatioTestController:
                 "phase": self.phase,
                 "running": self.running,
                 "message": self.message,
+                "spins_per_home": self.spins_per_home,
+                "poll_sec": self.poll_sec,
                 "vacuum_pct": self.vacuum_pct,
-                "vacuum_active_pct": self.vacuum_active_pct,
-                "vacuum_idle_pct": self.vacuum_idle_pct,
-                "vacuum_boost_sec": self.vacuum_boost_sec,
-                "vacuum_boost_remaining_sec": self.vacuum_boost_remaining_sec,
-                "agitator_pwm": self.agitator_pwm,
-                "agitator_pwm_after_start_ms": self.agitator_pwm_after_start_ms,
-                "agitator_pwm_after": self.agitator_pwm_after,
-                "agitator_dir": self.agitator_dir,
-                "agitator_pause_ms": self.agitator_pause_ms,
-                "extruder_rotations_per_cycle": self.extruder_rotations_per_cycle,
-                "agitator_rotations_per_cycle": self.agitator_rotations_per_cycle,
-                "agitator_consecutive_rotations": self.agitator_rotations_per_cycle,
-                "extruder_rot_pending": self.extruder_rot_pending,
-                "agitator_rotations_commanded": self.agitator_rotations_commanded,
-                "agitator_cycles_completed": self.agitator_cycles_completed,
-                "mixer_every_cycles": self.mixer_every_cycles,
-                "mixer_eligible": self.mixer_eligible,
-                "mixer_active": self.mixer_active,
                 "moonraker_connected": self.moonraker_connected,
                 "live_extruder_velocity": self.live_extruder_velocity,
                 "live_extruder_rotations_total": self.live_extruder_rotations_total,
+                "rotations_since_home": self.rotations_since_home,
+                "rotations_until_home": self.rotations_until_home,
+                "home_sequences_completed": self.home_sequences_completed,
+                "last_home_rotations_total": self.last_home_rotations_total,
+                "last_home_response": list(self.last_home_response),
+                "last_error": self.last_error,
             }
 
 
@@ -2054,7 +2159,16 @@ def api_moonraker_status():
 
 @app.route("/api/extrusion_ratio_test/start", methods=["POST"])
 def api_extrusion_ratio_test_start():
-    return jsonify({"ok": False, "error": "Air-lock ratio test is disabled in this build."}), 400
+    try:
+        body = request.get_json(silent=True) or {}
+        ratio_test.start(
+            spins_per_home=body.get("spins_per_home"),
+            poll_sec=body.get("poll_sec"),
+            vacuum_pct=body.get("vacuum_pct"),
+        )
+        return jsonify({"ok": True, "data": ratio_test.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/extrusion_ratio_test/stop", methods=["POST"])

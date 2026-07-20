@@ -941,18 +941,25 @@
               </div>
 
               <div class="act-block" style="grid-column: 1 / -1;">
-                <div class="act-head">Extruder Ratio Test (Moonraker)</div>
+                <div class="act-head">Extruder Ratio Test</div>
                 <div class="split" style="margin-bottom:6px;">
                   <div class="kv"><div class="k">Moonraker</div><div class="v" id="mrConnText">—</div></div>
-                  <div class="kv"><div class="k">Live Extruder Vel</div><div class="v" id="mrVelText">—</div></div>
-                  <div class="kv"><div class="k">Live Position (E)</div><div class="v" id="mrLiveEText">—</div></div>
-                  <div class="kv"><div class="k">Extruder Rot Total</div><div class="v" id="mrRotTotalText">—</div></div>
+                  <div class="kv"><div class="k">Spins / Home</div><div class="v" id="rtSpinsText">—</div></div>
+                  <div class="kv"><div class="k">Rotations Since Home</div><div class="v" id="rtPendingText">—</div></div>
+                  <div class="kv"><div class="k">Rotations Until Home</div><div class="v" id="rtUntilText">—</div></div>
+                  <div class="kv"><div class="k">Vacuum %</div><div class="v" id="rtVacText">—</div></div>
+                  <div class="kv"><div class="k">Homes Completed</div><div class="v" id="rtHomeCountText">—</div></div>
+                  <div class="kv"><div class="k">Live Extruder Rot</div><div class="v" id="mrRotTotalText">—</div></div>
                 </div>
                 <div class="act-actions">
+                  <input type="number" id="ratioTestSpinsPerHome" min="1" step="1" value="10" style="max-width:120px;" />
+                  <input type="number" id="ratioTestVacuumPct" min="0" max="100" step="1" value="15" style="max-width:120px;" />
+                  <button class="btn mini primary" id="btnRatioTestStart">Start</button>
+                  <button class="btn mini" id="btnRatioTestStop">Stop</button>
                   <button class="btn mini" id="btnRatioTestRefresh">Refresh</button>
-                  <span class="statechip warn" id="ratioTestChip">DISABLED</span>
+                  <span class="statechip warn" id="ratioTestChip">IDLE</span>
                 </div>
-                <div class="hint" id="ratioTestMsgText" style="margin-top:4px;">Air-lock ratio test is disabled in the home-sequence-only production build.</div>
+                <div class="hint" id="ratioTestMsgText" style="margin-top:4px;">Start the watcher to home the air lock after the configured number of extruder spins.</div>
               </div>
             </div>
           </div>
@@ -1130,9 +1137,15 @@
       ratioTest: {
         running: false,
         phase: "IDLE",
-        message: "—",
-        extruder_rot_pending: 0,
-        agitator_rotations_commanded: 0,
+        message: "Ready.",
+        spins_per_home: 10,
+        poll_sec: 0.5,
+        vacuum_pct: 15,
+        moonraker_connected: false,
+        live_extruder_rotations_total: 0,
+        rotations_since_home: 0,
+        rotations_until_home: 10,
+        home_sequences_completed: 0,
       },
 
       screw_on: false,
@@ -1332,6 +1345,8 @@
       on("btnFeOff", "click", ()=>manualAction("Fume extractor off", "/fe/off"));
       on("btnFeStatus", "click", ()=>manualAction("Fume extractor status", "/fe/status", null, "GET"));
 
+      on("btnRatioTestStart", "click", ()=>ratioTestStart());
+      on("btnRatioTestStop", "click", ()=>ratioTestStop());
       on("btnRatioTestRefresh", "click", ()=>ratioTestRefreshStatus(false));
     }
 
@@ -1498,25 +1513,28 @@
       setText("mrLiveEText", Number(S.moonraker.live_extruder_position || 0).toFixed(4));
       setText("mrRotTotalText", Number(S.moonraker.extruder_rotations_total || 0).toFixed(4));
 
-      setText("rtPendingText", Number(S.ratioTest.extruder_rot_pending || 0).toFixed(4));
-      setText("rtAgCmdText", String(S.ratioTest.agitator_rotations_commanded ?? "—"));
-      setText("rtAgCycleText", String(S.ratioTest.agitator_cycles_completed ?? "—"));
-      setText(
-        "rtMixerStateText",
-        S.ratioTest.mixer_every_cycles > 0
-          ? (S.ratioTest.mixer_active ? "RUNNING 200 PWM FWD" : "ARMED")
-          : "DISABLED"
-      );
-      setText(
-        "rtMixerStartText",
-        S.ratioTest.mixer_every_cycles > 0 ? String(S.ratioTest.mixer_every_cycles) : "—"
-      );
+      setText("rtSpinsText", String(S.ratioTest.spins_per_home ?? "—"));
+      setText("rtPendingText", Number(S.ratioTest.rotations_since_home || 0).toFixed(4));
+      setText("rtUntilText", Number(S.ratioTest.rotations_until_home || 0).toFixed(4));
+      setText("rtVacText", String(S.ratioTest.vacuum_pct ?? "—"));
+      setText("rtHomeCountText", String(S.ratioTest.home_sequences_completed ?? "—"));
       setText("ratioTestMsgText", S.ratioTest.message || "—");
+      const ratioTestInput = document.getElementById("ratioTestSpinsPerHome");
+      if(ratioTestInput && document.activeElement !== ratioTestInput){
+        const nextSpins = S.ratioTest.spins_per_home ?? Number(ratioTestInput.value || 10);
+        ratioTestInput.value = String(nextSpins);
+      }
+      const ratioTestVacuumInput = document.getElementById("ratioTestVacuumPct");
+      if(ratioTestVacuumInput && document.activeElement !== ratioTestVacuumInput){
+        const nextVacuum = S.ratioTest.vacuum_pct ?? Number(ratioTestVacuumInput.value || 15);
+        ratioTestVacuumInput.value = String(nextVacuum);
+      }
       const rtChip = document.getElementById("ratioTestChip");
       if(rtChip){
         const running = !!S.ratioTest.running;
-        rtChip.textContent = running ? String(S.ratioTest.phase || "RUNNING").toUpperCase() : "IDLE";
-        rtChip.className = "statechip" + (running ? " good" : "");
+        const phase = String(S.ratioTest.phase || (running ? "RUNNING" : "IDLE")).toUpperCase();
+        rtChip.textContent = phase;
+        rtChip.className = "statechip" + (phase === "ERROR" ? " bad" : running ? " good" : "");
       }
     }
 
@@ -2005,11 +2023,28 @@
     }
 
     async function ratioTestStart(){
-      log("Extruder ratio test is disabled in this build.", "warn");
+      const spinsPerHome = Math.max(1, Math.round(getNum("ratioTestSpinsPerHome", 10)));
+      const vacuumPct = Math.max(0, Math.min(100, Math.round(getNum("ratioTestVacuumPct", 15))));
+      try{
+        const res = await apiArduino("/extrusion_ratio_test/start", {
+          method: "POST",
+          body: JSON.stringify({ spins_per_home: spinsPerHome, vacuum_pct: vacuumPct })
+        }, 20000);
+        log("Extruder ratio test started.", "good", summarizeResponse(res));
+        await ratioTestRefreshStatus(true);
+      }catch(err){
+        log(`Extruder ratio test start failed: ${err.message}`, "bad");
+      }
     }
 
     async function ratioTestStop(){
-      log("Extruder ratio test is disabled in this build.", "warn");
+      try{
+        const res = await apiArduino("/extrusion_ratio_test/stop", { method: "POST" }, 12000);
+        log("Extruder ratio test stopped.", "warn", summarizeResponse(res));
+        await ratioTestRefreshStatus(true);
+      }catch(err){
+        log(`Extruder ratio test stop failed: ${err.message}`, "bad");
+      }
     }
 
     async function dryerConnect(){

@@ -561,7 +561,7 @@ void systemDiagUpdateLed() {
   }
 
   // Any actuator active.
-  if (motorPwm > 0 || tcPumpRunning || shredderRunning || agitatorPercent > 0 || vacuumPercent > 0) {
+  if (motorPwm > 0 || tcPumpRunning || shredderRunning || agitatorRunState != AGITATOR_IDLE || vacuumPercent > 0) {
     systemDiagSetColor(0, 255, 0);    // bright green
     return;
   }
@@ -2134,10 +2134,10 @@ void printAllStatus() {
   Serial.print(bgPercent(BG_LEFT), 0);
   Serial.print(F(" bg_right="));
   Serial.print(bgPercent(BG_RIGHT), 0);
-  Serial.print(F(" agitator_pct="));
-  Serial.print(agitatorPercent);
-  Serial.print(F(" agitator_dir="));
-  Serial.print(agitatorFwd ? F("FWD") : F("REV"));
+  Serial.print(F(" airlock_state="));
+  Serial.print(agitatorStateName());
+  Serial.print(F(" airlock_homed="));
+  Serial.print(agitatorHomed ? 1 : 0);
   Serial.print(F(" vacuum_pct="));
   Serial.print(vacuumPercent);
   Serial.print(F(" dryer_ssr="));

@@ -115,7 +115,7 @@ _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class EventLogger:
-    """Thread-safe, append-only logger for actuator ON/OFF edge events only."""
+    """Thread-safe, append-only logger for actuator edge and action events."""
 
     def __init__(self, path: str) -> None:
         self._path = path
@@ -169,12 +169,16 @@ class EventLogger:
         size = os.path.getsize(self._path) if exists else 0
         return {
             "path": self._path,
-            "mode": "actuator_edges_only",
+            "mode": "actuator_edges_and_actions",
             "timezone": "CST",
             "exists": exists,
             "size_bytes": size,
             "last_error": self._last_error,
         }
+
+    def _append_event(self, event: dict) -> None:
+        with open(self._path, "a", encoding="utf-8") as fp:
+            fp.write(json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n")
 
     def log_actuator_state(self, actuator: str, is_on: bool) -> None:
         try:
@@ -184,16 +188,35 @@ class EventLogger:
                     return
                 event = {
                     "ts": datetime.now(EVENT_LOG_TZ).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "event": "state",
                     "actuator": actuator,
                     "state": "ON" if is_on else "OFF",
                 }
-                with open(self._path, "a", encoding="utf-8") as fp:
-                    fp.write(json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n")
+                self._append_event(event)
                 self._last_state[actuator] = is_on
                 self._last_error = ""
         except Exception:
             self._last_error = "failed_to_write_event_log"
             # Logging must never break control flow.
+            pass
+
+    def log_actuator_action(self, actuator: str, action: str, **details) -> None:
+        try:
+            with self._lock:
+                event = {
+                    "ts": datetime.now(EVENT_LOG_TZ).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "event": "action",
+                    "actuator": actuator,
+                    "action": action,
+                }
+                for key, value in details.items():
+                    if value is None:
+                        continue
+                    event[str(key)] = value
+                self._append_event(event)
+                self._last_error = ""
+        except Exception:
+            self._last_error = "failed_to_write_event_log"
             pass
 
     def mark_all_off(self) -> None:
@@ -636,8 +659,22 @@ class ArduinoBridge:
             event_logger.log_actuator_state("tc_pump", True)
         elif cmd == "TC_PUMP_OFF":
             event_logger.log_actuator_state("tc_pump", False)
+        elif cmd == "TC_HOME":
+            event_logger.log_actuator_action("tc_stepper", "MOVE_HOME")
+        elif cmd == "TC_PICK":
+            event_logger.log_actuator_action("tc_stepper", "MOVE_PICK")
+        elif cmd == "TC_STOP":
+            event_logger.log_actuator_action("tc_stepper", "STOP")
+        elif cmd == "GATE_OPEN":
+            event_logger.log_actuator_action("shredder_gate", "OPEN")
+        elif cmd == "GATE_CLOSE":
+            event_logger.log_actuator_action("shredder_gate", "CLOSE")
         elif cmd == "AGITATOR_STOP":
+            event_logger.log_actuator_action("agitator", "STOP")
             event_logger.log_actuator_state("agitator", False)
+        elif cmd == "AGITATOR_HOME":
+            event_logger.log_actuator_action("agitator", "ROTATE_HOME")
+            event_logger.log_actuator_state("agitator", True)
         elif cmd == "VACUUM_STOP":
             event_logger.log_actuator_state("vacuum", False)
         elif cmd == "VACUUM_SET":
@@ -648,6 +685,29 @@ class ArduinoBridge:
                 except ValueError:
                     pct = 0
             event_logger.log_actuator_state("vacuum", pct > 0)
+        elif cmd == "BLASTGATE_HOME":
+            gate = parts[1] if len(parts) > 1 else "ALL"
+            event_logger.log_actuator_action("blast_gate", "CLOSE", gate=gate)
+        elif cmd == "BLASTGATE_HOMEMAX":
+            gate = parts[1] if len(parts) > 1 else "ALL"
+            event_logger.log_actuator_action("blast_gate", "OPEN", gate=gate)
+        elif cmd == "BLASTGATE_CAL":
+            gate = parts[1] if len(parts) > 1 else "ALL"
+            event_logger.log_actuator_action("blast_gate", "CALIBRATE", gate=gate)
+        elif cmd == "BLASTGATE_POS":
+            gate = parts[1] if len(parts) > 1 else None
+            percent = parts[2] if len(parts) > 2 else None
+            event_logger.log_actuator_action("blast_gate", "POSITION", gate=gate, percent=percent)
+        elif cmd == "BLASTGATE_EXT":
+            gate = parts[1] if len(parts) > 1 else None
+            duration_ms = parts[2] if len(parts) > 2 else None
+            event_logger.log_actuator_action("blast_gate", "OPEN_JOG", gate=gate, ms=duration_ms)
+        elif cmd == "BLASTGATE_RET":
+            gate = parts[1] if len(parts) > 1 else None
+            duration_ms = parts[2] if len(parts) > 2 else None
+            event_logger.log_actuator_action("blast_gate", "CLOSE_JOG", gate=gate, ms=duration_ms)
+        elif cmd == "BLASTGATE_STOP":
+            event_logger.log_actuator_action("blast_gate", "STOP")
 
     def _reset_serial_locked(self) -> None:
         """Close and drop the serial handle. Caller must hold self._lock."""

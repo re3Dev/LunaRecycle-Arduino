@@ -2026,7 +2026,7 @@ class ExtrusionRatioTestController:
             self.running = True
             self.phase = "ARMED"
             self.started_at = time.monotonic()
-            self.message = f"Watching Moonraker; homing every {self.spins_per_home} spins with vacuum at {self.vacuum_pct}%.")
+            self.message = f"Watching Moonraker; homing every {self.spins_per_home} spins with vacuum at {self.vacuum_pct}%."
 
         self._stop.clear()
         self._set_vacuum(self.vacuum_pct)

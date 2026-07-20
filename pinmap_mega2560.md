@@ -72,19 +72,20 @@
 | D6   | `Mixer_shredderGateLeftServoMotor`     | RC servo PWM |
 | D7   | `Mixer_shredderGateRightServoMotor`    | RC servo PWM |
 
-### `Mixer_motorController` — Screw Motor H-Bridge
-| Pin  | Signal                      | Notes              |
-|------|-----------------------------|--------------------|
-| D10  | `Mixer_motorController_ENA` | PWM speed          |
-| D27  | `Mixer_motorController_IN1` | Direction A        |
-| D28  | `Mixer_motorController_IN2` | Direction B        |
+### `Mixer_motorController` — Screw Motor BTS7960 / HW-039
+| Pin  | Signal                       | Notes                         |
+|------|------------------------------|-------------------------------|
+| D10  | `Mixer_motorController_RPWM` | Forward PWM                   |
+| D13  | `Mixer_motorController_LPWM` | Reverse PWM                   |
+| D27  | `Mixer_motorController_REN`  | Right-side enable, hold HIGH  |
+| D28  | `Mixer_motorController_LEN`  | Left-side enable, hold HIGH   |
 
-### `Mixer_agitatorMotor` — Bottom Agitator (2nd H-Bridge channel)
-| Pin  | Signal                       | Notes                                   |
-|------|------------------------------|-----------------------------------------|
-| D11   | `Mixer_agitatorMotor_ENB`    | PWM enable — power **capped at 50%**    |
-| D42  | `Mixer_agitatorMotor_IN3`    | Direction A                             |
-| D43  | `Mixer_agitatorMotor_IN4`    | Direction B (shares Mega built-in LED)  |
+### `Mixer_agitatorMotor` — Air Lock Stepper + Hall Index
+| Pin  | Signal                      | Notes                         |
+|------|-----------------------------|-------------------------------|
+| D18  | `Mixer_agitatorMotor_DIR`   | Stepper driver DIR+           |
+| D19  | `Mixer_agitatorMotor_PUL`   | Stepper driver PUL+           |
+| D3   | `Mixer_agitatorHallSensor`  | Hall index input, interrupt   |
 
 ### `Mixer_vacuumMotor` — Vacuum Motor (DS3502 digital-pot speed control)
 | Bus  | Signal                       | Notes                                   |

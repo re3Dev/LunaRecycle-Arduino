@@ -83,7 +83,7 @@
  * -- Pin map (Mega 2560) ------------------------------------------------------
  *
  *   Mixer motor (HW-039 / BTS7960):
- *     RPWM / LPWM      ->  D10 / D11
+ *     RPWM / LPWM      ->  D10 / D13
  *     R_EN / L_EN      ->  D27 / D28
  *   INA219             ->  D20 (SDA) / D21 (SCL)   [hardware I2C]
  *
@@ -129,7 +129,7 @@ const int Mixer_shredderGateRightServoMotor_pin = 7;
 
 // Mixer screw motor - HW-039/BTS7960 interface.
 const int Mixer_motorController_RPWM  = 10;   // RPWM (forward PWM)
-const int Mixer_motorController_LPWM  = 11;   // LPWM (reverse PWM)
+const int Mixer_motorController_LPWM  = 13;   // LPWM (reverse PWM)
 const int Mixer_motorController_REN   = 27;   // R_EN (enable high)
 const int Mixer_motorController_LEN   = 28;   // L_EN (enable high)
 

@@ -222,6 +222,7 @@ class MoonrakerMonitor:
         self._lock = threading.Lock()
         self.connected = False
         self.extruding = False
+        self.live_velocity = 0.0
         self.live_extruder_velocity = 0.0
         self.print_state = ""
         self.filament_used = 0.0
@@ -251,6 +252,7 @@ class MoonrakerMonitor:
                 "enabled": self.enabled,
                 "connected": self.connected,
                 "extruding": self.extruding,
+                "live_velocity": self.live_velocity,
                 "live_extruder_velocity": self.live_extruder_velocity,
                 "axis_map": list(self.axis_map),
                 "extruder_axis_index": self.extruder_axis_index,
@@ -273,6 +275,7 @@ class MoonrakerMonitor:
             self.connected = connected
             if not connected:
                 self.extruding = False
+                self.live_velocity = 0.0
                 self.live_extruder_velocity = 0.0
                 self.axis_map = []
                 self.extruder_axis_index = -1
@@ -290,10 +293,18 @@ class MoonrakerMonitor:
         stats = status.get("print_stats", {}) if isinstance(status, dict) else {}
 
         velocity_raw = motion.get("live_extruder_velocity")
+        if velocity_raw is None:
+            velocity_raw = motion.get("live_velocity")
         try:
             velocity = float(velocity_raw)
         except (TypeError, ValueError):
             velocity = None
+
+        live_velocity_raw = motion.get("live_velocity")
+        try:
+            live_velocity = float(live_velocity_raw)
+        except (TypeError, ValueError):
+            live_velocity = None
 
         print_state = stats.get("state")
         filament_used_raw = stats.get("filament_used")
@@ -319,6 +330,8 @@ class MoonrakerMonitor:
                     break
 
         with self._lock:
+            if live_velocity is not None:
+                self.live_velocity = live_velocity
             if velocity is not None:
                 self.live_extruder_velocity = velocity
             if isinstance(print_state, str):

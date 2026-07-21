@@ -1055,6 +1055,8 @@ class DryerModbus:
         self._lock = threading.Lock()
         self.connected = False
         self._target_setpoint_reached_logged_for: Optional[int] = None
+        self._last_process_temp_raw: Optional[int] = None
+        self._last_run_state_raw: Optional[int] = None
 
     def connect(self) -> bool:
         with self._lock:
@@ -1071,6 +1073,8 @@ class DryerModbus:
             self.client.close()
             self.connected = False
             self._target_setpoint_reached_logged_for = None
+            self._last_process_temp_raw = None
+            self._last_run_state_raw = None
 
     def read_input(self, addr: int, count: int = 1) -> list[int]:
         with self._lock:
@@ -1174,22 +1178,36 @@ class DryerModbus:
         process_temp_c    = process_temp / 10.0
         process_sp_c      = process_sp / 10.0
 
-        if run_state == 100:
-            with self._lock:
-                if process_temp >= process_sp and self._target_setpoint_reached_logged_for != process_sp:
-                    event_logger.log_actuator_action(
-                        "dryer",
-                        "TARGET_SETPOINT_REACHED",
-                        process_temp_raw=process_temp,
-                        process_setpoint_raw=process_sp,
-                        process_temp_c=round(process_temp_c, 1),
-                        process_setpoint_c=round(process_sp_c, 1),
-                        run_state=run_state,
-                    )
+        should_log_target_reached = False
+        with self._lock:
+            prev_temp = self._last_process_temp_raw
+            prev_run = self._last_run_state_raw
+
+            if run_state == 100 and process_sp > 0:
+                crossed_from_below = (
+                    prev_run == 100 and
+                    prev_temp is not None and
+                    prev_temp < process_sp <= process_temp
+                )
+                if crossed_from_below and self._target_setpoint_reached_logged_for != process_sp:
+                    should_log_target_reached = True
                     self._target_setpoint_reached_logged_for = process_sp
-        else:
-            with self._lock:
+            else:
                 self._target_setpoint_reached_logged_for = None
+
+            self._last_process_temp_raw = process_temp
+            self._last_run_state_raw = run_state
+
+        if should_log_target_reached:
+            event_logger.log_actuator_action(
+                "dryer",
+                "TARGET_SETPOINT_REACHED",
+                process_temp_raw=process_temp,
+                process_setpoint_raw=process_sp,
+                process_temp_c=round(process_temp_c, 1),
+                process_setpoint_c=round(process_sp_c, 1),
+                run_state=run_state,
+            )
 
         return {
             "connected":          self.connected,

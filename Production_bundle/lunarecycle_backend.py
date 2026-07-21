@@ -209,7 +209,24 @@ class EventLogger:
                     s = line.strip()
                     if not s:
                         continue
-                    if '"event_type"' in s or '"source"' in s or '"action"' in s:
+                    try:
+                        obj = json.loads(s)
+                    except Exception:
+                        # Non-JSON lines are considered legacy/noise and should
+                        # be archived out of the active actuator event log.
+                        is_legacy = True
+                        break
+
+                    if not isinstance(obj, dict):
+                        is_legacy = True
+                        break
+
+                    # Current schema uses an explicit "event" field with values
+                    # like "state" or "action". Legacy rows used "event_type"
+                    # and/or "source" instead.
+                    if "event" in obj:
+                        continue
+                    if "event_type" in obj or "source" in obj:
                         is_legacy = True
                         break
             if not is_legacy:

@@ -25,6 +25,11 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    ZoneInfo = None
+
 import serial
 import websocket
 from flask import Flask, jsonify, request, send_from_directory
@@ -82,7 +87,18 @@ EVENT_LOG_PATH = os.environ.get(
     "LUNA_EVENT_LOG_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "luna_actuator_events.jsonl"),
 )
-EVENT_LOG_TZ = timezone(timedelta(hours=-6), name="CST")
+
+
+def _resolve_event_log_tz():
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo("America/Chicago")
+        except Exception:
+            pass
+    return timezone(timedelta(hours=-6), name="CST")
+
+
+EVENT_LOG_TZ = _resolve_event_log_tz()
 
 # Server bind. 0.0.0.0 makes the dashboard reachable from other devices on the
 # LAN (e.g. http://<pi-ip>:5055). Set LUNA_HOST=127.0.0.1 to restrict to the Pi.

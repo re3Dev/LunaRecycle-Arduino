@@ -1906,7 +1906,8 @@ class ProcessOrchestrator:
             time.sleep(1.0)
             if not dryer.connected:
                 dryer.connect()
-            dryer.set_process_setpoint(int(temp_c))
+            # Conair process setpoint register is in deci-degrees C.
+            dryer.set_process_setpoint(int(round(float(temp_c) * 10.0)))
             if dryer.get_run_state_raw() != 100:
                 dryer.toggle_on_off()
             with self._lock:

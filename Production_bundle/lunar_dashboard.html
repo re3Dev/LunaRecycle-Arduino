@@ -758,6 +758,22 @@
                 <div class="v"><span id="dryer_process_temp">—</span><small> °C</small></div>
               </div>
               <div class="kv">
+                <div class="k">Regen Temp</div>
+                <div class="v"><span id="dryer_regen_temp">—</span><small> °C</small></div>
+              </div>
+              <div class="kv">
+                <div class="k">Regen Outlet Temp</div>
+                <div class="v"><span id="dryer_regen_outlet_temp">—</span><small> °C</small></div>
+              </div>
+              <div class="kv">
+                <div class="k">Blower Inlet Temp</div>
+                <div class="v"><span id="dryer_blower_inlet_temp">—</span><small> °C</small></div>
+              </div>
+              <div class="kv">
+                <div class="k">Aux Temp</div>
+                <div class="v"><span id="dryer_aux_temp">—</span><small> °C</small></div>
+              </div>
+              <div class="kv">
                 <div class="k">Setpoint</div>
                 <div class="v"><span id="heater_set_lbl">—</span><small> °C</small></div>
               </div>
@@ -2130,16 +2146,20 @@
       const d = S.dryerData;
 
       setText("dryer_temp", d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—");
-      setText("dryer_set", d.process_setpoint ?? "—");
+      setText("dryer_set", d.process_setpoint != null ? (d.process_setpoint / 10).toFixed(1) : "—");
       setText("dryer_dp", d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—");
 
       setText("dryer_process_temp", d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—");
+      setText("dryer_regen_temp", d.regen_temp != null ? (d.regen_temp / 10).toFixed(1) : "—");
+      setText("dryer_regen_outlet_temp", d.regen_outlet_temp != null ? (d.regen_outlet_temp / 10).toFixed(1) : "—");
+      setText("dryer_blower_inlet_temp", d.blower_inlet_temp != null ? (d.blower_inlet_temp / 10).toFixed(1) : "—");
+      setText("dryer_aux_temp", d.aux_temp != null ? (d.aux_temp / 10).toFixed(1) : "—");
       setText("dryer_actual_dp", d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—");
 
       setText("dryer_run_state", d.run_state != null ? `${d.run_state} (0x${Number(d.run_state).toString(16).toUpperCase().padStart(4,"0")})` : "—");
       setText("dryer_state_guess", d.dryer_state_guess ?? "—");
 
-      setText("heater_set_lbl", d.process_setpoint ?? "—");
+      setText("heater_set_lbl", d.process_setpoint != null ? (d.process_setpoint / 10).toFixed(1) : "—");
 
       setText("dryerMode", S.dryerIoLive ? "LIVE MODBUS" : "OFFLINE");
 

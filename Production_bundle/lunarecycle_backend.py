@@ -1159,6 +1159,8 @@ class DryerModbus:
         dew_sp            = self.get_dewpoint_setpoint()
         status_word       = self.get_status_word()
         output_word       = self.get_output_word()
+        process_temp_c    = process_temp / 10.0
+        process_sp_c      = process_sp / 10.0
 
         if run_state == 100:
             with self._lock:
@@ -1166,8 +1168,10 @@ class DryerModbus:
                     event_logger.log_actuator_action(
                         "dryer",
                         "TARGET_SETPOINT_REACHED",
-                        process_temp=process_temp,
-                        process_setpoint=process_sp,
+                        process_temp_raw=process_temp,
+                        process_setpoint_raw=process_sp,
+                        process_temp_c=round(process_temp_c, 1),
+                        process_setpoint_c=round(process_sp_c, 1),
                         run_state=run_state,
                     )
                     self._target_setpoint_reached_logged_for = process_sp

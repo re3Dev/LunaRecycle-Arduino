@@ -1863,6 +1863,19 @@
       }
     }
 
+    async function workflowEnsureDryerLive(){
+      if(!S.dryerIoLive){
+        S.dryerIoLive = true;
+        render();
+      }
+      await dryerConnect();
+      if(S.dryerApiConnected){
+        workflowLog("Dryer LIVE telemetry connected for workflow.", "good");
+      }else{
+        workflowLog("Dryer LIVE telemetry connection failed; workflow will continue.", "warn");
+      }
+    }
+
     async function workflowStart(){
       if(S.workflowRunning){
         workflowLog("Workflow already running.", "warn");
@@ -1909,6 +1922,8 @@
           workflowLog("Step 1 complete (shredder gates closed).", "good");
         }
 
+        workflowSet("DRYING", "Connecting dryer LIVE telemetry...", true);
+        await workflowEnsureDryerLive();
         workflowSet("DRYING", "Running Step 2/3...", true);
         await apiArduino("/dry/start", {
           method: "POST",

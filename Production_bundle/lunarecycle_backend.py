@@ -1057,6 +1057,7 @@ class DryerModbus:
         self._target_setpoint_reached_logged_for: Optional[int] = None
         self._last_process_temp_raw: Optional[int] = None
         self._last_run_state_raw: Optional[int] = None
+        self._target_reach_armed_for: Optional[int] = None
 
     def connect(self) -> bool:
         with self._lock:
@@ -1075,6 +1076,7 @@ class DryerModbus:
             self._target_setpoint_reached_logged_for = None
             self._last_process_temp_raw = None
             self._last_run_state_raw = None
+            self._target_reach_armed_for = None
 
     def read_input(self, addr: int, count: int = 1) -> list[int]:
         with self._lock:
@@ -1184,16 +1186,30 @@ class DryerModbus:
             prev_run = self._last_run_state_raw
 
             if run_state == 100 and process_sp > 0:
-                crossed_from_below = (
-                    prev_run == 100 and
-                    prev_temp is not None and
-                    prev_temp < process_sp <= process_temp
+                # Arm logging only after we have observed temperature below the
+                # active setpoint in the current run. This avoids startup false
+                # positives while still capturing true reaches even if polling
+                # skips the exact crossing sample.
+                run_or_target_changed = (
+                    prev_run != 100 or
+                    self._target_reach_armed_for != process_sp
                 )
-                if crossed_from_below and self._target_setpoint_reached_logged_for != process_sp:
+                if run_or_target_changed:
+                    self._target_reach_armed_for = process_sp if process_temp < process_sp else None
+                elif self._target_reach_armed_for is None and process_temp < process_sp:
+                    self._target_reach_armed_for = process_sp
+
+                if (
+                    self._target_reach_armed_for == process_sp and
+                    process_temp >= process_sp and
+                    self._target_setpoint_reached_logged_for != process_sp
+                ):
                     should_log_target_reached = True
                     self._target_setpoint_reached_logged_for = process_sp
+                    self._target_reach_armed_for = None
             else:
                 self._target_setpoint_reached_logged_for = None
+                self._target_reach_armed_for = None
 
             self._last_process_temp_raw = process_temp
             self._last_run_state_raw = run_state

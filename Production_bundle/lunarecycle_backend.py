@@ -1159,11 +1159,15 @@ class DryerModbus:
         self.pulse_holding(addr=17, value_on=1, value_off=0, pulse_time=0.3)
         time.sleep(0.2)
         after = self.get_run_state_raw()
-        if before in (0, 100) and after in (0, 100) and before != after:
-            event_logger.log_actuator_state("dryer", after == 100)
-            if after != 100:
+        before_running = (before != 0)
+        after_running = (after != 0)
+        if before_running != after_running:
+            event_logger.log_actuator_state("dryer", after_running)
+            if not after_running:
                 with self._lock:
                     self._target_setpoint_reached_logged_for = None
+                    self._target_reach_armed_for = None
+                    self._last_process_temp_raw = None
 
     # ── Composite reads ───────────────────────────────────────────────────────
 
@@ -1200,17 +1204,22 @@ class DryerModbus:
         process_sp_target_raw = int(round(process_sp_c * 10.0))
 
         should_log_target_reached = False
+        state_edge_on: Optional[bool] = None
         with self._lock:
             prev_temp = self._last_process_temp_raw
             prev_run = self._last_run_state_raw
+            is_running = (run_state != 0)
 
-            if run_state == 100 and process_sp > 0:
+            if prev_run is not None and ((prev_run != 0) != is_running):
+                state_edge_on = is_running
+
+            if is_running and process_sp > 0:
                 # Arm logging only after we have observed temperature below the
                 # active setpoint in the current run. This avoids startup false
                 # positives while still capturing true reaches even if polling
                 # skips the exact crossing sample.
                 run_or_target_changed = (
-                    prev_run != 100 or
+                    prev_run == 0 or
                     self._target_reach_armed_for != process_sp
                 )
                 if run_or_target_changed:
@@ -1218,8 +1227,17 @@ class DryerModbus:
                 elif self._target_reach_armed_for is None and process_temp < process_sp_target_raw:
                     self._target_reach_armed_for = process_sp
 
+                crossed_up = (
+                    prev_temp is not None and
+                    prev_temp < process_sp_target_raw and
+                    process_temp >= process_sp_target_raw
+                )
+
                 if (
-                    self._target_reach_armed_for == process_sp and
+                    (
+                        crossed_up or
+                        self._target_reach_armed_for == process_sp
+                    ) and
                     process_temp >= process_sp_target_raw and
                     self._target_setpoint_reached_logged_for != process_sp
                 ):
@@ -1243,6 +1261,9 @@ class DryerModbus:
                 process_setpoint_c=round(process_sp_c, 1),
                 run_state=run_state,
             )
+
+        if state_edge_on is not None:
+            event_logger.log_actuator_state("dryer", state_edge_on)
 
         return {
             "connected":          self.connected,

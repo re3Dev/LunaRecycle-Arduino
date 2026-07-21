@@ -389,6 +389,7 @@ enum TCState {
   TC_SR_REVERSING,
   TC_SR_COOLING,
   TC_SR_END_REVERSE,
+  TC_SR_POSTRUN_FORWARD,
   TC_DONE
 };
 
@@ -555,7 +556,8 @@ void systemDiagUpdateLed() {
 
   // Size-reduction cycle running.
   if (srRunning || tcState == TC_SR_SHREDDING || tcState == TC_SR_REVERSING ||
-      tcState == TC_SR_COOLING || tcState == TC_SR_END_REVERSE) {
+      tcState == TC_SR_COOLING || tcState == TC_SR_END_REVERSE ||
+      tcState == TC_SR_POSTRUN_FORWARD) {
     systemDiagSetColor(255, 0, 255);  // bright magenta
     return;
   }
@@ -1129,16 +1131,12 @@ void tcMoveStepperTo(float targetMm) {
 //  cassette / bag 2) at a PE:PA ratio, shredding each. Periodically reverses
 //  the shredder to clear the blades and pauses to cool the motor. Non-blocking:
 //  layered on the trash-conveyor state machine, so serial / E-STOP stay live.
-//  Stops when both target counts are met or a cassette empties.
+//  Stops when both target counts are met or both cassettes are empty.
 // ============================================================================
 
 bool srSelectNextBag() {
   bool pe = srPeRemaining > 0;
   bool pa = srPaRemaining > 0;
-
-  // In dual-stream SR runs (both targets provided), depleting either cassette
-  // should end SR and move on to the next process step.
-  if (srRequireBothStreams && (!pe || !pa)) return false;
 
   if (!pe && !pa) return false;
   // Pick PE while within the cadence and available; otherwise a single PA.
@@ -1155,7 +1153,7 @@ void srBeginEndReverse() {
   shredderOn();
   srPhaseStart = millis();
   tcState = TC_SR_END_REVERSE;
-  Serial.println(F("[SIZERED] Targets met / cassette empty - final reverse"));
+  Serial.println(F("[SIZERED] Targets met / both cassettes empty - final reverse"));
 }
 
 void srMoveToNextBag() {
@@ -1299,6 +1297,16 @@ void srServiceTimedPhase() {
 
     case TC_SR_END_REVERSE:
       if (elapsed >= SR_endReverseMs) {
+        shredderSetDirection(true);
+        shredderOn();
+        srPhaseStart = millis();
+        tcState = TC_SR_POSTRUN_FORWARD;
+        Serial.println(F("[SIZERED] Post-run shred forward 30s before gate close"));
+      }
+      break;
+
+    case TC_SR_POSTRUN_FORWARD:
+      if (elapsed >= 30000UL) {
         srFinish(F("shredding complete"));
       }
       break;
@@ -1331,7 +1339,8 @@ void tcRunState() {
 
   // Size-reduction timed phases run while the stepper is parked.
   if (tcState == TC_SR_SHREDDING || tcState == TC_SR_REVERSING ||
-      tcState == TC_SR_COOLING   || tcState == TC_SR_END_REVERSE) {
+      tcState == TC_SR_COOLING   || tcState == TC_SR_END_REVERSE ||
+      tcState == TC_SR_POSTRUN_FORWARD) {
     srServiceTimedPhase();
     return;
   }
@@ -1419,7 +1428,8 @@ const __FlashStringHelper* tcStateName() {
     case TC_SR_SHREDDING:
     case TC_SR_REVERSING:
     case TC_SR_COOLING:
-    case TC_SR_END_REVERSE:   return F("SIZERED");
+    case TC_SR_END_REVERSE:
+    case TC_SR_POSTRUN_FORWARD: return F("SIZERED");
     case TC_DONE:             return F("DONE");
     default:                  return F("WAIT_HOME");
   }

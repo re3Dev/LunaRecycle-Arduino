@@ -433,14 +433,18 @@ class MoonrakerMonitor:
                 except (TypeError, ValueError):
                     continue
 
-                target_raw = obj_data.get("target", 0.0)
-                try:
-                    target_c = max(0.0, float(target_raw))
-                except (TypeError, ValueError):
-                    target_c = 0.0
-
                 prev_target = float(self.extruder_targets.get(obj_name, 0.0))
                 prev_phase = self._extruder_zone_phase.get(obj_name, "OFF")
+
+                target_raw = obj_data.get("target", None)
+                target_present = "target" in obj_data
+                if target_present:
+                    try:
+                        target_c = max(0.0, float(target_raw))
+                    except (TypeError, ValueError):
+                        target_c = prev_target
+                else:
+                    target_c = prev_target
 
                 self.extruder_temps[obj_name] = temp_c
                 self.extruder_targets[obj_name] = target_c
@@ -469,7 +473,7 @@ class MoonrakerMonitor:
                             })
                             self._extruder_zone_target_reached_logged[obj_name] = target_c
                 else:
-                    if prev_target > 0.5 and temp_c > 35.0:
+                    if target_present and target_c <= 0.5 and prev_target > 0.5 and temp_c > 35.0:
                         phase = "COOLING"
                         if prev_phase != "COOLING":
                             pending_zone_events.append({

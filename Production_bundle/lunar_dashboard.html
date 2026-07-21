@@ -1734,6 +1734,15 @@
         try{ await apiArduino(path, { method: "POST" }); }
         catch(_){ /* stop path is best-effort */ }
       }
+      try{
+        await apiArduino("/motor/stop", { method: "POST" });
+      }catch(_){ /* mixer stop is best-effort */ }
+      try{
+        await apiArduino("/blastgate/home", {
+          method: "POST",
+          body: JSON.stringify({ gate: "ALL" }),
+        }, 20000);
+      }catch(_){ /* blastgate close is best-effort */ }
       try{ await apiArduino("/gate/close", { method: "POST" }); }
       catch(_){ /* gate close is best-effort */ }
       await srRefreshStatus(true);
@@ -1910,6 +1919,14 @@
         workflowLog("Step 2 complete.", "good");
 
         workflowSet("FEED", "Running Step 3/3...", true);
+        await apiArduino("/blastgate/homemax", {
+          method: "POST",
+          body: JSON.stringify({ gate: "ALL" }),
+        }, 20000);
+        await apiArduino("/motor/set", {
+          method: "POST",
+          body: JSON.stringify({ speed: 200, dir: "FWD" }),
+        });
         await apiArduino("/feed/start", {
           method: "POST",
           body: JSON.stringify({
@@ -1918,8 +1935,8 @@
           }),
         });
         await feedRefreshStatus(true);
-        workflowLog(`Step 3 started: feed ratio watcher running (${cfg.feedRatio} spins/home, vac ${cfg.vacPct}%).`, "good");
-        workflowSet("COMPLETE", "Workflow complete. Feed is active; use Stop Workflow when done.", false);
+        workflowLog(`Step 3 started: blastgates OPEN, mixer FWD @ 200, feed ratio watcher running (${cfg.feedRatio} spins/home, vac ${cfg.vacPct}%).`, "good");
+        workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 200; use Stop Workflow when done.", false);
       }catch(err){
         if(S.workflowStopRequested){
           workflowLog("Workflow stopped by operator.", "warn");

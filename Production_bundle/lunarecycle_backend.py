@@ -257,6 +257,9 @@ class MoonrakerMonitor:
         self.extruder_rotations_total = 0.0
         self._last_live_extruder_position: Optional[float] = None
         self.extruder_temps: dict[str, float] = {}
+        self.extruder_targets: dict[str, float] = {}
+        self._extruder_zone_phase: dict[str, str] = {}
+        self._extruder_zone_target_reached_logged: dict[str, float] = {}
         self.max_extruder_temp_c = 0.0
         self.fe_auto_on: Optional[bool] = None
         self.fe_auto_last_error = ""
@@ -308,6 +311,9 @@ class MoonrakerMonitor:
                 self.extruder_rotations_total = 0.0
                 self._last_live_extruder_position = None
                 self.extruder_temps = {}
+                self.extruder_targets = {}
+                self._extruder_zone_phase = {}
+                self._extruder_zone_target_reached_logged = {}
                 self.max_extruder_temp_c = 0.0
 
     def _apply_status(self, status: dict) -> None:
@@ -352,6 +358,8 @@ class MoonrakerMonitor:
                     live_pos = None
                     break
 
+        pending_zone_events: list[dict] = []
+
         with self._lock:
             if live_velocity is not None:
                 self.live_velocity = live_velocity
@@ -390,7 +398,7 @@ class MoonrakerMonitor:
                     units_per_rot = max(1e-6, MOONRAKER_EXTRUDER_UNITS_PER_ROTATION)
                     self.extruder_rotations_total = self.extruder_units_total / units_per_rot
 
-            # Collect any reported extruder heater temperatures.
+            # Collect any reported extruder heater temperatures / targets.
             for obj_name, obj_data in status.items():
                 if not isinstance(obj_name, str) or not obj_name.startswith("extruder"):
                     continue
@@ -401,12 +409,64 @@ class MoonrakerMonitor:
                     temp_c = float(temp_raw)
                 except (TypeError, ValueError):
                     continue
+
+                target_raw = obj_data.get("target", 0.0)
+                try:
+                    target_c = max(0.0, float(target_raw))
+                except (TypeError, ValueError):
+                    target_c = 0.0
+
+                prev_target = float(self.extruder_targets.get(obj_name, 0.0))
+                prev_phase = self._extruder_zone_phase.get(obj_name, "OFF")
+
                 self.extruder_temps[obj_name] = temp_c
+                self.extruder_targets[obj_name] = target_c
+
+                is_on = target_c > 0.5
+                at_target = is_on and temp_c >= (target_c - 1.0)
+
+                if is_on and prev_target <= 0.5:
+                    pending_zone_events.append({
+                        "action": "HEATING_ON",
+                        "zone": obj_name,
+                        "target_c": round(target_c, 2),
+                        "temp_c": round(temp_c, 2),
+                    })
+
+                if is_on:
+                    phase = "AT_TARGET" if at_target else "HEATING"
+                    if at_target:
+                        last_logged_target = self._extruder_zone_target_reached_logged.get(obj_name)
+                        if last_logged_target is None or abs(last_logged_target - target_c) > 0.25:
+                            pending_zone_events.append({
+                                "action": "TARGET_REACHED",
+                                "zone": obj_name,
+                                "target_c": round(target_c, 2),
+                                "temp_c": round(temp_c, 2),
+                            })
+                            self._extruder_zone_target_reached_logged[obj_name] = target_c
+                else:
+                    if prev_target > 0.5 and temp_c > 35.0:
+                        phase = "COOLING"
+                        if prev_phase != "COOLING":
+                            pending_zone_events.append({
+                                "action": "COOLING",
+                                "zone": obj_name,
+                                "temp_c": round(temp_c, 2),
+                            })
+                    else:
+                        phase = "OFF"
+                    self._extruder_zone_target_reached_logged.pop(obj_name, None)
+
+                self._extruder_zone_phase[obj_name] = phase
             self.max_extruder_temp_c = max(self.extruder_temps.values()) if self.extruder_temps else 0.0
 
             # Extruding means a meaningful live extrusion velocity.
             vel = abs(self.live_extruder_velocity)
             self.extruding = vel >= MOONRAKER_EXTRUDER_VELOCITY_MIN
+
+        for evt in pending_zone_events:
+            event_logger.log_actuator_action("extruder_zone", evt.pop("action"), **evt)
 
         # Drive FE SSR from heater temperatures (ON >= threshold, OFF < threshold).
         self._sync_fume_extractor_from_temp()

@@ -774,6 +774,18 @@ class ArduinoBridge:
         if not isinstance(line, str) or not line:
             return
 
+        if line.startswith("[SHREDDER] Shredder ON"):
+            event_logger.log_actuator_state("shredder", True)
+            if line.endswith(" FWD"):
+                event_logger.log_actuator_action("shredder", "DIRECTION", direction="FWD")
+            elif line.endswith(" REV"):
+                event_logger.log_actuator_action("shredder", "DIRECTION", direction="REV")
+            return
+
+        if line.startswith("[SHREDDER] Shredder OFF"):
+            event_logger.log_actuator_state("shredder", False)
+            return
+
         if line.startswith("[TC] Sequence started - moving to "):
             bag = line.replace("[TC] Sequence started - moving to ", "").strip()
             event_logger.log_actuator_action("tc_stepper", "MOVE_TO_POSITION", target=bag)

@@ -1485,13 +1485,22 @@ void shredderApply() {
 }
 
 void shredderOn() {
+  bool wasRunning = shredderRunning;
   shredderRunning = true;
   shredderApply();
+  if (!wasRunning) {
+    Serial.print(F("[SHREDDER] Shredder ON "));
+    Serial.println(shredderFwd ? F("FWD") : F("REV"));
+  }
 }
 
 void shredderOff() {
+  bool wasRunning = shredderRunning;
   shredderRunning = false;
   shredderApply();
+  if (wasRunning) {
+    Serial.println(F("[SHREDDER] Shredder OFF"));
+  }
 }
 
 void shredderSetDirection(bool fwd) {
@@ -2266,12 +2275,9 @@ void handleCommand(const String& cmd) {
 
   } else if (cmd == "SHREDDER_ON") {
     shredderOn();
-    Serial.print(F("[SHREDDER] Shredder ON "));
-    Serial.println(shredderFwd ? F("FWD") : F("REV"));
 
   } else if (cmd == "SHREDDER_OFF") {
     shredderOff();
-    Serial.println(F("[SHREDDER] Shredder OFF"));
 
   } else if (cmd == "SHREDDER_FWD") {
     shredderSetDirection(true);

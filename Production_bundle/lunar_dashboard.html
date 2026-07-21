@@ -966,6 +966,10 @@
                   <div class="kv"><div class="k">Vacuum %</div><div class="v" id="rtVacText">—</div></div>
                   <div class="kv"><div class="k">Homes Completed</div><div class="v" id="rtHomeCountText">—</div></div>
                   <div class="kv"><div class="k">Live Extruder Rot</div><div class="v" id="mrRotTotalText">—</div></div>
+                  <div class="kv"><div class="k">Extruder</div><div class="v" id="mrTempExtruderText">—</div></div>
+                  <div class="kv"><div class="k">Extruder1</div><div class="v" id="mrTempExtruder1Text">—</div></div>
+                  <div class="kv"><div class="k">Extruder2</div><div class="v" id="mrTempExtruder2Text">—</div></div>
+                  <div class="kv"><div class="k">Max Temp</div><div class="v" id="mrTempMaxText">—</div></div>
                 </div>
                 <div class="act-actions">
                   <input type="number" id="ratioTestSpinsPerHome" min="1" step="1" value="10" style="max-width:120px;" />
@@ -1141,6 +1145,8 @@
         live_extruder_velocity: 0,
         live_extruder_position: 0,
         extruder_rotations_total: 0,
+        extruder_temps: {},
+        max_extruder_temp_c: 0,
       },
       ratioTest: {
         running: false,
@@ -1520,6 +1526,10 @@
       setText("mrVelText", Number(S.moonraker.live_extruder_velocity || 0).toFixed(4));
       setText("mrLiveEText", Number(S.moonraker.live_extruder_position || 0).toFixed(4));
       setText("mrRotTotalText", Number(S.moonraker.extruder_rotations_total || 0).toFixed(4));
+      setText("mrTempExtruderText", S.moonraker.extruder_temps?.extruder != null ? Number(S.moonraker.extruder_temps.extruder).toFixed(1) : "—");
+      setText("mrTempExtruder1Text", S.moonraker.extruder_temps?.extruder1 != null ? Number(S.moonraker.extruder_temps.extruder1).toFixed(1) : "—");
+      setText("mrTempExtruder2Text", S.moonraker.extruder_temps?.extruder2 != null ? Number(S.moonraker.extruder_temps.extruder2).toFixed(1) : "—");
+      setText("mrTempMaxText", Number(S.moonraker.max_extruder_temp_c || 0).toFixed(1));
 
       setText("rtSpinsText", String(S.ratioTest.spins_per_home ?? "—"));
       setText("rtPendingText", Number(S.ratioTest.rotations_since_home || 0).toFixed(4));

@@ -260,6 +260,8 @@ event_logger = EventLogger(EVENT_LOG_PATH)
 class MoonrakerMonitor:
     """Background websocket monitor for live extrusion state from Moonraker."""
 
+    _DEFAULT_EXTRUDER_OBJECTS = ("extruder", "extruder1", "extruder2", "extruder3")
+
     def __init__(self, ws_url: str) -> None:
         self.ws_url = ws_url
         self.enabled = bool(ws_url)
@@ -536,11 +538,12 @@ class MoonrakerMonitor:
         result = msg.get("result", {}) if isinstance(msg, dict) else {}
         objects = result.get("objects", []) if isinstance(result, dict) else []
         if not isinstance(objects, list):
-            return ["extruder"]
+            return list(MoonrakerMonitor._DEFAULT_EXTRUDER_OBJECTS)
         names = [str(name) for name in objects if isinstance(name, str) and name.startswith("extruder")]
+        names.extend(MoonrakerMonitor._DEFAULT_EXTRUDER_OBJECTS)
         # Keep deterministic order and dedupe.
         names = sorted(set(names))
-        return names or ["extruder"]
+        return names or list(MoonrakerMonitor._DEFAULT_EXTRUDER_OBJECTS)
 
     def _run(self) -> None:
         while True:
@@ -550,7 +553,7 @@ class MoonrakerMonitor:
 
                 # Discover available extruder heater objects first.
                 ws.send(json.dumps({"jsonrpc": "2.0", "method": "printer.objects.list", "id": 2}))
-                extruder_objects = ["extruder"]
+                extruder_objects = list(self._DEFAULT_EXTRUDER_OBJECTS)
                 list_deadline = time.monotonic() + 5.0
                 while time.monotonic() < list_deadline:
                     raw = ws.recv()

@@ -56,6 +56,26 @@ DRYER_STOPBITS  = int(os.environ.get("LUNA_DRYER_STOPBITS", "1"))
 DRYER_BYTESIZE  = int(os.environ.get("LUNA_DRYER_BYTESIZE", "8"))
 DRYER_TIMEOUT   = 0.5    # seconds
 
+
+def _parse_int_set_env(name: str, default: str) -> set[int]:
+    raw = os.environ.get(name, default)
+    out: set[int] = set()
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            out.add(int(token, 0))
+        except Exception:
+            continue
+    return out
+
+
+# Dryer "run state" can vary by controller revision. Keep explicit sets so
+# status, UI chips, and event logging stay stable even when run_state is quirky.
+DRYER_RUN_ON_VALUES = _parse_int_set_env("LUNA_DRYER_RUN_ON_VALUES", "100")
+DRYER_RUN_OFF_VALUES = _parse_int_set_env("LUNA_DRYER_RUN_OFF_VALUES", "0")
+
 # Persistent event log path (JSON Lines). One event per line with CST timestamp.
 EVENT_LOG_PATH = os.environ.get(
     "LUNA_EVENT_LOG_PATH",
@@ -1076,6 +1096,7 @@ class DryerModbus:
         self._last_process_temp_raw: Optional[int] = None
         self._last_run_state_raw: Optional[int] = None
         self._target_reach_armed_for: Optional[int] = None
+        self._last_running_state: Optional[bool] = None
 
     def connect(self) -> bool:
         with self._lock:
@@ -1095,6 +1116,7 @@ class DryerModbus:
             self._last_process_temp_raw = None
             self._last_run_state_raw = None
             self._target_reach_armed_for = None
+            self._last_running_state = None
 
     def read_input(self, addr: int, count: int = 1) -> list[int]:
         with self._lock:
@@ -1156,12 +1178,14 @@ class DryerModbus:
 
     def toggle_on_off(self) -> None:
         before = self.get_run_state_raw()
+        before_output = self.get_output_word()
         self.pulse_holding(addr=17, value_on=1, value_off=0, pulse_time=0.3)
         time.sleep(0.2)
         after = self.get_run_state_raw()
-        before_running = (before != 0)
-        after_running = (after != 0)
-        if before_running != after_running:
+        after_output = self.get_output_word()
+        before_running = self._classify_running_state(before, before_output, self._last_running_state)
+        after_running = self._classify_running_state(after, after_output, before_running)
+        if before_running is not None and after_running is not None and before_running != after_running:
             event_logger.log_actuator_state("dryer", after_running)
             if not after_running:
                 with self._lock:
@@ -1172,12 +1196,26 @@ class DryerModbus:
     # ── Composite reads ───────────────────────────────────────────────────────
 
     @staticmethod
-    def _dryer_state_guess(run_state: int) -> str:
-        if run_state == 0:
-            return "OFF"
-        if run_state == 100:
+    def _classify_running_state(
+        run_state: int,
+        output_word: int,
+        prev_running: Optional[bool],
+    ) -> Optional[bool]:
+        if run_state in DRYER_RUN_ON_VALUES:
+            return True
+        if run_state in DRYER_RUN_OFF_VALUES:
+            return False
+        if output_word == 0:
+            return False
+        return prev_running
+
+    @staticmethod
+    def _dryer_state_guess(run_state: int, running: Optional[bool]) -> str:
+        if running is True:
             return "ON"
-        return f"Unknown ({run_state})"
+        if running is False:
+            return "OFF"
+        return f"UNKNOWN ({run_state})"
 
     @staticmethod
     def _bits_set(value: int) -> list[int]:
@@ -1205,13 +1243,16 @@ class DryerModbus:
 
         should_log_target_reached = False
         state_edge_on: Optional[bool] = None
+        running_state: Optional[bool] = None
         with self._lock:
             prev_temp = self._last_process_temp_raw
             prev_run = self._last_run_state_raw
-            is_running = (run_state != 0)
+            prev_running = self._last_running_state
+            running_state = self._classify_running_state(run_state, output_word, prev_running)
+            is_running = bool(running_state)
 
-            if prev_run is not None and ((prev_run != 0) != is_running):
-                state_edge_on = is_running
+            if prev_running is not None and running_state is not None and prev_running != running_state:
+                state_edge_on = running_state
 
             if is_running and process_sp > 0:
                 # Arm logging only after we have observed temperature below the
@@ -1250,6 +1291,8 @@ class DryerModbus:
 
             self._last_process_temp_raw = process_temp
             self._last_run_state_raw = run_state
+            if running_state is not None:
+                self._last_running_state = running_state
 
         if should_log_target_reached:
             event_logger.log_actuator_action(
@@ -1272,7 +1315,8 @@ class DryerModbus:
             "device_id":          DRYER_DEVICE_ID,
             "mode_state":         mode_state,
             "run_state":          run_state,
-            "dryer_state_guess":  self._dryer_state_guess(run_state),
+            "is_running":         running_state,
+            "dryer_state_guess":  self._dryer_state_guess(run_state, running_state),
             "process_temp":       process_temp,
             "regen_temp":         regen_temp,
             "regen_outlet_temp":  regen_outlet_temp,

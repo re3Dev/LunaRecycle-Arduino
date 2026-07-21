@@ -2097,8 +2097,9 @@
         S.heater_set = d.process_setpoint ?? S.heater_set;
 
         const run = d.run_state;
-        S.screw_on = run === 100;
-        S.heater_on = run === 100;
+        const isRunning = (d.is_running === true);
+        S.screw_on = isRunning;
+        S.heater_on = isRunning;
 
         const spInput = $("#dryerProcessSpInput");
         if(spInput){ spInput.value = d.process_setpoint ?? ""; }
@@ -2186,7 +2187,7 @@
       const dryerDot = $("#dryerDot");
       if(dryerDot){
         if(S.dryerIoLive){
-          if(S.dryerLastPollOk && d.run_state === 100) dryerDot.className = "dot good";
+          if(S.dryerLastPollOk && d.is_running === true) dryerDot.className = "dot good";
           else if(S.dryerApiConnected) dryerDot.className = "dot warn";
           else dryerDot.className = "dot bad";
         }else{

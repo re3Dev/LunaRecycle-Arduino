@@ -159,6 +159,7 @@ class EventLogger:
         self._lock = threading.Lock()
         self._last_error = ""
         self._last_state: dict[str, bool] = {}
+        self._last_file_size: Optional[int] = None
         # Ensure the destination directory exists so first-write cannot fail
         # silently when a custom path points to a missing folder.
         folder = os.path.dirname(os.path.abspath(self._path))
@@ -166,6 +167,24 @@ class EventLogger:
             os.makedirs(folder, exist_ok=True)
         self._archive_legacy_log_if_needed()
         self._ensure_log_file_exists()
+        self._last_file_size = self._safe_file_size()
+
+    def _safe_file_size(self) -> Optional[int]:
+        try:
+            if os.path.exists(self._path):
+                return os.path.getsize(self._path)
+        except Exception:
+            return None
+        return None
+
+    def _sync_file_state_locked(self) -> None:
+        """Detect log rotation/truncation and reset edge dedupe state."""
+        self._ensure_log_file_exists()
+        current_size = self._safe_file_size()
+        prev_size = self._last_file_size
+        if prev_size is not None and current_size is not None and current_size < prev_size:
+            self._last_state = {}
+        self._last_file_size = current_size
 
     def _ensure_log_file_exists(self) -> None:
         """Create the active log file at startup for easy deployment verification."""
@@ -216,10 +235,12 @@ class EventLogger:
     def _append_event(self, event: dict) -> None:
         with open(self._path, "a", encoding="utf-8") as fp:
             fp.write(json.dumps(event, separators=(",", ":"), ensure_ascii=True) + "\n")
+        self._last_file_size = self._safe_file_size()
 
     def log_actuator_state(self, actuator: str, is_on: bool) -> None:
         try:
             with self._lock:
+                self._sync_file_state_locked()
                 prev = self._last_state.get(actuator)
                 if prev is not None and prev == is_on:
                     return
@@ -240,6 +261,7 @@ class EventLogger:
     def log_actuator_action(self, actuator: str, action: str, **details) -> None:
         try:
             with self._lock:
+                self._sync_file_state_locked()
                 event = {
                     "ts": datetime.now(EVENT_LOG_TZ).strftime("%Y-%m-%dT%H:%M:%S"),
                     "event": "action",

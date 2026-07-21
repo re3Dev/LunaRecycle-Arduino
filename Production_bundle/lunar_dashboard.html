@@ -1010,20 +1010,12 @@
                 <input type="number" id="wfDryTempC" min="1" max="250" step="1" value="70" />
               </div>
               <div class="cell">
-                <label for="wfFeedPrimeSec">Prime s</label>
-                <input type="number" id="wfFeedPrimeSec" min="0" step="1" value="3" />
+                <label for="wfFeedRatio">Ratio (spins/home)</label>
+                <input type="number" id="wfFeedRatio" min="1" step="1" value="10" />
               </div>
               <div class="cell">
                 <label for="wfFeedVacPct">Vacuum %</label>
                 <input type="number" id="wfFeedVacPct" min="0" max="100" step="1" value="90" />
-              </div>
-              <div class="cell">
-                <label for="wfFeedMeterOnSec">Meter on s</label>
-                <input type="number" id="wfFeedMeterOnSec" min="0" step="1" value="6" />
-              </div>
-              <div class="cell">
-                <label for="wfFeedMeterPeriodSec">Meter every s</label>
-                <input type="number" id="wfFeedMeterPeriodSec" min="1" step="1" value="15" />
               </div>
             </div>
             <div class="row" style="justify-content:flex-start; gap:6px; margin-bottom:6px;">
@@ -1645,9 +1637,10 @@
         const d = res.data || {};
         S.feedPhase        = d.phase || "—";
         S.feedRunning      = !!d.running;
-        S.feedAgitator     = d.agitator_on ? "PULSING" : (d.running ? "IDLE" : "—");
-        S.feedVac          = d.running ? `${d.vacuum_pct}%` : "—";
-        S.feedAgitatorPct  = d.agitator_pct !== undefined ? `${d.agitator_pct}%` : "—";
+        const homes = Number(d.home_sequences_completed || 0);
+        S.feedAgitator     = d.running ? `HOMES ${homes}` : "—";
+        S.feedVac          = d.vacuum_pct !== undefined ? `${d.vacuum_pct}%` : "—";
+        S.feedAgitatorPct  = d.ratio !== undefined ? `${d.ratio} spins/home` : "—";
         S.feedMsg          = d.message || "—";
       }catch(err){
         if(!silent){ log(`Feed status failed: ${err.message}`, "bad"); }
@@ -1664,23 +1657,19 @@
 
     async function feedStart(){
       if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      const primeSec     = parseInt($("#feedPrimeSec").value, 10) || 0;
-      const vacPct       = parseInt($("#feedVacPct").value, 10) || 0;
-      const meterOnSec   = parseInt($("#feedMeterOnSec").value, 10) || 0;
-      const meterPeriod  = parseInt($("#feedMeterPeriodSec").value, 10) || 0;
+      const ratio        = parseInt($("#feedRatioSpins")?.value || $("#wfFeedRatio")?.value || "0", 10) || 0;
+      const vacPct       = parseInt($("#feedVacPct")?.value || $("#wfFeedVacPct")?.value || "0", 10) || 0;
+      if(ratio <= 0){ log("Ratio (spins/home) must be greater than 0.", "bad"); return; }
       if(vacPct < 0 || vacPct > 100){ log("Vacuum % must be 0–100.", "bad"); return; }
-      if(meterPeriod <= 0 || meterOnSec > meterPeriod){ log("Meter timing invalid.", "bad"); return; }
       try{
         const res = await apiArduino("/feed/start", {
           method: "POST",
           body: JSON.stringify({
-            prime_sec: primeSec,
+            ratio,
             vacuum_pct: vacPct,
-            meter_on_sec: meterOnSec,
-            meter_period_sec: meterPeriod,
           }),
         });
-        log(`Feed started: prime ${primeSec}s, vac ${vacPct}%, meter ${meterOnSec}s/${meterPeriod}s.`, "good", (res.data && res.data.message) || "");
+        log(`Feed started: ratio ${ratio} spins/home, vac ${vacPct}%.`, "good", (res.data && res.data.message) || "");
         await feedRefreshStatus(true);
       }catch(err){ log(`Feed start failed: ${err.message}`, "bad"); }
     }
@@ -1761,10 +1750,8 @@
         ratioPa: parseInt($("#wfRatioPa")?.value || "0", 10) || 0,
         dryMinutes: parseFloat($("#wfDryMinutes")?.value || "0"),
         dryTempC: parseInt($("#wfDryTempC")?.value || "0", 10),
-        primeSec: parseInt($("#wfFeedPrimeSec")?.value || "0", 10) || 0,
+        feedRatio: parseInt($("#wfFeedRatio")?.value || "0", 10) || 0,
         vacPct: parseInt($("#wfFeedVacPct")?.value || "0", 10) || 0,
-        meterOnSec: parseInt($("#wfFeedMeterOnSec")?.value || "0", 10) || 0,
-        meterPeriodSec: parseInt($("#wfFeedMeterPeriodSec")?.value || "0", 10) || 0,
       };
 
       if(cfg.srMode === "ratio"){
@@ -1786,10 +1773,8 @@
 
       if(!(cfg.dryMinutes > 0)){ throw new Error("Dry minutes must be greater than zero."); }
       if(!(cfg.dryTempC > 0 && cfg.dryTempC <= 250)){ throw new Error("Dry temp must be 1-250 C."); }
+      if(cfg.feedRatio <= 0){ throw new Error("Feed ratio (spins/home) must be greater than zero."); }
       if(cfg.vacPct < 0 || cfg.vacPct > 100){ throw new Error("Vacuum percent must be 0-100."); }
-      if(cfg.meterPeriodSec <= 0 || cfg.meterOnSec < 0 || cfg.meterOnSec > cfg.meterPeriodSec){
-        throw new Error("Feed meter timing is invalid.");
-      }
       return cfg;
     }
 
@@ -1878,7 +1863,7 @@
 
       S.workflowStopRequested = false;
       workflowSet("TC HOME", "Running homing before automation...", true);
-      workflowLog(`Starting workflow: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed vac ${cfg.vacPct}%`, "info");
+      workflowLog(`Starting workflow: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed ratio ${cfg.feedRatio} spins/home @ vac ${cfg.vacPct}%`, "info");
 
       try{
         await workflowRunTcHome();
@@ -1912,14 +1897,12 @@
         await apiArduino("/feed/start", {
           method: "POST",
           body: JSON.stringify({
-            prime_sec: cfg.primeSec,
+            ratio: cfg.feedRatio,
             vacuum_pct: cfg.vacPct,
-            meter_on_sec: cfg.meterOnSec,
-            meter_period_sec: cfg.meterPeriodSec,
           }),
         });
         await feedRefreshStatus(true);
-        workflowLog("Step 3 started: Feed is now running.", "good");
+        workflowLog(`Step 3 started: feed ratio watcher running (${cfg.feedRatio} spins/home, vac ${cfg.vacPct}%).`, "good");
         workflowSet("COMPLETE", "Workflow complete. Feed is active; use Stop Workflow when done.", false);
       }catch(err){
         if(S.workflowStopRequested){

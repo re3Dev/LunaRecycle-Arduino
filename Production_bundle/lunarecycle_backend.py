@@ -1817,13 +1817,10 @@ PREHEAT_LEAD_SECONDS = int(os.environ.get("LUNA_PREHEAT_LEAD_SEC", "1500"))  # 2
 BLASTGATE_OPEN_CMD   = os.environ.get("LUNA_BG_OPEN_CMD", "BLASTGATE_HOMEMAX ALL")
 BLASTGATE_CLOSE_CMD  = os.environ.get("LUNA_BG_CLOSE_CMD", "BLASTGATE_HOME ALL")
 
-# ── Print-feed metering tunables ─────────────────────────────────────────────
-FEED_PRIME_SECONDS        = int(os.environ.get("LUNA_FEED_PRIME_SEC", "10"))
-FEED_METER_ON_SECONDS     = int(os.environ.get("LUNA_FEED_METER_ON_SEC", "3"))
-FEED_METER_PERIOD_SECONDS = int(os.environ.get("LUNA_FEED_METER_PERIOD_SEC", "20"))
-FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", "40"))
-FEED_AGITATOR_PCT         = int(os.environ.get("LUNA_FEED_AGITATOR_PCT", "75"))
-FEED_AGITATOR_DIR         = os.environ.get("LUNA_FEED_AGITATOR_DIR", "REV").upper()
+# ── Print-feed ratio-test-style defaults ─────────────────────────────────────
+FEED_RATIO_SPINS_PER_HOME = int(os.environ.get("LUNA_FEED_RATIO_SPINS_PER_HOME", str(RATIO_TEST_SPINS_PER_HOME)))
+FEED_POLL_SEC             = float(os.environ.get("LUNA_FEED_POLL_SEC", str(RATIO_TEST_POLL_SEC)))
+FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", str(RATIO_TEST_VACUUM_IDLE_PCT)))
 
 
 class ProcessOrchestrator:
@@ -2077,119 +2074,40 @@ class ProcessOrchestrator:
 
 
 class FeedController:
-    """Print-feed prime + intermittent metering on a background thread.
+    """Feed wrapper that reuses the extrusion ratio test behavior.
 
-    PRIME  - vacuum + agitator both run for FEED_PRIME_SECONDS to charge the
-             film crammer before the print starts.
-    METER  - vacuum stays on (compaction); the agitator pulses on for
-             FEED_METER_ON every FEED_METER_PERIOD to meter material in.
+    Feed start/stop/status remains on /api/feed/* for workflow continuity, but
+    execution is delegated to the same Moonraker-driven ratio watcher used by
+    /api/extrusion_ratio_test/*.
     """
 
-    def __init__(self):
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._reset()
+    def start(self, spins_per_home: int, vacuum_pct: int, poll_sec: Optional[float] = None) -> None:
+        ratio_test.start(
+            spins_per_home=max(1, int(spins_per_home)),
+            poll_sec=FEED_POLL_SEC if poll_sec is None else max(0.1, float(poll_sec)),
+            vacuum_pct=max(0, min(100, int(vacuum_pct))),
+        )
 
-    def _reset(self):
-        self.phase = "IDLE"          # IDLE, PRIMING, METERING, STOPPED, ERROR
-        self.started_at = 0.0
-        self.vacuum_pct = 0
-        self.agitator_pct = 0
-        self.agitator_on = False
-        self.moonraker_connected = False
-        self.moonraker_extruding = False
-        self.message = ""
-
-    def _arduino(self, cmd: str):
-        try:
-            arduino.send(cmd)
-        except Exception as exc:
-            with self._lock:
-                self.message = f"arduino '{cmd}' failed: {exc}"
-
-    def _run(self, prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct):
-        try:
-            with self._lock:
-                self.phase = "PRIMING"
-                self.started_at = time.monotonic()
-                self.vacuum_pct = vacuum_pct
-                self.agitator_pct = agitator_pct
-                self.message = "Priming crammer (vacuum + agitator)."
-            self._arduino(f"VACUUM_SET {vacuum_pct}")
-
-            use_moonraker_gating = moonraker.enabled
-            if use_moonraker_gating:
-                # Moonraker-controlled mode: keep vacuum continuously on while
-                # extrusion is active; the air lock is no longer pulsed here.
-                with self._lock:
-                    self.phase = "METERING"
-                    self.message = "Metering gated by live extruder activity (vacuum only)."
-                while not self._stop.is_set():
-                    snap = moonraker.snapshot()
-                    want = bool(snap.get("extruding"))
-                    connected = bool(snap.get("connected"))
-                    with self._lock:
-                        self.moonraker_connected = connected
-                        self.moonraker_extruding = want
-                    self._stop.wait(0.2)
-
-                self._arduino("VACUUM_STOP")
-                with self._lock:
-                    self.phase = "STOPPED"
-                    self.message = "Feed stopped."
-                return
-
-            end = time.monotonic() + prime_sec
-            while not self._stop.is_set() and time.monotonic() < end:
-                self._stop.wait(0.2)
-
-            # ── Metering: vacuum steady, agitator pulses ─────────────────────
-            with self._lock:
-                self.phase = "METERING"
-                self.message = "Metering material to the crammer with vacuum only."
-            cycle_start = time.monotonic()
-            while not self._stop.is_set():
-                self._stop.wait(0.5)
-
-            self._arduino("VACUUM_STOP")
-            with self._lock:
-                self.phase = "STOPPED"
-                self.message = "Feed stopped."
-        except Exception as exc:
-            self._arduino("VACUUM_STOP")
-            with self._lock:
-                self.phase = "ERROR"
-                self.message = f"Error: {exc}"
-
-    def start(self, prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct):
-        with self._lock:
-            if self.phase in ("PRIMING", "METERING"):
-                raise RuntimeError("Feed already running.")
-            self._reset()
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._run,
-            args=(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct),
-            daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
+    def stop(self) -> None:
+        ratio_test.stop()
 
     def status(self) -> dict:
-        with self._lock:
-            running = self.phase in ("PRIMING", "METERING")
-            return {
-                "phase":        self.phase,
-                "running":      running,
-                "vacuum_pct":   self.vacuum_pct,
-                "agitator_pct": self.agitator_pct,
-                "agitator_on":  self.agitator_on,
-                "moonraker_connected": self.moonraker_connected,
-                "moonraker_extruding": self.moonraker_extruding,
-                "message":      self.message,
-            }
+        rs = ratio_test.status()
+        return {
+            "phase": rs.get("phase", "IDLE"),
+            "running": bool(rs.get("running")),
+            "ratio": int(rs.get("spins_per_home", 0) or 0),
+            "spins_per_home": int(rs.get("spins_per_home", 0) or 0),
+            "vacuum_pct": int(rs.get("vacuum_pct", 0) or 0),
+            "moonraker_connected": bool(rs.get("moonraker_connected")),
+            "live_extruder_velocity": float(rs.get("live_extruder_velocity", 0.0) or 0.0),
+            "live_extruder_rotations_total": float(rs.get("live_extruder_rotations_total", 0.0) or 0.0),
+            "rotations_since_home": float(rs.get("rotations_since_home", 0.0) or 0.0),
+            "rotations_until_home": float(rs.get("rotations_until_home", 0.0) or 0.0),
+            "home_sequences_completed": int(rs.get("home_sequences_completed", 0) or 0),
+            "message": str(rs.get("message", "")),
+            "last_error": str(rs.get("last_error", "")),
+        }
 
 
 orchestrator = ProcessOrchestrator()
@@ -2445,24 +2363,21 @@ def api_dry_status():
 
 @app.route("/api/feed/start", methods=["POST"])
 def api_feed_start():
-    """Begin print-feed prime + metering. Body overrides are optional."""
+    """Start feed using ratio-test behavior. Body: {ratio|spins_per_home, vacuum_pct}."""
     try:
-        if ratio_test.status().get("running"):
-            return jsonify({"ok": False, "error": "extrusion_ratio_test is running; stop it first"}), 400
         body = request.get_json(silent=True) or {}
-        prime_sec    = int(body.get("prime_sec", FEED_PRIME_SECONDS))
-        meter_on     = int(body.get("meter_on_sec", FEED_METER_ON_SECONDS))
-        meter_period = int(body.get("meter_period_sec", FEED_METER_PERIOD_SECONDS))
+        ratio_raw = body.get("ratio", body.get("spins_per_home", FEED_RATIO_SPINS_PER_HOME))
+        ratio = int(ratio_raw)
+        poll_sec = body.get("poll_sec", None)
         vacuum_pct   = int(body.get("vacuum_pct", FEED_VACUUM_PCT))
-        agitator_pct = int(body.get("agitator_pct", FEED_AGITATOR_PCT))
+        if ratio <= 0:
+            return jsonify({"ok": False, "error": "ratio must be > 0"}), 400
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
-        if not (0 <= agitator_pct <= 100):
-            return jsonify({"ok": False, "error": "agitator_pct must be 0-100"}), 400
-        if meter_period <= 0 or meter_on < 0 or meter_on > meter_period:
-            return jsonify({"ok": False, "error": "meter timing invalid"}), 400
-        feeder.start(prime_sec, meter_on, meter_period, vacuum_pct, agitator_pct)
+        feeder.start(spins_per_home=ratio, vacuum_pct=vacuum_pct, poll_sec=poll_sec)
         return jsonify({"ok": True, "data": feeder.status()})
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 

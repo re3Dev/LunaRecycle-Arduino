@@ -1023,6 +1023,24 @@ def _u16(x: int) -> int:
     return x & 0xFFFF
 
 
+def _coerce_setpoint_to_raw_deci(value: object) -> tuple[int, float]:
+    """Accept C or raw-deci setpoint input and return (raw_deci, celsius).
+
+    Operator-facing API bodies usually send Celsius values (e.g. 71), while
+    Modbus registers store deci-degrees C (e.g. 710). Keep backward
+    compatibility: if the absolute value is > 250, treat it as an already-raw
+    deci-degree value.
+    """
+    num = float(value)
+    if abs(num) <= 250.0:
+        celsius = num
+        raw = int(round(num * 10.0))
+    else:
+        raw = int(round(num))
+        celsius = raw / 10.0
+    return raw, celsius
+
+
 def _arduino_send_required(cmd: str) -> list[str]:
     if not arduino.connected:
         raise RuntimeError("Arduino not connected.")
@@ -1338,9 +1356,9 @@ def api_fe_status():
 @app.route("/api/dryer/set_process_sp", methods=["POST"])
 def api_dryer_set_process_sp():
     try:
-        value = int(request.json["value"])
-        dryer.set_process_setpoint(value)
-        return jsonify({"ok": True, "value": value})
+        raw, celsius = _coerce_setpoint_to_raw_deci(request.json["value"])
+        dryer.set_process_setpoint(raw)
+        return jsonify({"ok": True, "value_raw": raw, "value_c": round(celsius, 1)})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 
@@ -1348,9 +1366,9 @@ def api_dryer_set_process_sp():
 @app.route("/api/dryer/set_dewpoint_sp", methods=["POST"])
 def api_dryer_set_dewpoint_sp():
     try:
-        value = int(request.json["value"])
-        dryer.set_dewpoint_setpoint(value)
-        return jsonify({"ok": True, "value": value})
+        raw, celsius = _coerce_setpoint_to_raw_deci(request.json["value"])
+        dryer.set_dewpoint_setpoint(raw)
+        return jsonify({"ok": True, "value_raw": raw, "value_c": round(celsius, 1)})
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 

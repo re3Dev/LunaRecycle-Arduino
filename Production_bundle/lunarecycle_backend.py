@@ -1196,7 +1196,8 @@ class DryerModbus:
         status_word       = self.get_status_word()
         output_word       = self.get_output_word()
         process_temp_c    = process_temp / 10.0
-        process_sp_c      = process_sp / 10.0
+        process_sp_c      = float(process_sp)
+        process_sp_target_raw = int(round(process_sp_c * 10.0))
 
         should_log_target_reached = False
         with self._lock:
@@ -1213,13 +1214,13 @@ class DryerModbus:
                     self._target_reach_armed_for != process_sp
                 )
                 if run_or_target_changed:
-                    self._target_reach_armed_for = process_sp if process_temp < process_sp else None
-                elif self._target_reach_armed_for is None and process_temp < process_sp:
+                    self._target_reach_armed_for = process_sp if process_temp < process_sp_target_raw else None
+                elif self._target_reach_armed_for is None and process_temp < process_sp_target_raw:
                     self._target_reach_armed_for = process_sp
 
                 if (
                     self._target_reach_armed_for == process_sp and
-                    process_temp >= process_sp and
+                    process_temp >= process_sp_target_raw and
                     self._target_setpoint_reached_logged_for != process_sp
                 ):
                     should_log_target_reached = True
@@ -1237,7 +1238,7 @@ class DryerModbus:
                 "dryer",
                 "TARGET_SETPOINT_REACHED",
                 process_temp_raw=process_temp,
-                process_setpoint_raw=process_sp,
+                process_setpoint_raw=process_sp_target_raw,
                 process_temp_c=round(process_temp_c, 1),
                 process_setpoint_c=round(process_sp_c, 1),
                 run_state=run_state,

@@ -2163,7 +2163,7 @@
       const d = S.dryerData;
 
       setText("dryer_temp", d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—");
-      setText("dryer_set", d.process_setpoint != null ? (d.process_setpoint / 10).toFixed(1) : "—");
+      setText("dryer_set", d.process_setpoint != null ? Number(d.process_setpoint).toFixed(1) : "—");
       setText("dryer_dp", d.actual_dewpoint != null ? (d.actual_dewpoint / 10).toFixed(1) : "—");
 
       setText("dryer_process_temp", d.process_temp != null ? (d.process_temp / 10).toFixed(1) : "—");
@@ -2176,7 +2176,7 @@
       setText("dryer_run_state", d.run_state != null ? `${d.run_state} (0x${Number(d.run_state).toString(16).toUpperCase().padStart(4,"0")})` : "—");
       setText("dryer_state_guess", d.dryer_state_guess ?? "—");
 
-      setText("heater_set_lbl", d.process_setpoint != null ? (d.process_setpoint / 10).toFixed(1) : "—");
+      setText("heater_set_lbl", d.process_setpoint != null ? Number(d.process_setpoint).toFixed(1) : "—");
 
       setText("dryerMode", S.dryerIoLive ? "LIVE MODBUS" : "OFFLINE");
 

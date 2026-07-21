@@ -75,6 +75,7 @@ def _parse_int_set_env(name: str, default: str) -> set[int]:
 # status, UI chips, and event logging stay stable even when run_state is quirky.
 DRYER_RUN_ON_VALUES = _parse_int_set_env("LUNA_DRYER_RUN_ON_VALUES", "100")
 DRYER_RUN_OFF_VALUES = _parse_int_set_env("LUNA_DRYER_RUN_OFF_VALUES", "0")
+DRYER_SSR_PREHEAT_DELAY_SEC = float(os.environ.get("LUNA_DRYER_SSR_PREHEAT_DELAY_SEC", "15.0"))
 
 # Persistent event log path (JSON Lines). One event per line with CST timestamp.
 EVENT_LOG_PATH = os.environ.get(
@@ -2021,7 +2022,12 @@ class ProcessOrchestrator:
     def _dryer_on(self, temp_c: int):
         try:
             set_dryer_power(True)
-            time.sleep(1.0)
+            delay_s = max(0.0, float(DRYER_SSR_PREHEAT_DELAY_SEC))
+            if delay_s > 0:
+                self._note(f"dryer SSR enabled; waiting {delay_s:.1f}s before heater start")
+                if self._stop.wait(delay_s):
+                    self._note("dryer start cancelled during SSR preheat delay")
+                    return
             if not dryer.connected:
                 dryer.connect()
             # Conair process setpoint register is in deci-degrees C.

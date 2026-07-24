@@ -2470,6 +2470,10 @@ class ExtrusionRatioTestController:
             self.phase = "HOMING"
             self.message = f"Threshold reached at {rotations_total:.4f} spins; running air-lock home sequence."
 
+        self._set_mixer(0)
+        if self._wait_or_stop(RATIO_TEST_STOP_SETTLE_SEC):
+            return
+
         response = self._arduino("AGITATOR_HOME")
 
         with self._lock:

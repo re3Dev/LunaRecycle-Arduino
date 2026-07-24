@@ -137,6 +137,11 @@ RATIO_TEST_SPINS_PER_HOME = int(os.environ.get("LUNA_RATIO_TEST_SPINS_PER_HOME",
 RATIO_TEST_POLL_SEC = float(os.environ.get("LUNA_RATIO_TEST_POLL_SEC", "0.5"))
 RATIO_TEST_VACUUM_BOOST_SEC = float(os.environ.get("LUNA_RATIO_TEST_VACUUM_BOOST_SEC", "5.0"))
 RATIO_TEST_VACUUM_IDLE_PCT = int(os.environ.get("LUNA_RATIO_TEST_VACUUM_IDLE_PCT", "15"))
+RATIO_TEST_MIX_PWM = int(os.environ.get("LUNA_RATIO_TEST_MIX_PWM", "200"))
+RATIO_TEST_BG_SETTLE_SEC = float(os.environ.get("LUNA_RATIO_TEST_BG_SETTLE_SEC", "5.0"))
+RATIO_TEST_STOP_SETTLE_SEC = float(os.environ.get("LUNA_RATIO_TEST_STOP_SETTLE_SEC", "5.0"))
+RATIO_TEST_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_TEST_REVERSE_SEC", "15.0"))
+RATIO_TEST_FORWARD_RECOVER_SEC = float(os.environ.get("LUNA_RATIO_TEST_FORWARD_RECOVER_SEC", "15.0"))
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
 MOONRAKER_FE_RETRY_SEC = float(os.environ.get("LUNA_MOONRAKER_FE_RETRY_SEC", "5.0"))
@@ -2353,6 +2358,46 @@ class ExtrusionRatioTestController:
             return self._arduino("VACUUM_STOP")
         return self._arduino(f"VACUUM_SET {percent}")
 
+    def _set_mixer(self, pwm: int, direction: str = "FWD") -> list[str]:
+        pwm = max(0, min(255, int(pwm)))
+        if pwm <= 0:
+            return self._arduino("MOTOR_STOP")
+        direction = str(direction).strip().upper()
+        if direction not in ("FWD", "REV"):
+            direction = "FWD"
+        return self._arduino(f"MOTOR_SET {pwm} {direction}")
+
+    def _set_blastgates_open(self, open_state: bool) -> list[str]:
+        return self._arduino(BLASTGATE_OPEN_CMD if open_state else BLASTGATE_CLOSE_CMD)
+
+    def _wait_or_stop(self, seconds: float) -> bool:
+        return self._stop.wait(max(0.0, float(seconds)))
+
+    def _run_post_home_sequence(self) -> bool:
+        """Run the requested mixer + blastgate choreography after each home."""
+        self._set_blastgates_open(False)
+        if self._wait_or_stop(RATIO_TEST_BG_SETTLE_SEC):
+            return False
+
+        self._set_mixer(0)
+        if self._wait_or_stop(RATIO_TEST_STOP_SETTLE_SEC):
+            return False
+
+        self._set_mixer(RATIO_TEST_MIX_PWM, "REV")
+        if self._wait_or_stop(RATIO_TEST_REVERSE_SEC):
+            return False
+
+        self._set_mixer(0)
+        if self._wait_or_stop(RATIO_TEST_STOP_SETTLE_SEC):
+            return False
+
+        self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+        if self._wait_or_stop(RATIO_TEST_FORWARD_RECOVER_SEC):
+            return False
+
+        self._set_blastgates_open(True)
+        return True
+
     def start(self, spins_per_home: Optional[int] = None, poll_sec: Optional[float] = None, vacuum_pct: Optional[int] = None):
         with self._lock:
             if self.running:
@@ -2370,7 +2415,10 @@ class ExtrusionRatioTestController:
             self.running = True
             self.phase = "ARMED"
             self.started_at = time.monotonic()
-            self.message = f"Watching Moonraker; homing every {self.spins_per_home} spins with vacuum at {self.vacuum_pct}%."
+            self.message = (
+                f"Watching Moonraker; homing every {self.spins_per_home} spins "
+                f"with vacuum at {self.vacuum_pct}% and mixer FWD {RATIO_TEST_MIX_PWM}."
+            )
 
         self._stop.clear()
         self._set_vacuum(self.vacuum_pct)
@@ -2381,6 +2429,10 @@ class ExtrusionRatioTestController:
         self._stop.set()
         try:
             self._arduino("VACUUM_STOP")
+        except Exception:
+            pass
+        try:
+            self._arduino("MOTOR_STOP")
         except Exception:
             pass
         with self._lock:
@@ -2411,6 +2463,12 @@ class ExtrusionRatioTestController:
         response = self._arduino("AGITATOR_HOME")
 
         with self._lock:
+            self.phase = "POST_HOME_SEQUENCE"
+            self.message = "Home complete. Running post-home blastgate/mixer sequence."
+
+        completed = self._run_post_home_sequence()
+
+        with self._lock:
             self.last_home_response = response
             self.home_sequences_completed += 1
             self.last_home_rotations_total = rotations_total
@@ -2418,10 +2476,21 @@ class ExtrusionRatioTestController:
             self.rotations_until_home = float(self.spins_per_home)
             self.last_sample_rotations_total = rotations_total
             self.phase = "WATCHING"
-            self.message = f"Homed {self.home_sequences_completed} time(s); waiting for the next {self.spins_per_home} spins."
+            if completed:
+                self.message = (
+                    f"Homed {self.home_sequences_completed} time(s); post-home sequence complete. "
+                    f"Waiting for the next {self.spins_per_home} spins."
+                )
+            else:
+                self.message = "Post-home sequence interrupted by stop request."
 
     def _run(self):
         try:
+            # Requested baseline behavior: keep mixer forward at 200 and gates open
+            # while waiting for each spin-threshold home event.
+            self._set_blastgates_open(True)
+            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+
             while not self._stop.is_set():
                 connected, rotations_total = self._sample_snapshot()
                 should_wait = False
@@ -2466,6 +2535,10 @@ class ExtrusionRatioTestController:
         finally:
             try:
                 self._arduino("VACUUM_STOP")
+            except Exception:
+                pass
+            try:
+                self._arduino("MOTOR_STOP")
             except Exception:
                 pass
             with self._lock:

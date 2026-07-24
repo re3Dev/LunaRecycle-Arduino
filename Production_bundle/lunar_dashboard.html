@@ -1042,6 +1042,11 @@
               <button class="btn mini primary" id="btnWorkflowStart">Start Workflow</button>
               <button class="btn mini danger" id="btnWorkflowStop">Stop Workflow</button>
             </div>
+            <div class="split" style="margin-bottom:6px;">
+              <div class="kv"><div class="k">Dry Planned</div><div class="v" id="wfDryPlannedText">—</div></div>
+              <div class="kv"><div class="k">Dry Elapsed</div><div class="v" id="wfDryElapsedText">—</div></div>
+              <div class="kv"><div class="k">Dry Remaining</div><div class="v" id="wfDryRemainingText">—</div></div>
+            </div>
             <div class="hint" id="workflowModeHint">SR uses fixed PE/PA unit counts.</div>
             <div class="hint" id="workflowStatusText">Ready.</div>
             <div class="log" id="workflowLog" style="margin-top:6px; max-height:110px;" aria-label="Workflow log"></div>
@@ -1120,6 +1125,8 @@
       dryPhase: "—",
       dryRunning: false,
       dryRemain: "—",
+      dryElapsed: "—",
+      dryPlanned: "—",
       dryMix: "—",
       dryDryer: "—",
       dryPreheat: "—",
@@ -1473,6 +1480,9 @@
       // Automation — Drying & Mixing
       setText("dryPhaseText", S.dryPhase);
       setText("dryRemainText", S.dryRemain);
+      setText("wfDryPlannedText", S.dryPlanned);
+      setText("wfDryElapsedText", S.dryElapsed);
+      setText("wfDryRemainingText", S.dryRemain);
       setText("dryMixText", S.dryMix);
       setText("dryDryerText", S.dryDryer);
       setText("dryPreheatText", S.dryPreheat);
@@ -1614,7 +1624,19 @@
         const d = res.data || {};
         S.dryPhase   = d.phase || "—";
         S.dryRunning = !!d.running;
-        S.dryRemain  = d.running ? fmtDuration(d.remaining_seconds) : "—";
+        const totalSec = Math.max(0, Number(d.total_seconds || 0));
+        const elapsedSec = Math.max(0, Number(d.elapsed_seconds || 0));
+        const remainingSec = Math.max(0, Number(d.remaining_seconds || 0));
+
+        // Show planned duration even when idle so the operator sees what the
+        // upcoming auto dry step is configured to run for.
+        const cfgMinutes = parseFloat($("#wfDryMinutes")?.value || "0");
+        const cfgTotalSec = Number.isFinite(cfgMinutes) && cfgMinutes > 0 ? Math.round(cfgMinutes * 60) : 0;
+        const plannedSec = totalSec > 0 ? totalSec : cfgTotalSec;
+
+        S.dryPlanned = plannedSec > 0 ? fmtDuration(plannedSec) : "—";
+        S.dryElapsed = (S.dryRunning || elapsedSec > 0) ? fmtDuration(elapsedSec) : "—";
+        S.dryRemain  = S.dryRunning ? fmtDuration(remainingSec) : "—";
         S.dryMix     = d.mixing ? "MIXING" : (d.running ? "PAUSED" : "—");
         S.dryDryer   = d.dryer_on ? "ON" : (d.running ? "OFF" : "—");
         S.dryPreheat = d.preheat_due ? "DUE — heat printer" : (d.running ? "waiting" : "—");
@@ -2296,6 +2318,7 @@
       on("btnWorkflowStart", "click", workflowStart);
       on("btnWorkflowStop",  "click", workflowStop);
       on("wfSrMode", "change", workflowUpdateModeUI);
+      on("wfDryMinutes", "input", ()=>{ dryRefreshStatus(true); });
 
       on("btnDryerMode", "click", async ()=>{
         S.dryerIoLive = !S.dryerIoLive;

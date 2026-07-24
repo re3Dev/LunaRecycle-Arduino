@@ -2470,7 +2470,7 @@ class ExtrusionRatioTestController:
             self.phase = "HOMING"
             self.message = f"Threshold reached at {rotations_total:.4f} spins; running air-lock home sequence."
 
-        response = self._arduino("AGITATOR_HOME_REV")
+        response = self._arduino("AGITATOR_HOME")
 
         with self._lock:
             self.phase = "POST_HOME_SEQUENCE"

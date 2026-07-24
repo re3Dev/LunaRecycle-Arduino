@@ -2092,8 +2092,8 @@ class ProcessOrchestrator:
                     return
             if not dryer.connected:
                 dryer.connect()
-            # Conair process setpoint register is in deci-degrees C.
-            dryer.set_process_setpoint(int(round(float(temp_c) * 10.0)))
+            # Automated drying uses operator-entered C directly.
+            dryer.set_process_setpoint(int(round(float(temp_c))))
             if dryer.get_run_state_raw() != 100:
                 dryer.toggle_on_off()
             with self._lock:

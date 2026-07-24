@@ -953,6 +953,7 @@ class ArduinoBridge:
         self._ser.flush()
 
         is_status = cmd.strip().upper() == "STATUS"
+        is_agitator_home = cmd.strip().upper() == "AGITATOR_HOME"
         # Blast gate moves are blocking on the Mega (home / cal / pos can take a
         # few seconds) and emit several [BLASTGATE ...] lines, ending with a
         # unique [BLASTGATE_DONE] marker. Give them a longer read window.
@@ -990,6 +991,14 @@ class ArduinoBridge:
                         seen_status = True
                     elif line.startswith("[ENERGY]") and seen_status:
                         lines.append(line)
+                        break
+                    continue
+
+                if is_agitator_home:
+                    lines.append(line)
+                    if line.startswith("[AGITATOR_HOME] homing complete"):
+                        break
+                    if line.startswith("[AGITATOR_HOME] ERROR"):
                         break
                     continue
 

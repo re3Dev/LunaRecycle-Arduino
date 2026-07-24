@@ -820,7 +820,7 @@ class ArduinoBridge:
         elif cmd == "AGITATOR_STOP":
             event_logger.log_actuator_action("agitator", "STOP")
             event_logger.log_actuator_state("agitator", False)
-        elif cmd == "AGITATOR_HOME":
+        elif cmd in ("AGITATOR_HOME", "AGITATOR_HOME_REV"):
             event_logger.log_actuator_action("agitator", "ROTATE_HOME")
             event_logger.log_actuator_state("agitator", True)
         elif cmd == "VACUUM_STOP":
@@ -952,8 +952,9 @@ class ArduinoBridge:
         self._ser.write((cmd + "\n").encode("ascii"))
         self._ser.flush()
 
-        is_status = cmd.strip().upper() == "STATUS"
-        is_agitator_home = cmd.strip().upper() == "AGITATOR_HOME"
+        normalized_cmd = cmd.strip().upper()
+        is_status = normalized_cmd == "STATUS"
+        is_agitator_home = normalized_cmd in ("AGITATOR_HOME", "AGITATOR_HOME_REV")
         # Blast gate moves are blocking on the Mega (home / cal / pos can take a
         # few seconds) and emit several [BLASTGATE ...] lines, ending with a
         # unique [BLASTGATE_DONE] marker. Give them a longer read window.
@@ -2469,7 +2470,7 @@ class ExtrusionRatioTestController:
             self.phase = "HOMING"
             self.message = f"Threshold reached at {rotations_total:.4f} spins; running air-lock home sequence."
 
-        response = self._arduino("AGITATOR_HOME")
+        response = self._arduino("AGITATOR_HOME_REV")
 
         with self._lock:
             self.phase = "POST_HOME_SEQUENCE"

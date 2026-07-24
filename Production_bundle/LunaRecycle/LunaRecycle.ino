@@ -1569,10 +1569,10 @@ void agitatorDisableMotion() {
   agitatorRunState = AGITATOR_IDLE;
 }
 
-void agitatorStartSeekMotion() {
+void agitatorStartSeekMotion(bool reverseSeek = false) {
   Mixer_agitatorStepper.enableOutputs();
   Mixer_agitatorStepper.setMaxSpeed(AGITATOR_MAX_SPEED_HZ);
-  Mixer_agitatorStepper.setSpeed(AGITATOR_MAX_SPEED_HZ);
+  Mixer_agitatorStepper.setSpeed(reverseSeek ? -AGITATOR_MAX_SPEED_HZ : AGITATOR_MAX_SPEED_HZ);
 }
 
 void agitatorHomeFromHallRisingEdge() {
@@ -1582,12 +1582,12 @@ void agitatorHomeFromHallRisingEdge() {
   Serial.println(AGITATOR_HOME_OFFSET_STEPS);
 }
 
-void agitatorStartHome() {
+void agitatorStartHome(bool reverseSeek = false) {
   agitatorDisableMotion();
   agitatorMotionStartMs = millis();
   agitatorHallEdgeDetected = false;
   agitatorHomed = false;
-  agitatorStartSeekMotion();
+  agitatorStartSeekMotion(reverseSeek);
   agitatorRunState = AGITATOR_SEEKING_HALL;
   Serial.println(F("[AGITATOR_HOME] sequence start"));
 }
@@ -2288,7 +2288,10 @@ void handleCommand(const String& cmd) {
     Serial.println(F("[SHREDDER] Direction REV"));
 
   } else if (cmd == "AGITATOR_HOME") {
-    agitatorStartHome();
+    agitatorStartHome(false);
+
+  } else if (cmd == "AGITATOR_HOME_REV") {
+    agitatorStartHome(true);
 
   } else if (cmd == "AGITATOR_STOP") {
     agitatorStop();

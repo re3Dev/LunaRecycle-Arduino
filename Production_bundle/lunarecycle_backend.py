@@ -36,6 +36,10 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from pymodbus.client import ModbusSerialClient
 
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -49,6 +53,10 @@ from pymodbus.client import ModbusSerialClient
 ARDUINO_PORT     = os.environ.get("LUNA_ARDUINO_PORT", "/dev/ttyACM0")
 ARDUINO_BAUDRATE = int(os.environ.get("LUNA_ARDUINO_BAUD", "115200"))
 ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
+# Best-effort no-reset serial open. When enabled, pyserial holds DTR/RTS low
+# before and after opening the port to avoid pulsing Arduino reset on connect.
+ARDUINO_NO_RESET_OPEN = _env_flag("LUNA_ARDUINO_NO_RESET_OPEN", "0")
+ARDUINO_OPEN_SETTLE_SEC = float(os.environ.get("LUNA_ARDUINO_OPEN_SETTLE_SEC", "0.2"))
 BLASTGATE_TIMEOUT = 12.0  # blast gate moves are blocking and can take seconds
 AGITATOR_HOME_TIMEOUT = float(os.environ.get("LUNA_AGITATOR_HOME_TIMEOUT", "15.0"))
 # How often the background supervisor retries a dropped Arduino connection.
@@ -146,6 +154,11 @@ RATIO_TEST_FORWARD_RECOVER_SEC = float(os.environ.get("LUNA_RATIO_TEST_FORWARD_R
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
 MOONRAKER_FE_RETRY_SEC = float(os.environ.get("LUNA_MOONRAKER_FE_RETRY_SEC", "5.0"))
+MOONRAKER_STATE_PATH = os.environ.get(
+    "LUNA_MOONRAKER_STATE_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "moonraker_state.json"),
+)
+MOONRAKER_STATE_FLUSH_SEC = float(os.environ.get("LUNA_MOONRAKER_STATE_FLUSH_SEC", "2.0"))
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Flask app
@@ -328,6 +341,8 @@ class MoonrakerMonitor:
         self.enabled = bool(ws_url)
         self._lock = threading.Lock()
         self.connected = False
+        self.last_update_monotonic = 0.0
+        self.reconnect_count = 0
         self.extruding = False
         self.live_velocity = 0.0
         self.live_extruder_velocity = 0.0
@@ -349,6 +364,8 @@ class MoonrakerMonitor:
         self.fe_auto_last_error = ""
         self._next_fe_retry_at = 0.0
         self._thread: Optional[threading.Thread] = None
+        self._last_persist_at = 0.0
+        self._load_persisted_state()
 
     def start(self) -> None:
         if not self.enabled or self._thread is not None:
@@ -358,9 +375,15 @@ class MoonrakerMonitor:
 
     def snapshot(self) -> dict:
         with self._lock:
+            last_age = 0.0
+            if self.last_update_monotonic > 0.0:
+                last_age = max(0.0, time.monotonic() - self.last_update_monotonic)
             return {
                 "enabled": self.enabled,
                 "connected": self.connected,
+                "stale": not self.connected,
+                "seconds_since_last_update": round(last_age, 2),
+                "reconnect_count": self.reconnect_count,
                 "extruding": self.extruding,
                 "live_velocity": self.live_velocity,
                 "live_extruder_velocity": self.live_extruder_velocity,
@@ -378,7 +401,56 @@ class MoonrakerMonitor:
                 "fe_temp_threshold_c": MOONRAKER_FE_TEMP_C,
                 "fe_auto_on": self.fe_auto_on,
                 "fe_auto_last_error": self.fe_auto_last_error,
+                "state_path": MOONRAKER_STATE_PATH,
             }
+
+    @staticmethod
+    def _coerce_float(value: object, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _load_persisted_state(self) -> None:
+        try:
+            folder = os.path.dirname(os.path.abspath(MOONRAKER_STATE_PATH))
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            if not os.path.exists(MOONRAKER_STATE_PATH):
+                return
+            with open(MOONRAKER_STATE_PATH, "r", encoding="utf-8") as fp:
+                obj = json.load(fp)
+            if not isinstance(obj, dict):
+                return
+            with self._lock:
+                self.extruder_units_total = max(0.0, self._coerce_float(obj.get("extruder_units_total"), 0.0))
+                self.extruder_rotations_total = max(0.0, self._coerce_float(obj.get("extruder_rotations_total"), 0.0))
+                self.filament_used = max(0.0, self._coerce_float(obj.get("filament_used"), 0.0))
+        except Exception:
+            pass
+
+    def _persist_state(self, force: bool = False) -> None:
+        now = time.monotonic()
+        with self._lock:
+            if not force and (now - self._last_persist_at) < MOONRAKER_STATE_FLUSH_SEC:
+                return
+            payload = {
+                "extruder_units_total": float(self.extruder_units_total),
+                "extruder_rotations_total": float(self.extruder_rotations_total),
+                "filament_used": float(self.filament_used),
+                "updated_monotonic": float(self.last_update_monotonic),
+            }
+            self._last_persist_at = now
+        try:
+            folder = os.path.dirname(os.path.abspath(MOONRAKER_STATE_PATH))
+            if folder:
+                os.makedirs(folder, exist_ok=True)
+            temp_path = f"{MOONRAKER_STATE_PATH}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as fp:
+                json.dump(payload, fp, separators=(",", ":"), ensure_ascii=True)
+            os.replace(temp_path, MOONRAKER_STATE_PATH)
+        except Exception:
+            pass
 
     def _set_connected(self, connected: bool) -> None:
         with self._lock:
@@ -391,14 +463,16 @@ class MoonrakerMonitor:
                 self.extruder_axis_index = -1
                 self.live_position = []
                 self.live_extruder_position = 0.0
-                self.extruder_units_total = 0.0
-                self.extruder_rotations_total = 0.0
+                # Preserve running totals across transient websocket drops so
+                # ratio/feed logic can recover without losing progress.
                 self._last_live_extruder_position = None
                 self.extruder_temps = {}
                 self.extruder_targets = {}
                 self._extruder_zone_phase = {}
                 self._extruder_zone_target_reached_logged = {}
                 self.max_extruder_temp_c = 0.0
+        if not connected:
+            self._persist_state(force=True)
 
     def _apply_status(self, status: dict) -> None:
         motion = status.get("motion_report", {}) if isinstance(status, dict) else {}
@@ -445,6 +519,7 @@ class MoonrakerMonitor:
         pending_zone_events: list[dict] = []
 
         with self._lock:
+            self.last_update_monotonic = time.monotonic()
             if live_velocity is not None:
                 self.live_velocity = live_velocity
             if velocity is not None:
@@ -553,6 +628,8 @@ class MoonrakerMonitor:
             vel = abs(self.live_extruder_velocity)
             self.extruding = vel >= MOONRAKER_EXTRUDER_VELOCITY_MIN
 
+        self._persist_state()
+
         for evt in pending_zone_events:
             event_logger.log_actuator_action("extruder_zone", evt.pop("action"), **evt)
 
@@ -655,6 +732,8 @@ class MoonrakerMonitor:
                                 self._apply_status(status)
             except Exception:
                 self._set_connected(False)
+                with self._lock:
+                    self.reconnect_count += 1
                 time.sleep(MOONRAKER_RECONNECT_SEC)
             finally:
                 try:
@@ -764,8 +843,28 @@ class ArduinoBridge:
             last_exc: Exception | None = None
             for candidate in self._port_candidates(port):
                 try:
-                    self._ser = serial.Serial(candidate, baudrate, timeout=ARDUINO_TIMEOUT)
-                    time.sleep(2.0)          # wait for Arduino reset after DTR pulse
+                    ser = serial.Serial(
+                        port=None,
+                        baudrate=baudrate,
+                        timeout=ARDUINO_TIMEOUT,
+                        dsrdtr=False,
+                        rtscts=False,
+                    )
+                    if ARDUINO_NO_RESET_OPEN:
+                        # Keep control lines low before open to avoid the
+                        # DTR/RTS reset pulse on boards that honor it.
+                        ser.dtr = False
+                        ser.rts = False
+                    ser.port = candidate
+                    ser.open()
+                    if ARDUINO_NO_RESET_OPEN:
+                        try:
+                            ser.setDTR(False)
+                            ser.setRTS(False)
+                        except Exception:
+                            pass
+                    self._ser = ser
+                    time.sleep(ARDUINO_OPEN_SETTLE_SEC)
                     self._ser.reset_input_buffer()
                     self.connected = True
                     self._port = candidate   # remember the working node for next reconnect

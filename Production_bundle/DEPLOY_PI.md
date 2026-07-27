@@ -61,6 +61,8 @@ sudo systemctl restart lunarecycle-backend
 | -------------------- | ---------------- | ------------------------------------ |
 | `LUNA_ARDUINO_PORT`  | `/dev/ttyACM0` or `/dev/serial/by-id/...` | Arduino serial port |
 | `LUNA_ARDUINO_BAUD`  | `115200`         | Arduino baud rate                    |
+| `LUNA_ARDUINO_NO_RESET_OPEN` | `0`      | Best-effort serial open with DTR/RTS held low to reduce Arduino auto-reset on connect/reconnect |
+| `LUNA_ARDUINO_OPEN_SETTLE_SEC` | `0.2`   | Delay after serial open before first read/write |
 | `LUNA_DRYER_PORT`    | `/dev/ttyUSB0`   | Dryer RS485 adapter port             |
 | `LUNA_DRYER_BAUD`    | `57600`          | Dryer Modbus baud rate               |
 | `LUNA_DRYER_ID`      | `1`              | Dryer Modbus device ID               |
@@ -74,6 +76,8 @@ sudo systemctl restart lunarecycle-backend
 | `LUNA_VIEWER_PRINTER_CAM_URL` | ``     | Printer camera URL shown in `/viewer` |
 | `LUNA_VIEWER_PRINTER_API_URL` | ``     | Moonraker base URL used by `/viewer`  |
 | `LUNA_MOONRAKER_WS_URL` | ``         | Moonraker websocket URL (e.g. `ws://127.0.0.1:7125/websocket`) |
+| `LUNA_MOONRAKER_STATE_PATH` | `/opt/lunarecycle/moonraker_state.json` | File used to persist Moonraker cumulative telemetry across reconnects/restarts |
+| `LUNA_MOONRAKER_STATE_FLUSH_SEC` | `2.0` | Minimum seconds between Moonraker state file updates |
 | `LUNA_MOONRAKER_EXTRUDER_VEL_MIN` | `0.01` | Minimum `live_extruder_velocity` considered active extrusion |
 | `LUNA_MOONRAKER_FE_TEMP_C` | `100.0`  | FE auto turns ON when any extruder heater temperature is at or above this value |
 | `LUNA_MOONRAKER_FE_RETRY_SEC` | `5.0` | Retry delay after FE SSR command errors |

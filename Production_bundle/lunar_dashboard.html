@@ -960,6 +960,8 @@
                 <div class="act-head">Extruder Ratio Test</div>
                 <div class="split" style="margin-bottom:6px;">
                   <div class="kv"><div class="k">Moonraker</div><div class="v" id="mrConnText">—</div></div>
+                  <div class="kv"><div class="k">Moonraker Health</div><div class="v" id="mrHealthText">—</div></div>
+                  <div class="kv"><div class="k">WS Reconnects</div><div class="v" id="mrReconnectText">—</div></div>
                   <div class="kv"><div class="k">Spins / Home</div><div class="v" id="rtSpinsText">—</div></div>
                   <div class="kv"><div class="k">Rotations Since Home</div><div class="v" id="rtPendingText">—</div></div>
                   <div class="kv"><div class="k">Rotations Until Home</div><div class="v" id="rtUntilText">—</div></div>
@@ -1533,6 +1535,11 @@
       }
 
       setText("mrConnText", S.moonraker.connected ? "CONNECTED" : "DISCONNECTED");
+      const mrAge = Number(S.moonraker.seconds_since_last_update || 0);
+      const mrStale = !!S.moonraker.stale;
+      const mrHealth = mrStale ? `STALE (${mrAge.toFixed(1)}s)` : `LIVE (${mrAge.toFixed(1)}s)`;
+      setText("mrHealthText", mrHealth);
+      setText("mrReconnectText", String(S.moonraker.reconnect_count ?? 0));
       setText("mrVelText", Number(S.moonraker.live_extruder_velocity || 0).toFixed(4));
       setText("mrLiveEText", Number(S.moonraker.live_extruder_position || 0).toFixed(4));
       setText("mrRotTotalText", Number(S.moonraker.extruder_rotations_total || 0).toFixed(4));

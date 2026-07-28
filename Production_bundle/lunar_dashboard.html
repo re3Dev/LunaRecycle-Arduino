@@ -2219,7 +2219,7 @@
         log("Dryer IO is in SIM mode. Switch to LIVE first.", "warn");
         return;
       }
-      const inputEl = $("dryerProcessSpInput");
+      const inputEl = $("#dryerProcessSpInput");
       const raw = Number(inputEl?.value);
       const min = Number(inputEl?.min || 1);
       const max = Number(inputEl?.max || 250);

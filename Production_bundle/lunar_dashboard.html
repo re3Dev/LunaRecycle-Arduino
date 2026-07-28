@@ -752,6 +752,15 @@
               <button class="btn primary mini" id="btnDryerToggle">Toggle On/Off</button>
             </div>
 
+            <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:8px; align-items:center;">
+              <div class="pill">
+                <span>Manual Setpoint</span>
+              </div>
+              <input type="number" id="dryerProcessSpInput" min="1" max="250" step="1" placeholder="Process °C"
+                style="max-width:140px;" />
+              <button class="btn mini primary" id="btnDryerSetProcessSp">Apply</button>
+            </div>
+
             <div class="dryer-grid-3">
               <div class="kv">
                 <div class="k">Process Temp</div>
@@ -2202,6 +2211,28 @@
       }
     }
 
+    async function dryerSetProcessSp(){
+      if(!S.dryerIoLive){
+        log("Dryer IO is in SIM mode. Switch to LIVE first.", "warn");
+        return;
+      }
+      const raw = Number($("dryerProcessSpInput")?.value);
+      if(!Number.isFinite(raw) || raw <= 0 || raw > 250){
+        log("Enter a valid dryer process setpoint (1-250°C).", "bad");
+        return;
+      }
+      try{
+        const res = await api("/set_process_sp", {
+          method: "POST",
+          body: JSON.stringify({ value: raw }),
+        });
+        log(`Dryer process setpoint set to ${res.value_c}°C.`, "good");
+        await dryerRefresh(true);
+      }catch(err){
+        log(`Dryer setpoint failed: ${err.message}`, "bad");
+      }
+    }
+
     function tickConnection(dt){
       // Connection state reflects the REAL backend links now, not a simulation.
       // (The old random-flap demo code was removed so the UI never shows a
@@ -2353,6 +2384,7 @@
       on("btnDryerDisconnect", "click", dryerDisconnect);
       on("btnDryerRefresh",    "click", ()=>dryerRefresh(false));
       on("btnDryerToggle",     "click", dryerToggle);
+      on("btnDryerSetProcessSp", "click", dryerSetProcessSp);
 
       // Arduino connection
       on("btnArduinoMode", "click", async ()=>{

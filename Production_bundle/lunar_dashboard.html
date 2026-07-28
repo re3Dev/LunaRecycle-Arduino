@@ -2175,9 +2175,9 @@
         S.heater_on = isRunning;
 
         const spInput = $("#dryerProcessSpInput");
-        if(spInput){ spInput.value = d.process_setpoint ?? ""; }
+        if(spInput && document.activeElement !== spInput){ spInput.value = d.process_setpoint ?? ""; }
         const dewInput = $("#dryerDewSpInput");
-        if(dewInput){ dewInput.value = d.dewpoint_setpoint ?? ""; }
+        if(dewInput && document.activeElement !== dewInput){ dewInput.value = d.dewpoint_setpoint ?? ""; }
 
         if(!silent){
           log("Dryer data refreshed.", "info");

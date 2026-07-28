@@ -1185,6 +1185,7 @@
       heater_set: 60,
 
       estop: false,
+      dryerProcessSpDirty: false,
 
       dryerData: {
         mode_state: null,
@@ -2175,7 +2176,9 @@
         S.heater_on = isRunning;
 
         const spInput = $("#dryerProcessSpInput");
-        if(spInput && document.activeElement !== spInput){ spInput.value = d.process_setpoint ?? ""; }
+        if(spInput && !S.dryerProcessSpDirty && document.activeElement !== spInput){
+          spInput.value = d.process_setpoint ?? "";
+        }
         const dewInput = $("#dryerDewSpInput");
         if(dewInput && document.activeElement !== dewInput){ dewInput.value = d.dewpoint_setpoint ?? ""; }
 
@@ -2216,9 +2219,12 @@
         log("Dryer IO is in SIM mode. Switch to LIVE first.", "warn");
         return;
       }
-      const raw = Number($("dryerProcessSpInput")?.value);
-      if(!Number.isFinite(raw) || raw <= 0 || raw > 250){
-        log("Enter a valid dryer process setpoint (1-250°C).", "bad");
+      const inputEl = $("dryerProcessSpInput");
+      const raw = Number(inputEl?.value);
+      const min = Number(inputEl?.min || 1);
+      const max = Number(inputEl?.max || 250);
+      if(!Number.isFinite(raw) || raw < min || raw > max){
+        log(`Enter a valid dryer process setpoint (${min}-${max}°C).`, "bad");
         return;
       }
       try{
@@ -2226,6 +2232,7 @@
           method: "POST",
           body: JSON.stringify({ value: raw }),
         });
+        S.dryerProcessSpDirty = false;
         log(`Dryer process setpoint set to ${res.value_c}°C.`, "good");
         await dryerRefresh(true);
       }catch(err){
@@ -2385,6 +2392,7 @@
       on("btnDryerRefresh",    "click", ()=>dryerRefresh(false));
       on("btnDryerToggle",     "click", dryerToggle);
       on("btnDryerSetProcessSp", "click", dryerSetProcessSp);
+      on("dryerProcessSpInput", "input", ()=>{ S.dryerProcessSpDirty = true; });
 
       // Arduino connection
       on("btnArduinoMode", "click", async ()=>{

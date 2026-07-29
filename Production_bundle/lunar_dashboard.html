@@ -1637,7 +1637,7 @@
         const res = await apiArduino("/sr/start", {
           method: "POST",
           body: JSON.stringify({ pe_units: pe, pa_units: pa }),
-        });
+        }, 60000);
         log(`Size Reduction started: ${pe} PE + ${pa} PA.`, "good", (res.response || []).join(" | "));
         await srRefreshStatus(true);
       }catch(err){ log(`Size Reduction start failed: ${err.message}`, "bad"); }
@@ -2027,7 +2027,7 @@
         await apiArduino("/sr/start", {
           method: "POST",
           body: JSON.stringify({ pe_units: cfg.pe, pa_units: cfg.pa }),
-        });
+        }, 60000);
         workflowLog("Step 1 started: Size Reduction with mixer FWD @ 200 and shredder FWD.", "good");
         const srResult = await workflowWaitSrDone(cfg);
         workflowLog("Step 1 complete. Holding shredder ON for 30s post-run.", "info");

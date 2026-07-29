@@ -1255,11 +1255,19 @@
       const ctrl = new AbortController();
       const id = setTimeout(()=>ctrl.abort(), timeoutMs);
       try{
-        const res = await fetch(url, {
-          signal: ctrl.signal,
-          headers: { "Content-Type": "application/json" },
-          ...opts,
-        });
+        let res;
+        try{
+          res = await fetch(url, {
+            signal: ctrl.signal,
+            headers: { "Content-Type": "application/json" },
+            ...opts,
+          });
+        }catch(err){
+          if(err && err.name === "AbortError"){
+            throw new Error(`Request timeout after ${timeoutMs}ms: ${url}`);
+          }
+          throw err;
+        }
         const data = await res.json();
         if(!res.ok || data.ok === false){
           throw new Error(data.error || `HTTP ${res.status}`);
@@ -1867,7 +1875,7 @@
 
     async function workflowRunTcHome(){
       workflowSet("TC HOME", "Running homing before automation...", true);
-      await apiArduino("/tc/home", { method: "POST" });
+      await apiArduino("/tc/home", { method: "POST" }, 60000);
       workflowLog("TC_HOME sent. Waiting for conveyor READY.", "info");
 
       const started = Date.now();

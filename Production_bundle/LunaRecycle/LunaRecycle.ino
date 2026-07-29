@@ -1040,34 +1040,37 @@ void tcDropAtShredderAndContinue() {
 }
 
 bool tcPickAtBag() {
-  if (tcBagStackEmptyConfirmed()) {
-    bool recovered = false;
-    if (tcIrDetectionEnabled && tcActiveBag == 1) {
-      float startMm = tcStepsToMm(TC_stepper.currentPosition());
-      float verifyMm = max(TC_stepperMinPos, startMm - TC_bag1EmptyVerifyOffsetMm);
-      if (verifyMm < startMm - 0.1f) {
-        Serial.println(F("[TC] Bag 1 reads EMPTY at pick point - verifying with offset check"));
-        bool movedOut = tcMoveToBlocking(verifyMm, TC_bag1EmptyVerifyMoveTimeoutMs);
-        if (movedOut) {
-          delay(TC_bagSensorConfirmDelayMs * 2);
-          recovered = !tcBagStackEmptyConfirmed();
-        }
-        bool movedBack = tcMoveToBlocking(startMm, TC_bag1EmptyVerifyMoveTimeoutMs);
-        if (movedBack) {
-          delay(TC_bagSensorConfirmDelayMs * 2);
-        }
+  bool bagPresent = !tcBagStackEmptyConfirmed();
+
+  if (tcIrDetectionEnabled && tcActiveBag == 1) {
+    float startMm = tcStepsToMm(TC_stepper.currentPosition());
+    float verifyMm = max(TC_stepperMinPos, startMm - TC_bag1EmptyVerifyOffsetMm);
+    if (verifyMm < startMm - 0.1f) {
+      Serial.println(F("[TC] Bag 1 pre-pick sensor verify move"));
+      bool movedOut = tcMoveToBlocking(verifyMm, TC_bag1EmptyVerifyMoveTimeoutMs);
+      bool bagPresentVerify = bagPresent;
+      if (movedOut) {
+        delay(TC_bagSensorConfirmDelayMs * 2);
+        bagPresentVerify = !tcBagStackEmptyConfirmed();
       }
-      if (recovered) {
-        Serial.println(F("[TC] Bag 1 detection recovered after offset check"));
+      bool movedBack = tcMoveToBlocking(startMm, TC_bag1EmptyVerifyMoveTimeoutMs);
+      if (movedBack) {
+        delay(TC_bagSensorConfirmDelayMs * 2);
+      }
+
+      if (bagPresent && !bagPresentVerify) {
+        Serial.println(F("[TC] Bag 1 false DETECTED at pick point - using EMPTY verification"));
+        bagPresent = false;
+      } else if (!bagPresent && bagPresentVerify) {
+        Serial.println(F("[TC] Bag 1 EMPTY recovered to DETECTED after verify move"));
+        bagPresent = true;
       }
     }
+  }
 
-    if (recovered) {
-      // Continue pick as normal when offset verification finds a bag.
-    } else {
+  if (!bagPresent) {
     tcStopPickSequence(F("[TC] Bag not detected - sequence stopped"));
     return false;
-    }
   }
 
   // Prime the vacuum pump, then descend; grab as soon as the cup seals.

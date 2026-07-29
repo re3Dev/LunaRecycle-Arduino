@@ -2389,6 +2389,149 @@ class ProcessOrchestrator:
             }
 
 
+class SimpleDryHoldController:
+    """Run a simple dryer hold while keeping mixer at a constant direction/speed.
+
+    This is intentionally separate from ProcessOrchestrator: no cadence, no
+    reverse/discharge choreography, and no blast-gate logic.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._reset()
+
+    def _reset(self):
+        self.phase = "IDLE"  # IDLE, RUNNING, DONE, STOPPED, ERROR
+        self.running = False
+        self.started_at = 0.0
+        self.end_at = 0.0
+        self.total_seconds = 0
+        self.temp_c = 0
+        self.mixer_pwm = 0
+        self.mixer_dir = "FWD"
+        self.message = "Ready."
+        self.last_error = ""
+
+    def _motor_set(self, pwm: int, direction: str) -> None:
+        pwm = max(0, min(255, int(pwm)))
+        direction = str(direction).strip().upper()
+        if direction not in ("FWD", "REV"):
+            direction = "FWD"
+        arduino.send(f"MOTOR_SET {pwm} {direction}")
+
+    def _dryer_on(self, temp_c: int) -> None:
+        set_dryer_power(True)
+        delay_s = max(0.0, float(DRYER_SSR_PREHEAT_DELAY_SEC))
+        if delay_s > 0:
+            self._stop.wait(delay_s)
+        if not dryer.connected:
+            dryer.connect()
+        dryer.set_process_setpoint(int(round(float(temp_c))))
+        if dryer.get_run_state_raw() != 100:
+            dryer.toggle_on_off()
+
+    def _dryer_off(self) -> None:
+        try:
+            if dryer.connected and dryer.get_run_state_raw() == 100:
+                dryer.toggle_on_off()
+        finally:
+            try:
+                set_dryer_power(False)
+            except Exception:
+                pass
+
+    def _run(self, total_seconds: int, temp_c: int, mixer_pwm: int, mixer_dir: str):
+        try:
+            self._dryer_on(temp_c)
+            self._motor_set(mixer_pwm, mixer_dir)
+
+            now = time.monotonic()
+            with self._lock:
+                self.running = True
+                self.phase = "RUNNING"
+                self.started_at = now
+                self.end_at = now + total_seconds
+                self.message = f"Dry hold active for {total_seconds}s at {temp_c}C; mixer {mixer_dir} {mixer_pwm}."
+
+            while not self._stop.is_set():
+                if time.monotonic() >= self.end_at:
+                    break
+                # Reassert constant mixer command periodically to keep intent
+                # stable across transient controller-side command overrides.
+                try:
+                    self._motor_set(mixer_pwm, mixer_dir)
+                except Exception:
+                    pass
+                self._stop.wait(5.0)
+
+            self._dryer_off()
+            with self._lock:
+                self.running = False
+                if self._stop.is_set():
+                    self.phase = "STOPPED"
+                    self.message = "Dry hold stopped."
+                else:
+                    self.phase = "DONE"
+                    self.message = "Dry hold complete."
+        except Exception as exc:
+            try:
+                self._dryer_off()
+            except Exception:
+                pass
+            with self._lock:
+                self.running = False
+                self.phase = "ERROR"
+                self.last_error = str(exc)
+                self.message = f"Error: {exc}"
+        finally:
+            with self._lock:
+                self._thread = None
+
+    def start(self, total_seconds: int, temp_c: int, mixer_pwm: int = 200, mixer_dir: str = "FWD"):
+        with self._lock:
+            if self.running:
+                raise RuntimeError("Dry hold already running.")
+            if self._thread is not None and self._thread.is_alive():
+                raise RuntimeError("Dry hold is still stopping.")
+            self._reset()
+            self.total_seconds = int(total_seconds)
+            self.temp_c = int(temp_c)
+            self.mixer_pwm = max(0, min(255, int(mixer_pwm)))
+            d = str(mixer_dir).strip().upper()
+            self.mixer_dir = d if d in ("FWD", "REV") else "FWD"
+
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            args=(self.total_seconds, self.temp_c, self.mixer_pwm, self.mixer_dir),
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def status(self) -> dict:
+        with self._lock:
+            now = time.monotonic()
+            remaining = max(0, int(self.end_at - now)) if self.running else 0
+            elapsed = int(now - self.started_at) if self.running else 0
+            return {
+                "phase": self.phase,
+                "running": self.running,
+                "total_seconds": self.total_seconds,
+                "elapsed_seconds": elapsed,
+                "remaining_seconds": remaining,
+                "temp_c": self.temp_c,
+                "mixer_pwm": self.mixer_pwm,
+                "mixer_dir": self.mixer_dir,
+                "message": self.message,
+                "last_error": self.last_error,
+            }
+
+
 class FeedController:
     """Feed wrapper that reuses the extrusion ratio test behavior.
 
@@ -2427,6 +2570,7 @@ class FeedController:
 
 
 orchestrator = ProcessOrchestrator()
+dry_hold = SimpleDryHoldController()
 feeder = FeedController()
 
 
@@ -2745,6 +2889,45 @@ def api_dry_status():
     return jsonify({"ok": True, "data": orchestrator.status()})
 
 
+@app.route("/api/dry_hold/start", methods=["POST"])
+def api_dry_hold_start():
+    """Begin backend-owned simple dry hold. Body: {minutes, temp_c, mixer_pwm?, dir?}."""
+    try:
+        body = request.get_json(silent=True) or {}
+        minutes = float(body.get("minutes", 0))
+        temp_c = int(body.get("temp_c", 0))
+        mixer_pwm = int(body.get("mixer_pwm", 200))
+        mixer_dir = str(body.get("dir", "FWD"))
+        if minutes <= 0:
+            return jsonify({"ok": False, "error": "minutes must be > 0"}), 400
+        if temp_c <= 0 or temp_c > 250:
+            return jsonify({"ok": False, "error": "temp_c must be 1-250"}), 400
+        if mixer_pwm < 0 or mixer_pwm > 255:
+            return jsonify({"ok": False, "error": "mixer_pwm must be 0-255"}), 400
+        if mixer_dir.strip().upper() not in ("FWD", "REV"):
+            return jsonify({"ok": False, "error": "dir must be FWD or REV"}), 400
+        dry_hold.start(int(minutes * 60), temp_c, mixer_pwm=mixer_pwm, mixer_dir=mixer_dir)
+        return jsonify({"ok": True, "data": dry_hold.status()})
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/dry_hold/stop", methods=["POST"])
+def api_dry_hold_stop():
+    try:
+        dry_hold.stop()
+        return jsonify({"ok": True, "data": dry_hold.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/dry_hold/status", methods=["GET"])
+def api_dry_hold_status():
+    return jsonify({"ok": True, "data": dry_hold.status()})
+
+
 @app.route("/api/feed/start", methods=["POST"])
 def api_feed_start():
     """Start feed using ratio-test behavior. Body: {ratio|spins_per_home, vacuum_pct}."""
@@ -2824,6 +3007,10 @@ def api_estop():
         orchestrator.stop()
     except Exception as exc:
         errors.append(f"Drying stop: {exc}")
+    try:
+        dry_hold.stop()
+    except Exception as exc:
+        errors.append(f"Dry-hold stop: {exc}")
     try:
         feeder.stop()
     except Exception as exc:

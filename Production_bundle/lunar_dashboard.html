@@ -1788,7 +1788,7 @@
     }
 
     async function workflowStopAll(){
-      const calls = ["/sr/stop", "/dry/stop", "/feed/stop"];
+      const calls = ["/sr/stop", "/dry/stop", "/dry_hold/stop", "/feed/stop"];
       for(const path of calls){
         try{ await apiArduino(path, { method: "POST" }); }
         catch(_){ /* stop path is best-effort */ }
@@ -1926,34 +1926,28 @@
     }
 
     async function workflowRunDryHold(cfg){
-      // Start drying only after Step 1 completes, with constant mixer FWD @ 200.
-      await api("/set_process_sp", {
+      await apiArduino("/dry_hold/start", {
         method: "POST",
-        body: JSON.stringify({ value: cfg.dryTempC }),
+        body: JSON.stringify({
+          minutes: cfg.dryMinutes,
+          temp_c: cfg.dryTempC,
+          mixer_pwm: 200,
+          dir: "FWD",
+        }),
       });
 
-      let dryerSnap = await api("/status", { method: "GET" });
-      if(!(dryerSnap && dryerSnap.data && dryerSnap.data.is_running === true)){
-        await api("/toggle", { method: "POST" });
-        await workflowSleep(1200);
-      }
-
-      const totalMs = Math.max(1000, Math.round(cfg.dryMinutes * 60 * 1000));
-      const endAt = Date.now() + totalMs;
-      while(Date.now() < endAt){
+      while(true){
         if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
-        try{
-          await apiArduino("/motor/set", {
-            method: "POST",
-            body: JSON.stringify({ speed: 200, dir: "FWD" }),
-          });
-        }catch(_){ /* keep trying on next tick */ }
-        await workflowSleep(5000);
-      }
-
-      dryerSnap = await api("/status", { method: "GET" });
-      if(dryerSnap && dryerSnap.data && dryerSnap.data.is_running === true){
-        await api("/toggle", { method: "POST" });
+        const res = await apiArduino("/dry_hold/status", { method: "GET" });
+        const d = res.data || {};
+        if(!d.running){
+          const phase = String(d.phase || "").toUpperCase();
+          if(phase === "ERROR"){
+            throw new Error(d.message || "Dry hold failed.");
+          }
+          return;
+        }
+        await workflowSleep(2000);
       }
     }
 

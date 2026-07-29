@@ -63,6 +63,7 @@ sudo systemctl restart lunarecycle-backend
 | `LUNA_ARDUINO_BAUD`  | `115200`         | Arduino baud rate                    |
 | `LUNA_ARDUINO_NO_RESET_OPEN` | `0`      | Best-effort serial open with DTR/RTS held low to reduce Arduino auto-reset on connect/reconnect |
 | `LUNA_ARDUINO_OPEN_SETTLE_SEC` | `0.2`   | Delay after serial open before first read/write |
+| `LUNA_ARDUINO_RESET_SETTLE_SEC` | `2.0`  | Minimum delay after serial open when reset is expected (`LUNA_ARDUINO_NO_RESET_OPEN=0`) |
 | `LUNA_DRYER_PORT`    | `/dev/ttyUSB0`   | Dryer RS485 adapter port             |
 | `LUNA_DRYER_BAUD`    | `57600`          | Dryer Modbus baud rate               |
 | `LUNA_DRYER_ID`      | `1`              | Dryer Modbus device ID               |

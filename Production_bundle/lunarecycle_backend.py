@@ -57,6 +57,9 @@ ARDUINO_TIMEOUT  = 2.0   # seconds for blocking read-until-response
 # before and after opening the port to avoid pulsing Arduino reset on connect.
 ARDUINO_NO_RESET_OPEN = _env_flag("LUNA_ARDUINO_NO_RESET_OPEN", "0")
 ARDUINO_OPEN_SETTLE_SEC = float(os.environ.get("LUNA_ARDUINO_OPEN_SETTLE_SEC", "0.2"))
+# If no-reset mode is disabled, opening serial can reboot the MCU. Give it
+# extra boot time before first command so reconnect is reliable.
+ARDUINO_RESET_SETTLE_SEC = float(os.environ.get("LUNA_ARDUINO_RESET_SETTLE_SEC", "2.0"))
 BLASTGATE_TIMEOUT = 12.0  # blast gate moves are blocking and can take seconds
 AGITATOR_HOME_TIMEOUT = float(os.environ.get("LUNA_AGITATOR_HOME_TIMEOUT", "15.0"))
 # How often the background supervisor retries a dropped Arduino connection.
@@ -843,32 +846,51 @@ class ArduinoBridge:
             last_exc: Exception | None = None
             for candidate in self._port_candidates(port):
                 try:
-                    ser = serial.Serial(
-                        port=None,
-                        baudrate=baudrate,
-                        timeout=ARDUINO_TIMEOUT,
-                        dsrdtr=False,
-                        rtscts=False,
-                    )
-                    if ARDUINO_NO_RESET_OPEN:
-                        # Keep control lines low before open to avoid the
-                        # DTR/RTS reset pulse on boards that honor it.
-                        ser.dtr = False
-                        ser.rts = False
-                    ser.port = candidate
-                    ser.open()
-                    if ARDUINO_NO_RESET_OPEN:
+                    attempts = [True, False] if ARDUINO_NO_RESET_OPEN else [False]
+                    for try_no_reset in attempts:
+                        ser = None
                         try:
-                            ser.setDTR(False)
-                            ser.setRTS(False)
-                        except Exception:
-                            pass
-                    self._ser = ser
-                    time.sleep(ARDUINO_OPEN_SETTLE_SEC)
-                    self._ser.reset_input_buffer()
-                    self.connected = True
-                    self._port = candidate   # remember the working node for next reconnect
-                    return True
+                            ser = serial.Serial(
+                                port=None,
+                                baudrate=baudrate,
+                                timeout=ARDUINO_TIMEOUT,
+                                dsrdtr=False,
+                                rtscts=False,
+                            )
+                            if try_no_reset:
+                                # Keep control lines low before open to avoid
+                                # DTR/RTS reset pulse where supported.
+                                ser.dtr = False
+                                ser.rts = False
+                            ser.port = candidate
+                            ser.open()
+                            if try_no_reset:
+                                try:
+                                    ser.setDTR(False)
+                                    ser.setRTS(False)
+                                except Exception:
+                                    pass
+
+                            settle = ARDUINO_OPEN_SETTLE_SEC if try_no_reset else max(
+                                ARDUINO_OPEN_SETTLE_SEC,
+                                ARDUINO_RESET_SETTLE_SEC,
+                            )
+                            self._ser = ser
+                            time.sleep(max(0.0, float(settle)))
+                            self._ser.reset_input_buffer()
+                            self.connected = True
+                            self._port = candidate   # remember working node
+                            return True
+                        except (serial.SerialException, OSError) as open_exc:
+                            last_exc = open_exc
+                            try:
+                                if ser is not None and ser.is_open:
+                                    ser.close()
+                            except Exception:
+                                pass
+                            self._ser = None
+                            self.connected = False
+                            continue
                 except (serial.SerialException, OSError) as exc:
                     self._ser = None
                     self.connected = False

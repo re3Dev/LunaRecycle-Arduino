@@ -1795,6 +1795,19 @@
       }
     }
 
+    async function workflowHoldShredder(ms){
+      const total = Math.max(0, Number(ms) || 0);
+      const started = Date.now();
+      while((Date.now() - started) < total){
+        if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
+        try{ await apiArduino("/shredder/fwd", { method: "POST" }); }catch(_){ }
+        const elapsed = Date.now() - started;
+        const remaining = Math.max(0, total - elapsed);
+        if(remaining <= 0) break;
+        await workflowSleep(Math.min(5000, remaining));
+      }
+    }
+
     async function workflowStopAll(){
       const calls = ["/sr/stop", "/dry/stop", "/dry_hold/stop", "/feed/stop"];
       for(const path of calls){
@@ -2031,7 +2044,7 @@
         workflowLog("Step 1 started: Size Reduction with mixer FWD @ 200 and shredder FWD.", "good");
         const srResult = await workflowWaitSrDone(cfg);
         workflowLog("Step 1 complete. Holding shredder ON for 30s post-run.", "info");
-        await workflowSleep(30000);
+        await workflowHoldShredder(30000);
         try{ await apiArduino("/shredder/off", { method: "POST" }); }catch(_){ }
         try{ await apiArduino("/gate/close", { method: "POST" }); }catch(_){ }
         if(srResult && srResult.stoppedByRatio){

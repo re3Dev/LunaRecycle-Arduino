@@ -277,6 +277,10 @@ const bool TC_bagPresentState = LOW;
 const int  TC_bagSensorConfirmSamples    = 5;
 const int  TC_bagSensorEmptyConfirmCount = 4;
 const unsigned long TC_bagSensorConfirmDelayMs = 20;
+// If Bag 1 reads EMPTY at its pick point, verify from a slightly more center-
+// shifted position before stopping the sequence.
+const float TC_bag1EmptyVerifyOffsetMm = 15.0;
+const unsigned long TC_bag1EmptyVerifyMoveTimeoutMs = 4000;
 
 // Stepper motion: speed in mm/s, accel in mm/s^2.
 // AccelStepper calls step() at most once per run(), and run() is called once
@@ -957,6 +961,22 @@ void tcMoveTo(float targetMm, TCState nextState) {
   tcState = nextState;
 }
 
+bool tcMoveToBlocking(float targetMm, unsigned long timeoutMs) {
+  targetMm = constrain(targetMm, TC_stepperMinPos, TC_stepperMaxPos);
+  TC_stepper.enableOutputs();
+  TC_stepper.setMaxSpeed(tcMmToSteps(TC_maxSpeed));
+  TC_stepper.moveTo(tcMmToSteps(targetMm));
+  unsigned long started = millis();
+  while (TC_stepper.distanceToGo() != 0) {
+    TC_stepper.run();
+    if (millis() - started > timeoutMs) {
+      TC_stepper.stop();
+      return false;
+    }
+  }
+  return true;
+}
+
 void tcStopPickSequence(const __FlashStringHelper* message) {
   tcSequenceRunning = false;
   tcPumpOff();
@@ -1021,8 +1041,33 @@ void tcDropAtShredderAndContinue() {
 
 bool tcPickAtBag() {
   if (tcBagStackEmptyConfirmed()) {
+    bool recovered = false;
+    if (tcIrDetectionEnabled && tcActiveBag == 1) {
+      float startMm = tcStepsToMm(TC_stepper.currentPosition());
+      float verifyMm = max(TC_stepperMinPos, startMm - TC_bag1EmptyVerifyOffsetMm);
+      if (verifyMm < startMm - 0.1f) {
+        Serial.println(F("[TC] Bag 1 reads EMPTY at pick point - verifying with offset check"));
+        bool movedOut = tcMoveToBlocking(verifyMm, TC_bag1EmptyVerifyMoveTimeoutMs);
+        if (movedOut) {
+          delay(TC_bagSensorConfirmDelayMs * 2);
+          recovered = !tcBagStackEmptyConfirmed();
+        }
+        bool movedBack = tcMoveToBlocking(startMm, TC_bag1EmptyVerifyMoveTimeoutMs);
+        if (movedBack) {
+          delay(TC_bagSensorConfirmDelayMs * 2);
+        }
+      }
+      if (recovered) {
+        Serial.println(F("[TC] Bag 1 detection recovered after offset check"));
+      }
+    }
+
+    if (recovered) {
+      // Continue pick as normal when offset verification finds a bag.
+    } else {
     tcStopPickSequence(F("[TC] Bag not detected - sequence stopped"));
     return false;
+    }
   }
 
   // Prime the vacuum pump, then descend; grab as soon as the cup seals.

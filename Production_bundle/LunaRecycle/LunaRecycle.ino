@@ -279,7 +279,7 @@ const int  TC_bagSensorEmptyConfirmCount = 4;
 const unsigned long TC_bagSensorConfirmDelayMs = 20;
 // If Bag 1 reads EMPTY at its pick point, verify from a slightly more center-
 // shifted position before stopping the sequence.
-const float TC_bag1EmptyVerifyOffsetMm = 15.0;
+const float TC_bag1EmptyVerifyOffsetMm = 50.0;
 const unsigned long TC_bag1EmptyVerifyMoveTimeoutMs = 4000;
 
 // Stepper motion: speed in mm/s, accel in mm/s^2.

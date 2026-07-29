@@ -1885,6 +1885,18 @@
     }
 
     async function workflowWaitSrDone(cfg){
+      async function stopSrAndConfirmRatioStop(timeoutMs=15000){
+        const started = Date.now();
+        while(Date.now() - started < timeoutMs){
+          try{ await apiArduino("/sr/stop", { method: "POST" }); }catch(_){ }
+          await workflowSleep(1200);
+          await srRefreshStatus(true);
+          const runNow = String(S.srRun || "").toUpperCase();
+          if(runNow !== "YES") return true;
+        }
+        return false;
+      }
+
       let seenRunning = false;
       while(true){
         if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
@@ -1897,8 +1909,10 @@
           const peLeft = Number(S.srPeLeft);
           const paLeft = Number(S.srPaLeft);
           if(Number.isFinite(peLeft) && Number.isFinite(paLeft) && (peLeft <= 0 || paLeft <= 0)){
-            try{ await apiArduino("/sr/stop", { method: "POST" }); }catch(_){ }
-            await srRefreshStatus(true);
+            const stopped = await stopSrAndConfirmRatioStop();
+            if(!stopped){
+              throw new Error("Ratio-mode empty condition detected, but SR did not stop.");
+            }
             return { stoppedByRatio: true, peLeft, paLeft };
           }
         }

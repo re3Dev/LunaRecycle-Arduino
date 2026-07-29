@@ -267,6 +267,8 @@ const unsigned long TC_servoStepSettleMs     = 6;
 const unsigned long TC_vacuumCheckIntervalMs = 1;
 const unsigned long TC_servoReturnMsPerDeg   = 4;
 const unsigned long TC_servoReturnMinMs      = 150;
+const unsigned long TC_postPickLiftSettleMs  = 200;
+const unsigned long TC_bag2ExtraLiftSettleMs = 400;
 const int TC_vacuumConfirmSamples     = 3;
 const unsigned long TC_vacuumConfirmDelayMs = 1;
 const int TC_vacuumFastConfirmSamples = 2;
@@ -1098,6 +1100,10 @@ bool tcPickAtBag() {
   }
 
   tcReturnServoToUp();
+  unsigned long liftSettleMs = TC_postPickLiftSettleMs + (tcActiveBag == 2 ? TC_bag2ExtraLiftSettleMs : 0);
+  if (liftSettleMs > 0) {
+    delay(liftSettleMs);
+  }
   Serial.println(F("[TC] Servo up"));
   return true;
 }

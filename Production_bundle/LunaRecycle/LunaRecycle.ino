@@ -269,6 +269,8 @@ const unsigned long TC_servoReturnMsPerDeg   = 4;
 const unsigned long TC_servoReturnMinMs      = 150;
 const unsigned long TC_postPickLiftSettleMs  = 200;
 const unsigned long TC_bag2ExtraLiftSettleMs = 400;
+const unsigned long TC_minTravelAfterUpMs    = 250;
+const int           TC_servoTravelMaxDeg     = 10;
 const int TC_vacuumConfirmSamples     = 3;
 const unsigned long TC_vacuumConfirmDelayMs = 1;
 const int TC_vacuumFastConfirmSamples = 2;
@@ -409,6 +411,7 @@ bool tcSequenceRunning = false;
 bool tcIrDetectionEnabled = true;
 unsigned long tcLastLimitChange = 0;
 int  tcCurrentServoAngle = TC_servoUpDeg;
+unsigned long tcServoLastUpMs = 0;
 bool tcPumpRunning     = false;
 bool shredderRunning   = false;
 bool shredderFwd       = true;
@@ -899,6 +902,22 @@ bool tcVacuumDetectedDuringSettle() {
   return false;
 }
 
+bool tcVacuumDetectedStable(int samples, unsigned long sampleDelayMs) {
+  if (samples <= 0) {
+    return false;
+  }
+  int detected = 0;
+  for (int i = 0; i < samples; i++) {
+    if (tcVacuumDetectedOnce()) {
+      detected++;
+    }
+    if (i < samples - 1 && sampleDelayMs > 0) {
+      delay(sampleDelayMs);
+    }
+  }
+  return detected == samples;
+}
+
 int tcActiveBagSensorPin() {
   return tcActiveBag == 2 ? TC_rightFilmSensor : TC_leftFilmSensor;
 }
@@ -944,6 +963,7 @@ void tcSetIrDetection(bool enabled) {
 
 void tcServoUp() {
   tcWriteServoAngle(TC_servoUpDeg);
+  tcServoLastUpMs = millis();
 }
 
 void tcServoDown() {
@@ -952,11 +972,47 @@ void tcServoDown() {
 
 void tcReturnServoToUp() {
   int returnDistance = abs(tcCurrentServoAngle - TC_servoUpDeg);
-  tcWriteServoAngle(TC_servoUpDeg);
+  tcServoUp();
   delay(max(TC_servoReturnMinMs, (unsigned long)(returnDistance * TC_servoReturnMsPerDeg)));
+  tcServoLastUpMs = millis();
+}
+
+bool tcServoReadyForTravel() {
+  if (tcCurrentServoAngle > TC_servoTravelMaxDeg) {
+    return false;
+  }
+  return (unsigned long)(millis() - tcServoLastUpMs) >= TC_minTravelAfterUpMs;
+}
+
+bool tcEnsureServoTravelSafe() {
+  if (tcServoReadyForTravel()) {
+    return true;
+  }
+
+  Serial.println(F("[TC][SAFE] Servo not travel-safe; raising before X move"));
+  tcReturnServoToUp();
+  if (TC_minTravelAfterUpMs > 0) {
+    delay(TC_minTravelAfterUpMs);
+  }
+  return tcServoReadyForTravel();
 }
 
 void tcMoveTo(float targetMm, TCState nextState) {
+  if (!tcEnsureServoTravelSafe()) {
+    systemDiagFlagError();
+    tcPumpOff();
+    tcSequenceRunning = false;
+    srRunning = false;
+    srRequireBothStreams = false;
+    srRehomePending = false;
+    srResumeAfterHome = false;
+    TC_stepper.stop();
+    TC_stepper.disableOutputs();
+    tcState = TC_READY;
+    Serial.println(F("[TC][SAFE] Servo travel interlock failed - motion halted"));
+    return;
+  }
+
   TC_stepper.enableOutputs();
   TC_stepper.setMaxSpeed(tcMmToSteps(TC_maxSpeed));
   TC_stepper.moveTo(tcMmToSteps(targetMm));
@@ -1103,6 +1159,10 @@ bool tcPickAtBag() {
   unsigned long liftSettleMs = TC_postPickLiftSettleMs + (tcActiveBag == 2 ? TC_bag2ExtraLiftSettleMs : 0);
   if (liftSettleMs > 0) {
     delay(liftSettleMs);
+  }
+  if (!tcVacuumDetectedStable(TC_vacuumConfirmSamples, TC_vacuumConfirmDelayMs)) {
+    tcStopPickSequence(F("[TC][SAFE] Vacuum lost after lift - sequence stopped"));
+    return false;
   }
   Serial.println(F("[TC] Servo up"));
   return true;

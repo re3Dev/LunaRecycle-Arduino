@@ -152,7 +152,6 @@ def _resolve_moonraker_ws_url() -> str:
 MOONRAKER_WS_URL = _resolve_moonraker_ws_url()
 MOONRAKER_EXTRUDER_VELOCITY_MIN = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_VEL_MIN", "0.01"))
 MOONRAKER_EXTRUDER_UNITS_PER_ROTATION = float(os.environ.get("LUNA_MOONRAKER_EXTRUDER_UNITS_PER_ROTATION", "1.0"))
-RATIO_TEST_SPINS_PER_HOME = int(os.environ.get("LUNA_RATIO_TEST_SPINS_PER_HOME", "10"))
 RATIO_TEST_POLL_SEC = float(os.environ.get("LUNA_RATIO_TEST_POLL_SEC", "0.5"))
 RATIO_TEST_VACUUM_BOOST_SEC = float(os.environ.get("LUNA_RATIO_TEST_VACUUM_BOOST_SEC", "5.0"))
 RATIO_TEST_VACUUM_IDLE_PCT = int(os.environ.get("LUNA_RATIO_TEST_VACUUM_IDLE_PCT", "15"))
@@ -2440,8 +2439,7 @@ PREHEAT_LEAD_SECONDS = int(os.environ.get("LUNA_PREHEAT_LEAD_SEC", "1500"))  # 2
 BLASTGATE_OPEN_CMD   = os.environ.get("LUNA_BG_OPEN_CMD", "BLASTGATE_HOMEMAX ALL")
 BLASTGATE_CLOSE_CMD  = os.environ.get("LUNA_BG_CLOSE_CMD", "BLASTGATE_HOME ALL")
 
-# ── Print-feed ratio-test-style defaults ─────────────────────────────────────
-FEED_RATIO_SPINS_PER_HOME = int(os.environ.get("LUNA_FEED_RATIO_SPINS_PER_HOME", str(RATIO_TEST_SPINS_PER_HOME)))
+# ── Print-feed threshold-mode defaults ───────────────────────────────────────
 FEED_POLL_SEC             = float(os.environ.get("LUNA_FEED_POLL_SEC", str(RATIO_TEST_POLL_SEC)))
 FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", str(RATIO_TEST_VACUUM_IDLE_PCT)))
 
@@ -2851,16 +2849,15 @@ class SimpleDryHoldController:
 
 
 class FeedController:
-    """Feed wrapper that reuses the extrusion ratio test behavior.
+    """Feed wrapper that reuses the extrusion threshold behavior.
 
-    Feed start/stop/status remains on /api/feed/* for workflow continuity, but
-    execution is delegated to the same Moonraker-driven ratio watcher used by
+    Feed start/stop/status remains on /api/feed/* for workflow continuity.
+    Execution is delegated to the same Moonraker + crammer load watcher used by
     /api/extrusion_ratio_test/*.
     """
 
-    def start(self, spins_per_home: int, vacuum_pct: int, poll_sec: Optional[float] = None) -> None:
+    def start(self, vacuum_pct: int, poll_sec: Optional[float] = None) -> None:
         ratio_test.start(
-            spins_per_home=max(1, int(spins_per_home)),
             poll_sec=FEED_POLL_SEC if poll_sec is None else max(0.1, float(poll_sec)),
             vacuum_pct=max(0, min(100, int(vacuum_pct))),
         )
@@ -2873,14 +2870,15 @@ class FeedController:
         return {
             "phase": rs.get("phase", "IDLE"),
             "running": bool(rs.get("running")),
-            "ratio": int(rs.get("spins_per_home", 0) or 0),
-            "spins_per_home": int(rs.get("spins_per_home", 0) or 0),
             "vacuum_pct": int(rs.get("vacuum_pct", 0) or 0),
             "moonraker_connected": bool(rs.get("moonraker_connected")),
+            "crammer_connected": bool(rs.get("crammer_connected")),
+            "crammer_running": bool(rs.get("crammer_running")),
+            "crammer_load_pct": float(rs.get("crammer_load_pct", 0.0) or 0.0),
+            "low_load_threshold_pct": float(rs.get("low_load_threshold_pct", 0.0) or 0.0),
+            "low_load_home_count": int(rs.get("low_load_home_count", 0) or 0),
             "live_extruder_velocity": float(rs.get("live_extruder_velocity", 0.0) or 0.0),
             "live_extruder_rotations_total": float(rs.get("live_extruder_rotations_total", 0.0) or 0.0),
-            "rotations_since_home": float(rs.get("rotations_since_home", 0.0) or 0.0),
-            "rotations_until_home": float(rs.get("rotations_until_home", 0.0) or 0.0),
             "home_sequences_completed": int(rs.get("home_sequences_completed", 0) or 0),
             "message": str(rs.get("message", "")),
             "last_error": str(rs.get("last_error", "")),
@@ -2893,7 +2891,7 @@ feeder = FeedController()
 
 
 class ExtrusionRatioTestController:
-    """Watch Moonraker extrusion rotations and home the air lock on a spin threshold."""
+    """Watch Moonraker extrusion + crammer load and home air lock on low load."""
 
     def __init__(self):
         self._lock = threading.Lock()
@@ -2906,23 +2904,18 @@ class ExtrusionRatioTestController:
         self.message = "Ready."
         self.running = False
         self.started_at = 0.0
-        self.spins_per_home = max(1, int(RATIO_TEST_SPINS_PER_HOME))
         self.poll_sec = max(0.1, float(RATIO_TEST_POLL_SEC))
         self.vacuum_pct = max(0, min(100, RATIO_TEST_VACUUM_IDLE_PCT))
         self.moonraker_connected = False
         self.live_extruder_velocity = 0.0
         self.live_extruder_rotations_total = 0.0
-        self.rotations_since_home = 0.0
-        self.rotations_until_home = float(self.spins_per_home)
         self.home_sequences_completed = 0
         self.last_home_rotations_total = 0.0
         self.last_home_response: list[str] = []
         self.last_error = ""
-        self.last_sample_rotations_total: Optional[float] = None
         self.crammer_connected = False
         self.crammer_running = False
         self.crammer_load_pct = 0.0
-        self.use_crammer_load = bool(RATIO_USE_CRAMMER_LOAD)
         self.low_load_threshold_pct = max(0.0, min(100.0, float(RATIO_CRAMMER_LOW_LOAD_PCT)))
         self.low_load_hyst_pct = max(0.0, float(RATIO_CRAMMER_LOAD_HYST_PCT))
         self.low_load_retrigger_sec = max(0.5, float(RATIO_CRAMMER_RETRIGGER_SEC))
@@ -2951,65 +2944,25 @@ class ExtrusionRatioTestController:
             direction = "FWD"
         return self._arduino(f"MOTOR_SET {pwm} {direction}")
 
-    def _set_blastgates_open(self, open_state: bool) -> list[str]:
-        return self._arduino(BLASTGATE_OPEN_CMD if open_state else BLASTGATE_CLOSE_CMD)
-
-    def _wait_or_stop(self, seconds: float) -> bool:
-        return self._stop.wait(max(0.0, float(seconds)))
-
-    def _run_post_home_sequence(self) -> bool:
-        """Run the requested mixer + blastgate choreography after each home."""
-        self._set_blastgates_open(False)
-        if self._wait_or_stop(RATIO_TEST_BG_SETTLE_SEC):
-            return False
-
-        self._set_mixer(0)
-        if self._wait_or_stop(RATIO_TEST_STOP_SETTLE_SEC):
-            return False
-
-        self._set_mixer(RATIO_TEST_MIX_PWM, "REV")
-        if self._wait_or_stop(RATIO_TEST_REVERSE_SEC):
-            return False
-
-        self._set_mixer(0)
-        if self._wait_or_stop(RATIO_TEST_STOP_SETTLE_SEC):
-            return False
-
-        self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
-        if self._wait_or_stop(RATIO_TEST_FORWARD_RECOVER_SEC):
-            return False
-
-        self._set_blastgates_open(True)
-        return True
-
-    def start(self, spins_per_home: Optional[int] = None, poll_sec: Optional[float] = None, vacuum_pct: Optional[int] = None):
+    def start(self, poll_sec: Optional[float] = None, vacuum_pct: Optional[int] = None):
         with self._lock:
             if self.running:
                 raise RuntimeError("Extruder ratio test already running.")
             if self._thread is not None and self._thread.is_alive():
                 raise RuntimeError("Extruder ratio test is still stopping.")
             self._reset()
-            if spins_per_home is not None:
-                self.spins_per_home = max(1, int(spins_per_home))
             if poll_sec is not None:
                 self.poll_sec = max(0.1, float(poll_sec))
             if vacuum_pct is not None:
                 self.vacuum_pct = max(0, min(100, int(vacuum_pct)))
-            self.rotations_until_home = float(self.spins_per_home)
             self.running = True
             self.phase = "ARMED"
             self.started_at = time.monotonic()
-            if self.use_crammer_load:
-                self.message = (
-                    f"Watching Moonraker + crammer load; homing when load <= "
-                    f"{self.low_load_threshold_pct:.1f}% (fallback {self.spins_per_home} spins) "
-                    f"with vacuum at {self.vacuum_pct}% and mixer FWD {RATIO_TEST_MIX_PWM}."
-                )
-            else:
-                self.message = (
-                    f"Watching Moonraker; homing every {self.spins_per_home} spins "
-                    f"with vacuum at {self.vacuum_pct}% and mixer FWD {RATIO_TEST_MIX_PWM}."
-                )
+            self.message = (
+                f"Watching Moonraker + crammer load; homing when load <= "
+                f"{self.low_load_threshold_pct:.1f}% with vacuum at {self.vacuum_pct}% "
+                f"and mixer FWD {RATIO_TEST_MIX_PWM}."
+            )
 
         self._stop.clear()
         self._set_vacuum(self.vacuum_pct)
@@ -3072,43 +3025,25 @@ class ExtrusionRatioTestController:
             self.message = reason
 
         response = self._arduino("AGITATOR_HOME")
-
-        with self._lock:
-            self.phase = "POST_HOME_SEQUENCE"
-            self.message = "Home complete. Running post-home blastgate/mixer sequence."
-
-        completed = self._run_post_home_sequence()
+        # Re-assert the requested continuous feed behavior after each home.
+        self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
         with self._lock:
             self.last_home_response = response
             self.home_sequences_completed += 1
             self.last_home_rotations_total = rotations_total
-            self.rotations_since_home = 0.0
-            self.rotations_until_home = float(self.spins_per_home)
-            self.last_sample_rotations_total = rotations_total
             self.phase = "WATCHING"
-            if completed:
-                if self.use_crammer_load:
-                    self.message = (
-                        f"Homed {self.home_sequences_completed} time(s); post-home sequence complete. "
-                        f"Waiting for next low-load event <= {self.low_load_threshold_pct:.1f}% "
-                        f"(fallback {self.spins_per_home} spins)."
-                    )
-                else:
-                    self.message = (
-                        f"Homed {self.home_sequences_completed} time(s); post-home sequence complete. "
-                        f"Waiting for the next {self.spins_per_home} spins."
-                    )
-            else:
-                self.message = "Post-home sequence interrupted by stop request."
+            self.message = (
+                f"Homed {self.home_sequences_completed} time(s). "
+                f"Waiting for next low-load event <= {self.low_load_threshold_pct:.1f}%."
+            )
 
     def _run(self):
         try:
-            # Requested baseline behavior: keep mixer forward at 200 and gates open
-            # while waiting for each spin-threshold home event.
-            self._set_blastgates_open(True)
+            # Requested behavior: keep mixer forward at 200 continuously while
+            # threshold watcher is active.
             self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
-            if RATIO_USE_CRAMMER_LOAD and crammer.connected:
+            if crammer.connected:
                 try:
                     crammer.send("RUN")
                 except Exception:
@@ -3126,21 +3061,15 @@ class ExtrusionRatioTestController:
                         self.phase = "WAITING"
                         self.message = "Waiting for Moonraker extrusion data."
                         should_wait = True
-                    elif self.last_sample_rotations_total is None:
-                        self.last_sample_rotations_total = rotations_total
-                        self.phase = "WATCHING"
-                        self.message = f"Armed. Homing every {self.spins_per_home} spins."
                     else:
-                        delta = rotations_total - self.last_sample_rotations_total
-                        self.last_sample_rotations_total = rotations_total
-                        if delta < 0.0 or delta > 1000.0:
-                            self.rotations_since_home = 0.0
-                        else:
-                            self.rotations_since_home += delta
-                        self.rotations_until_home = max(0.0, float(self.spins_per_home) - self.rotations_since_home)
+                        self.phase = "WATCHING"
+                        self.message = (
+                            f"Armed. Waiting for low-load <= {self.low_load_threshold_pct:.1f}% "
+                            f"while extruding."
+                        )
 
                     extruding_now = abs(self.live_extruder_velocity) >= MOONRAKER_EXTRUDER_VELOCITY_MIN
-                    using_load_trigger = self.use_crammer_load and crammer_connected and crammer_running and extruding_now
+                    using_load_trigger = crammer_connected and crammer_running and extruding_now
 
                     if using_load_trigger:
                         now = time.monotonic()
@@ -3159,13 +3088,12 @@ class ExtrusionRatioTestController:
                             self.low_load_armed = False
                             self.last_low_load_trigger_at = now
                     else:
-                        # Fallback behavior when load control is unavailable.
-                        trigger_home_now = self.rotations_since_home >= self.spins_per_home
-                        if trigger_home_now:
-                            trigger_reason = (
-                                f"Spin threshold reached at {rotations_total:.4f}; "
-                                f"running air-lock home sequence."
-                            )
+                        if not crammer_connected:
+                            self.message = "Waiting for crammer connection/status."
+                        elif not crammer_running:
+                            self.message = "Waiting for crammer RUN state."
+                        elif not extruding_now:
+                            self.message = "Waiting for extrusion activity."
 
                 if should_wait:
                     self._stop.wait(self.poll_sec)
@@ -3210,18 +3138,14 @@ class ExtrusionRatioTestController:
                 "phase": self.phase,
                 "running": self.running,
                 "message": self.message,
-                "spins_per_home": self.spins_per_home,
                 "poll_sec": self.poll_sec,
                 "vacuum_pct": self.vacuum_pct,
                 "moonraker_connected": self.moonraker_connected,
                 "live_extruder_velocity": self.live_extruder_velocity,
                 "live_extruder_rotations_total": self.live_extruder_rotations_total,
-                "rotations_since_home": self.rotations_since_home,
-                "rotations_until_home": self.rotations_until_home,
                 "home_sequences_completed": self.home_sequences_completed,
                 "last_home_rotations_total": self.last_home_rotations_total,
                 "last_home_response": list(self.last_home_response),
-                "use_crammer_load": self.use_crammer_load,
                 "crammer_connected": self.crammer_connected,
                 "crammer_running": self.crammer_running,
                 "crammer_load_pct": self.crammer_load_pct,
@@ -3229,6 +3153,7 @@ class ExtrusionRatioTestController:
                 "low_load_hyst_pct": self.low_load_hyst_pct,
                 "low_load_retrigger_sec": self.low_load_retrigger_sec,
                 "low_load_home_count": self.low_load_home_count,
+                "low_load_armed": self.low_load_armed,
                 "last_error": self.last_error,
             }
 
@@ -3246,7 +3171,6 @@ def api_extrusion_ratio_test_start():
     try:
         body = request.get_json(silent=True) or {}
         ratio_test.start(
-            spins_per_home=body.get("spins_per_home"),
             poll_sec=body.get("poll_sec"),
             vacuum_pct=body.get("vacuum_pct"),
         )
@@ -3341,18 +3265,14 @@ def api_dry_hold_status():
 
 @app.route("/api/feed/start", methods=["POST"])
 def api_feed_start():
-    """Start feed using ratio-test behavior. Body: {ratio|spins_per_home, vacuum_pct}."""
+    """Start feed using threshold behavior. Body: {vacuum_pct}."""
     try:
         body = request.get_json(silent=True) or {}
-        ratio_raw = body.get("ratio", body.get("spins_per_home", FEED_RATIO_SPINS_PER_HOME))
-        ratio = int(ratio_raw)
         poll_sec = body.get("poll_sec", None)
         vacuum_pct   = int(body.get("vacuum_pct", FEED_VACUUM_PCT))
-        if ratio <= 0:
-            return jsonify({"ok": False, "error": "ratio must be > 0"}), 400
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
-        feeder.start(spins_per_home=ratio, vacuum_pct=vacuum_pct, poll_sec=poll_sec)
+        feeder.start(vacuum_pct=vacuum_pct, poll_sec=poll_sec)
         return jsonify({"ok": True, "data": feeder.status()})
     except RuntimeError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

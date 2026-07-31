@@ -1005,14 +1005,14 @@
               </div>
 
               <div class="act-block" style="grid-column: 1 / -1;">
-                <div class="act-head">Extruder Ratio Test</div>
+                <div class="act-head">Extruder Threshold Feed</div>
                 <div class="split" style="margin-bottom:6px;">
                   <div class="kv"><div class="k">Moonraker</div><div class="v" id="mrConnText">—</div></div>
                   <div class="kv"><div class="k">Moonraker Health</div><div class="v" id="mrHealthText">—</div></div>
                   <div class="kv"><div class="k">WS Reconnects</div><div class="v" id="mrReconnectText">—</div></div>
-                  <div class="kv"><div class="k">Spins / Home</div><div class="v" id="rtSpinsText">—</div></div>
-                  <div class="kv"><div class="k">Rotations Since Home</div><div class="v" id="rtPendingText">—</div></div>
-                  <div class="kv"><div class="k">Rotations Until Home</div><div class="v" id="rtUntilText">—</div></div>
+                  <div class="kv"><div class="k">Load Threshold</div><div class="v" id="rtThresholdText">—</div></div>
+                  <div class="kv"><div class="k">Crammer Load</div><div class="v" id="rtCrammerLoadText">—</div></div>
+                  <div class="kv"><div class="k">Low-Load Homes</div><div class="v" id="rtLowLoadHomeText">—</div></div>
                   <div class="kv"><div class="k">Vacuum %</div><div class="v" id="rtVacText">—</div></div>
                   <div class="kv"><div class="k">Homes Completed</div><div class="v" id="rtHomeCountText">—</div></div>
                   <div class="kv"><div class="k">Live Extruder Rot</div><div class="v" id="mrRotTotalText">—</div></div>
@@ -1022,14 +1022,13 @@
                   <div class="kv"><div class="k">Max Temp</div><div class="v" id="mrTempMaxText">—</div></div>
                 </div>
                 <div class="act-actions">
-                  <input type="number" id="ratioTestSpinsPerHome" min="1" step="1" value="10" style="max-width:120px;" />
                   <input type="number" id="ratioTestVacuumPct" min="0" max="100" step="1" value="15" style="max-width:120px;" />
                   <button class="btn mini primary" id="btnRatioTestStart">Start</button>
                   <button class="btn mini" id="btnRatioTestStop">Stop</button>
                   <button class="btn mini" id="btnRatioTestRefresh">Refresh</button>
                   <span class="statechip warn" id="ratioTestChip">IDLE</span>
                 </div>
-                <div class="hint" id="ratioTestMsgText" style="margin-top:4px;">Start the watcher to home the air lock after the configured number of extruder spins.</div>
+                <div class="hint" id="ratioTestMsgText" style="margin-top:4px;">Start the watcher to home the air lock when crammer load drops below threshold while extruding.</div>
               </div>
             </div>
           </div>
@@ -1080,11 +1079,7 @@
                 <input type="number" id="wfDryTempC" min="1" max="250" step="1" value="70" />
               </div>
               <div class="cell">
-                <label for="wfFeedRatio">Ratio (spins/home)</label>
-                <input type="number" id="wfFeedRatio" min="1" step="1" value="10" />
-              </div>
-              <div class="cell">
-                <label for="wfFeedVacPct">Vacuum %</label>
+                <label for="wfFeedVacPct">Feed Vacuum %</label>
                 <input type="number" id="wfFeedVacPct" min="0" max="100" step="1" value="90" />
               </div>
             </div>
@@ -1217,13 +1212,13 @@
         running: false,
         phase: "IDLE",
         message: "Ready.",
-        spins_per_home: 10,
         poll_sec: 0.5,
         vacuum_pct: 15,
         moonraker_connected: false,
         live_extruder_rotations_total: 0,
-        rotations_since_home: 0,
-        rotations_until_home: 10,
+        low_load_threshold_pct: 30,
+        crammer_load_pct: 0,
+        low_load_home_count: 0,
         home_sequences_completed: 0,
       },
 
@@ -1734,9 +1729,9 @@
       setText("mrTempExtruder2Text", S.moonraker.extruder_temps?.extruder2 != null ? Number(S.moonraker.extruder_temps.extruder2).toFixed(1) : "—");
       setText("mrTempMaxText", Number(S.moonraker.max_extruder_temp_c || 0).toFixed(1));
 
-      setText("rtSpinsText", String(S.ratioTest.spins_per_home ?? "—"));
-      setText("rtPendingText", Number(S.ratioTest.rotations_since_home || 0).toFixed(4));
-      setText("rtUntilText", Number(S.ratioTest.rotations_until_home || 0).toFixed(4));
+      setText("rtThresholdText", `${Number(S.ratioTest.low_load_threshold_pct || 0).toFixed(1)}%`);
+      setText("rtCrammerLoadText", `${Number(S.ratioTest.crammer_load_pct || 0).toFixed(1)}%`);
+      setText("rtLowLoadHomeText", String(S.ratioTest.low_load_home_count ?? "—"));
       setText("rtVacText", String(S.ratioTest.vacuum_pct ?? "—"));
       setText("rtHomeCountText", String(S.ratioTest.home_sequences_completed ?? "—"));
       setText("ratioTestMsgText", S.ratioTest.message || "—");
@@ -1881,7 +1876,7 @@
         const homes = Number(d.home_sequences_completed || 0);
         S.feedAgitator     = d.running ? `HOMES ${homes}` : "—";
         S.feedVac          = d.vacuum_pct !== undefined ? `${d.vacuum_pct}%` : "—";
-        S.feedAgitatorPct  = d.ratio !== undefined ? `${d.ratio} spins/home` : "—";
+        S.feedAgitatorPct  = d.low_load_threshold_pct !== undefined ? `<= ${Number(d.low_load_threshold_pct).toFixed(1)}% load` : "—";
         S.feedMsg          = d.message || "—";
       }catch(err){
         if(!silent){ log(`Feed status failed: ${err.message}`, "bad"); }
@@ -1898,19 +1893,16 @@
 
     async function feedStart(){
       if(!S.arduinoConnected){ log("Arduino not connected.", "bad"); return; }
-      const ratio        = parseInt($("#feedRatioSpins")?.value || $("#wfFeedRatio")?.value || "0", 10) || 0;
       const vacPct       = parseInt($("#feedVacPct")?.value || $("#wfFeedVacPct")?.value || "0", 10) || 0;
-      if(ratio <= 0){ log("Ratio (spins/home) must be greater than 0.", "bad"); return; }
       if(vacPct < 0 || vacPct > 100){ log("Vacuum % must be 0–100.", "bad"); return; }
       try{
         const res = await apiArduino("/feed/start", {
           method: "POST",
           body: JSON.stringify({
-            ratio,
             vacuum_pct: vacPct,
           }),
         });
-        log(`Feed started: ratio ${ratio} spins/home, vac ${vacPct}%.`, "good", (res.data && res.data.message) || "");
+        log(`Feed started: threshold-based mode, vac ${vacPct}%.`, "good", (res.data && res.data.message) || "");
         await feedRefreshStatus(true);
       }catch(err){ log(`Feed start failed: ${err.message}`, "bad"); }
     }
@@ -2016,7 +2008,6 @@
         ratioPa: parseInt($("#wfRatioPa")?.value || "0", 10) || 0,
         dryMinutes: parseFloat($("#wfDryMinutes")?.value || "0"),
         dryTempC: parseInt($("#wfDryTempC")?.value || "0", 10),
-        feedRatio: parseInt($("#wfFeedRatio")?.value || "0", 10) || 0,
         vacPct: parseInt($("#wfFeedVacPct")?.value || "0", 10) || 0,
       };
 
@@ -2039,7 +2030,6 @@
 
       if(!(cfg.dryMinutes > 0)){ throw new Error("Dry minutes must be greater than zero."); }
       if(!(cfg.dryTempC > 0 && cfg.dryTempC <= 250)){ throw new Error("Dry temp must be 1-250 C."); }
-      if(cfg.feedRatio <= 0){ throw new Error("Feed ratio (spins/home) must be greater than zero."); }
       if(cfg.vacPct < 0 || cfg.vacPct > 100){ throw new Error("Vacuum percent must be 0-100."); }
       return cfg;
     }
@@ -2182,7 +2172,7 @@
 
       S.workflowStopRequested = false;
       workflowSet("TC HOME", "Running homing before automation...", true);
-      workflowLog(`Starting workflow: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed ratio ${cfg.feedRatio} spins/home @ vac ${cfg.vacPct}%`, "info");
+      workflowLog(`Starting workflow: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed threshold mode @ vac ${cfg.vacPct}%`, "info");
 
       try{
         await workflowRunTcHome();
@@ -2230,12 +2220,11 @@
         await apiArduino("/feed/start", {
           method: "POST",
           body: JSON.stringify({
-            ratio: cfg.feedRatio,
             vacuum_pct: cfg.vacPct,
           }),
         });
         await feedRefreshStatus(true);
-        workflowLog(`Step 3 started: blastgates OPEN, mixer FWD @ 200, feed ratio watcher running (${cfg.feedRatio} spins/home, vac ${cfg.vacPct}%).`, "good");
+        workflowLog(`Step 3 started: blastgates OPEN, mixer FWD @ 200, threshold watcher running (vac ${cfg.vacPct}%).`, "good");
         workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 200; use Stop Workflow when done.", false);
       }catch(err){
         if(S.workflowStopRequested){
@@ -2329,27 +2318,26 @@
     }
 
     async function ratioTestStart(){
-      const spinsPerHome = Math.max(1, Math.round(getNum("ratioTestSpinsPerHome", 10)));
       const vacuumPct = Math.max(0, Math.min(100, Math.round(getNum("ratioTestVacuumPct", 15))));
       try{
         const res = await apiArduino("/extrusion_ratio_test/start", {
           method: "POST",
-          body: JSON.stringify({ spins_per_home: spinsPerHome, vacuum_pct: vacuumPct })
+          body: JSON.stringify({ vacuum_pct: vacuumPct })
         }, 20000);
-        log("Extruder ratio test started.", "good", summarizeResponse(res));
+        log("Extruder threshold feed started.", "good", summarizeResponse(res));
         await ratioTestRefreshStatus(true);
       }catch(err){
-        log(`Extruder ratio test start failed: ${err.message}`, "bad");
+        log(`Extruder threshold feed start failed: ${err.message}`, "bad");
       }
     }
 
     async function ratioTestStop(){
       try{
         const res = await apiArduino("/extrusion_ratio_test/stop", { method: "POST" }, 12000);
-        log("Extruder ratio test stopped.", "warn", summarizeResponse(res));
+        log("Extruder threshold feed stopped.", "warn", summarizeResponse(res));
         await ratioTestRefreshStatus(true);
       }catch(err){
-        log(`Extruder ratio test stop failed: ${err.message}`, "bad");
+        log(`Extruder threshold feed stop failed: ${err.message}`, "bad");
       }
     }
 

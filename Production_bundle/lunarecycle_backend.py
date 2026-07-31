@@ -3074,19 +3074,19 @@ class ExtrusionRatioTestController:
                     if using_load_trigger:
                         now = time.monotonic()
                         below = crammer_load_pct <= self.low_load_threshold_pct
-                        above_rearm = crammer_load_pct >= (self.low_load_threshold_pct + self.low_load_hyst_pct)
-                        if above_rearm:
-                            self.low_load_armed = True
-
+                        # Continuous low-load mode: if we stay below threshold,
+                        # keep homing every retrigger interval (no re-arm bounce required).
                         cooldown_ok = (now - self.last_low_load_trigger_at) >= self.low_load_retrigger_sec
-                        if below and self.low_load_armed and cooldown_ok:
+                        if below and cooldown_ok:
                             trigger_home_now = True
                             trigger_reason = (
                                 f"Crammer load low ({crammer_load_pct:.1f}% <= {self.low_load_threshold_pct:.1f}%). "
                                 f"Running air-lock home sequence."
                             )
-                            self.low_load_armed = False
                             self.last_low_load_trigger_at = now
+                            self.low_load_armed = False
+                        else:
+                            self.low_load_armed = True
                     else:
                         if not crammer_connected:
                             self.message = "Waiting for crammer connection/status."

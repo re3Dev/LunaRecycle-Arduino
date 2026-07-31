@@ -23,6 +23,8 @@ volatile bool pulseState = false;
 volatile bool running = false;
 volatile bool timerActive = false;
 
+String cmdBuffer;
+
 // ------------------------
 // KINEMATIC CONFIGURATION
 // ------------------------
@@ -51,6 +53,13 @@ const float EXPONENT_2     = 1.20;   // Smooth, progressive landing exponent to 
 // TELEMETRY FILTER VARIABLE
 // ----------------------------------------
 float smoothedLoad = 0.0;            
+float lastPhysRPM = 0.0;
+float lastLagTicks = 0.0;
+float lastDisplayLoad = 0.0;
+unsigned long lastUpdate = 0;
+unsigned long lastPrintTime = 0;
+long lastEncoderCount = 0;
+long lastEncoderPrintCount = 0;
 
 // ---------------------------------------------------------
 // Direction-Aware 4x Quadrature Decoding Interrupt Handlers
@@ -111,6 +120,92 @@ void updateTimerFrequency(float rpm)
     interrupts();
 }
 
+void startRun()
+{
+    noInterrupts();
+    commandedSteps = 0;
+    encoderCount = 0;
+    currentRPM = 0.0;
+    targetRPM = MAX_RPM;
+    interrupts();
+
+    smoothedLoad = 0.0;
+    lastPhysRPM = 0.0;
+    lastLagTicks = 0.0;
+    lastDisplayLoad = 0.0;
+    lastEncoderCount = 0;
+    running = true;
+    lastUpdate = millis();
+    lastPrintTime = millis();
+    lastEncoderPrintCount = 0;
+    Serial.println(F("[CRAMMER] state=RUN"));
+}
+
+void stopRun()
+{
+    running = false;
+    timerActive = false;
+    digitalWrite(STEP_PIN, LOW);
+    currentRPM = 0.0;
+    targetRPM = 0.0;
+    Serial.println(F("[CRAMMER] state=STOP"));
+}
+
+void printStatus()
+{
+    Serial.print(F("[CRAMMER] running="));
+    Serial.print(running ? 1 : 0);
+    Serial.print(F(" load_pct="));
+    Serial.print(lastDisplayLoad, 1);
+    Serial.print(F(" phys_rpm="));
+    Serial.print(lastPhysRPM, 2);
+    Serial.print(F(" out_rpm="));
+    Serial.print(currentRPM, 2);
+    Serial.print(F(" lag_ticks="));
+    Serial.println(lastLagTicks, 1);
+}
+
+void handleCommand(const String& cmd)
+{
+    String u = cmd;
+    u.trim();
+    u.toUpperCase();
+    if (u.length() == 0) {
+        return;
+    }
+
+    if (u == "G" || u == "RUN") {
+        startRun();
+    } else if (u == "S" || u == "STOP") {
+        stopRun();
+    } else if (u == "STATUS" || u == "L" || u == "LOAD") {
+        printStatus();
+    } else if (u == "PING") {
+        Serial.println(F("[CRAMMER] pong=1"));
+    } else {
+        Serial.print(F("[CRAMMER] ERROR unknown="));
+        Serial.println(u);
+    }
+}
+
+void readSerialCommands()
+{
+    while (Serial.available() > 0) {
+        char c = (char)Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (cmdBuffer.length() > 0) {
+                handleCommand(cmdBuffer);
+                cmdBuffer = "";
+            }
+        } else {
+            cmdBuffer += c;
+            if (cmdBuffer.length() > 48) {
+                cmdBuffer = "";
+            }
+        }
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -141,43 +236,9 @@ void setup()
     Serial.println(F("=================================================="));
 }
 
-unsigned long lastUpdate = 0;
-unsigned long lastPrintTime = 0;
-long lastEncoderCount = 0;
-long lastEncoderPrintCount = 0;
-
 void loop()
 {
-    if (Serial.available())
-    {
-        char c = Serial.read();
-
-        if (c == 'G' || c == 'g')
-        {
-            noInterrupts();
-            commandedSteps = 0;
-            encoderCount = 0;
-            currentRPM = 0.0;
-            targetRPM = MAX_RPM;
-            interrupts();
-
-            smoothedLoad = 0.0;
-            lastEncoderCount = 0;
-            running = true;
-            lastUpdate = millis();
-            lastPrintTime = millis();
-            lastEncoderPrintCount = 0;
-            Serial.println("RUN");
-        }
-
-        if (c == 'S' || c == 's')
-        {
-            running = false;
-            timerActive = false;
-            digitalWrite(STEP_PIN, LOW);
-            Serial.println("STOP");
-        }
-    }
+    readSerialCommands();
 
     if (!running)
         return;
@@ -212,6 +273,7 @@ void loop()
         float expectedTicks = (float)currentSteps * 2.0;
         float lag = expectedTicks - (float)currentEncoder;
         if (lag < 0.0) lag = 0.0;
+        lastLagTicks = lag;
 
         // 4. Dual-Exponent Power-Law Speed Droop Architecture Control Math
         float factor = 0.0;
@@ -270,16 +332,18 @@ void loop()
            
             float physRPM = ((float)printDeltaTicks * 60.0) / ((float)ENCODER_COUNTS * (printDtMs / 1000.0));
             if (abs(physRPM) < 0.5) physRPM = 0.0;
+            lastPhysRPM = physRPM;
            
             float finalDisplayLoad = smoothedLoad;
             if (finalDisplayLoad < 0.0)   finalDisplayLoad = 0.0;
             if (finalDisplayLoad > 100.0) finalDisplayLoad = 100.0;
+            lastDisplayLoad = finalDisplayLoad;
            
             lastPrint = millis();
-            Serial.print("PhysRPM: ");      Serial.print(physRPM, 1);
-            Serial.print(" | OutRPM: ");     Serial.print(currentRPM, 1);
-            Serial.print(" | PosLag: ");     Serial.print(lag, 1);
-            Serial.print(" | MOTOR LOAD: "); Serial.print(finalDisplayLoad, 0); Serial.println("%");
+            Serial.print(F("[CRAMMER_TLM] phys_rpm="));      Serial.print(physRPM, 1);
+            Serial.print(F(" out_rpm="));                    Serial.print(currentRPM, 1);
+            Serial.print(F(" lag_ticks="));                  Serial.print(lag, 1);
+            Serial.print(F(" load_pct="));                   Serial.println(finalDisplayLoad, 0);
         }
     }
 }

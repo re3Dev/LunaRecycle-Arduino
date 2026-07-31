@@ -65,6 +65,13 @@ AGITATOR_HOME_TIMEOUT = float(os.environ.get("LUNA_AGITATOR_HOME_TIMEOUT", "15.0
 # How often the background supervisor retries a dropped Arduino connection.
 RECONNECT_INTERVAL = float(os.environ.get("LUNA_RECONNECT_INTERVAL", "3.0"))
 
+CRAMMER_PORT     = os.environ.get("LUNA_CRAMMER_PORT", "/dev/ttyACM1")
+CRAMMER_BAUDRATE = int(os.environ.get("LUNA_CRAMMER_BAUD", "115200"))
+CRAMMER_TIMEOUT  = float(os.environ.get("LUNA_CRAMMER_TIMEOUT", "1.0"))
+CRAMMER_NO_RESET_OPEN = _env_flag("LUNA_CRAMMER_NO_RESET_OPEN", "0")
+CRAMMER_OPEN_SETTLE_SEC = float(os.environ.get("LUNA_CRAMMER_OPEN_SETTLE_SEC", "0.2"))
+CRAMMER_RESET_SETTLE_SEC = float(os.environ.get("LUNA_CRAMMER_RESET_SETTLE_SEC", "2.0"))
+
 DRYER_PORT      = os.environ.get("LUNA_DRYER_PORT", "/dev/ttyUSB0")
 DRYER_BAUDRATE  = int(os.environ.get("LUNA_DRYER_BAUD", "57600"))
 DRYER_DEVICE_ID = int(os.environ.get("LUNA_DRYER_ID", "1"))
@@ -1233,6 +1240,228 @@ class ArduinoBridge:
 arduino = ArduinoBridge()
 
 
+class CrammerBridge:
+    """Thread-safe serial bridge to the closed-loop crammer Arduino."""
+
+    SERIAL_IO_EXCEPTIONS = (serial.SerialException, OSError, termios.error)
+
+    def __init__(self) -> None:
+        self._ser: Optional[serial.Serial] = None
+        self._lock = threading.Lock()
+        self.connected = False
+        self._want_connected = True
+        self._port = CRAMMER_PORT
+        self._baud = CRAMMER_BAUDRATE
+        self._last_status: dict = {}
+
+    @staticmethod
+    def _port_candidates(port: str) -> list[str]:
+        candidates: list[str] = []
+
+        def add(path: str) -> None:
+            if path and path not in candidates:
+                candidates.append(path)
+
+        add(port)
+        base = os.path.basename(port)
+        if base.startswith("ttyACM"):
+            for path in sorted(glob.glob("/dev/ttyACM*")):
+                add(path)
+        for path in sorted(glob.glob("/dev/serial/by-id/*")):
+            add(path)
+        return candidates
+
+    def connect(self, port: str = CRAMMER_PORT, baudrate: int = CRAMMER_BAUDRATE) -> bool:
+        with self._lock:
+            self._port = port
+            self._baud = baudrate
+            self._want_connected = True
+            if self._ser and self._ser.is_open:
+                self.connected = True
+                return True
+
+            last_exc: Exception | None = None
+            for candidate in self._port_candidates(port):
+                try:
+                    attempts = [True, False] if CRAMMER_NO_RESET_OPEN else [False]
+                    for try_no_reset in attempts:
+                        ser = None
+                        try:
+                            ser = serial.Serial(
+                                port=None,
+                                baudrate=baudrate,
+                                timeout=CRAMMER_TIMEOUT,
+                                dsrdtr=False,
+                                rtscts=False,
+                            )
+                            if try_no_reset:
+                                ser.dtr = False
+                                ser.rts = False
+                            ser.port = candidate
+                            ser.open()
+                            if try_no_reset:
+                                try:
+                                    ser.setDTR(False)
+                                    ser.setRTS(False)
+                                except Exception:
+                                    pass
+
+                            settle = CRAMMER_OPEN_SETTLE_SEC if try_no_reset else max(
+                                CRAMMER_OPEN_SETTLE_SEC,
+                                CRAMMER_RESET_SETTLE_SEC,
+                            )
+                            self._ser = ser
+                            time.sleep(max(0.0, float(settle)))
+                            self._ser.reset_input_buffer()
+                            self.connected = True
+                            self._port = candidate
+                            return True
+                        except (serial.SerialException, OSError) as open_exc:
+                            last_exc = open_exc
+                            try:
+                                if ser is not None and ser.is_open:
+                                    ser.close()
+                            except Exception:
+                                pass
+                            self._ser = None
+                            self.connected = False
+                            continue
+                except (serial.SerialException, OSError) as exc:
+                    self._ser = None
+                    self.connected = False
+                    last_exc = exc
+
+            if last_exc is None:
+                last_exc = RuntimeError(f"No serial candidates found for {port}")
+            raise RuntimeError(str(last_exc)) from last_exc
+
+    def _reset_serial_locked(self) -> None:
+        try:
+            if self._ser and self._ser.is_open:
+                self._ser.close()
+        except Exception:
+            pass
+        self._ser = None
+        self.connected = False
+
+    def disconnect(self) -> None:
+        with self._lock:
+            self._want_connected = False
+            self._reset_serial_locked()
+
+    def start_supervisor(self) -> None:
+        threading.Thread(target=self._supervise, daemon=True).start()
+
+    def _supervise(self) -> None:
+        while True:
+            if self._want_connected and not self.connected:
+                try:
+                    self.connect(self._port, self._baud)
+                    print(f"[crammer] connected on {self._port}")
+                except Exception:
+                    pass
+            time.sleep(RECONNECT_INTERVAL)
+
+    @staticmethod
+    def _parse_status_line(line: str) -> dict:
+        result: dict = {}
+        parts = line.replace("[CRAMMER]", "").strip().split()
+        for part in parts:
+            if "=" not in part:
+                continue
+            k, _, v = part.partition("=")
+            if k == "running":
+                try:
+                    result[k] = int(v)
+                except ValueError:
+                    result[k] = 0
+            else:
+                try:
+                    result[k] = float(v)
+                except ValueError:
+                    result[k] = v
+        return result
+
+    def _send_command(self, cmd: str) -> list[str]:
+        if not self._ser or not self._ser.is_open:
+            raise RuntimeError("Crammer Arduino not connected.")
+
+        self._ser.reset_input_buffer()
+        self._ser.write((cmd + "\n").encode("ascii"))
+        self._ser.flush()
+
+        lines: list[str] = []
+        deadline = time.monotonic() + CRAMMER_TIMEOUT
+        while time.monotonic() < deadline:
+            if self._ser.in_waiting:
+                raw = self._ser.readline()
+                try:
+                    line = raw.decode("ascii", errors="replace").strip()
+                except Exception:
+                    line = raw.decode("latin-1", errors="replace").strip()
+                if not line:
+                    continue
+                if line.startswith("[CRAMMER_TLM]"):
+                    continue
+                lines.append(line)
+                if line.startswith("[CRAMMER]"):
+                    break
+            else:
+                time.sleep(0.01)
+        return lines
+
+    def send(self, cmd: str) -> list[str]:
+        with self._lock:
+            try:
+                return self._send_command(cmd)
+            except self.SERIAL_IO_EXCEPTIONS as exc:
+                self._reset_serial_locked()
+                raise RuntimeError(f"Serial I/O error: {exc}") from exc
+
+    def get_status(self) -> dict:
+        lines = self.send("STATUS")
+        for line in lines:
+            if line.startswith("[CRAMMER]"):
+                parsed = self._parse_status_line(line)
+                if parsed:
+                    self._last_status = parsed
+                return parsed
+        return dict(self._last_status)
+
+    def status_for_api(self) -> dict:
+        if not self.connected:
+            return {"connected": False, "data": dict(self._last_status), "cached": True}
+        if not self._lock.acquire(timeout=0.3):
+            return {"connected": True, "data": dict(self._last_status), "cached": True}
+        try:
+            lines = self._send_command("STATUS")
+            parsed: dict = {}
+            for line in lines:
+                if line.startswith("[CRAMMER]"):
+                    parsed = self._parse_status_line(line)
+                    break
+            if parsed:
+                self._last_status = parsed
+            return {
+                "connected": True,
+                "data": parsed or dict(self._last_status),
+                "cached": not bool(parsed),
+            }
+        except self.SERIAL_IO_EXCEPTIONS as exc:
+            self._reset_serial_locked()
+            return {
+                "connected": False,
+                "data": dict(self._last_status),
+                "cached": True,
+                "error": str(exc),
+            }
+        finally:
+            self._lock.release()
+
+
+crammer = CrammerBridge()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Dryer Modbus
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1730,6 +1959,68 @@ def api_arduino_command():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/crammer/connect", methods=["POST"])
+def api_crammer_connect():
+    try:
+        body = request.get_json(silent=True) or {}
+        port = body.get("port", CRAMMER_PORT)
+        baudrate = int(body.get("baudrate", CRAMMER_BAUDRATE))
+        crammer.connect(port, baudrate)
+        return jsonify({"ok": True, "connected": True, "port": port, "baudrate": baudrate})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/crammer/disconnect", methods=["POST"])
+def api_crammer_disconnect():
+    crammer.disconnect()
+    return jsonify({"ok": True, "connected": False})
+
+
+@app.route("/api/crammer/status", methods=["GET"])
+def api_crammer_status():
+    snap = crammer.status_for_api()
+    return jsonify({
+        "ok": True,
+        "connected": snap.get("connected", False),
+        "cached": snap.get("cached", False),
+        "data": snap.get("data", {}),
+        "error": snap.get("error", ""),
+    })
+
+
+@app.route("/api/crammer/command", methods=["POST"])
+def api_crammer_command():
+    cmd = str((request.get_json(silent=True) or {}).get("cmd", "")).strip()
+    if not cmd:
+        return jsonify({"ok": False, "error": "empty command"}), 400
+    if not crammer.connected:
+        return jsonify({"ok": False, "error": "Crammer Arduino not connected."}), 409
+    try:
+        lines = crammer.send(cmd)
+        return jsonify({"ok": True, "command": cmd, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/crammer/run", methods=["POST"])
+def api_crammer_run():
+    try:
+        lines = crammer.send("RUN")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/crammer/stop", methods=["POST"])
+def api_crammer_stop():
+    try:
+        lines = crammer.send("STOP")
+        return jsonify({"ok": True, "response": lines})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Routes — Shredder Gate
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2153,6 +2444,11 @@ BLASTGATE_CLOSE_CMD  = os.environ.get("LUNA_BG_CLOSE_CMD", "BLASTGATE_HOME ALL")
 FEED_RATIO_SPINS_PER_HOME = int(os.environ.get("LUNA_FEED_RATIO_SPINS_PER_HOME", str(RATIO_TEST_SPINS_PER_HOME)))
 FEED_POLL_SEC             = float(os.environ.get("LUNA_FEED_POLL_SEC", str(RATIO_TEST_POLL_SEC)))
 FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", str(RATIO_TEST_VACUUM_IDLE_PCT)))
+
+RATIO_USE_CRAMMER_LOAD = _env_flag("LUNA_RATIO_USE_CRAMMER_LOAD", "1")
+RATIO_CRAMMER_LOW_LOAD_PCT = float(os.environ.get("LUNA_RATIO_CRAMMER_LOW_LOAD_PCT", "30.0"))
+RATIO_CRAMMER_LOAD_HYST_PCT = float(os.environ.get("LUNA_RATIO_CRAMMER_LOAD_HYST_PCT", "5.0"))
+RATIO_CRAMMER_RETRIGGER_SEC = float(os.environ.get("LUNA_RATIO_CRAMMER_RETRIGGER_SEC", "8.0"))
 
 
 class ProcessOrchestrator:
@@ -2623,6 +2919,16 @@ class ExtrusionRatioTestController:
         self.last_home_response: list[str] = []
         self.last_error = ""
         self.last_sample_rotations_total: Optional[float] = None
+        self.crammer_connected = False
+        self.crammer_running = False
+        self.crammer_load_pct = 0.0
+        self.use_crammer_load = bool(RATIO_USE_CRAMMER_LOAD)
+        self.low_load_threshold_pct = max(0.0, min(100.0, float(RATIO_CRAMMER_LOW_LOAD_PCT)))
+        self.low_load_hyst_pct = max(0.0, float(RATIO_CRAMMER_LOAD_HYST_PCT))
+        self.low_load_retrigger_sec = max(0.5, float(RATIO_CRAMMER_RETRIGGER_SEC))
+        self.low_load_home_count = 0
+        self.last_low_load_trigger_at = 0.0
+        self.low_load_armed = True
 
     def _arduino(self, cmd: str) -> list[str]:
         try:
@@ -2693,10 +2999,17 @@ class ExtrusionRatioTestController:
             self.running = True
             self.phase = "ARMED"
             self.started_at = time.monotonic()
-            self.message = (
-                f"Watching Moonraker; homing every {self.spins_per_home} spins "
-                f"with vacuum at {self.vacuum_pct}% and mixer FWD {RATIO_TEST_MIX_PWM}."
-            )
+            if self.use_crammer_load:
+                self.message = (
+                    f"Watching Moonraker + crammer load; homing when load <= "
+                    f"{self.low_load_threshold_pct:.1f}% (fallback {self.spins_per_home} spins) "
+                    f"with vacuum at {self.vacuum_pct}% and mixer FWD {RATIO_TEST_MIX_PWM}."
+                )
+            else:
+                self.message = (
+                    f"Watching Moonraker; homing every {self.spins_per_home} spins "
+                    f"with vacuum at {self.vacuum_pct}% and mixer FWD {RATIO_TEST_MIX_PWM}."
+                )
 
         self._stop.clear()
         self._set_vacuum(self.vacuum_pct)
@@ -2733,10 +3046,30 @@ class ExtrusionRatioTestController:
             self.live_extruder_rotations_total = rotations_total
         return connected, rotations_total
 
-    def _trigger_home(self, rotations_total: float):
+    def _sample_crammer(self) -> tuple[bool, bool, float]:
+        snap = crammer.status_for_api()
+        connected = bool(snap.get("connected"))
+        data = snap.get("data") if isinstance(snap.get("data"), dict) else {}
+        load_pct_raw = data.get("load_pct", 0.0)
+        running_raw = data.get("running", 0)
+        try:
+            load_pct = float(load_pct_raw)
+        except (TypeError, ValueError):
+            load_pct = 0.0
+        try:
+            running = bool(int(running_raw))
+        except (TypeError, ValueError):
+            running = False
+        with self._lock:
+            self.crammer_connected = connected
+            self.crammer_running = running
+            self.crammer_load_pct = load_pct
+        return connected, running, load_pct
+
+    def _trigger_home(self, rotations_total: float, reason: str):
         with self._lock:
             self.phase = "HOMING"
-            self.message = f"Threshold reached at {rotations_total:.4f} spins; running air-lock home sequence."
+            self.message = reason
 
         response = self._arduino("AGITATOR_HOME")
 
@@ -2755,10 +3088,17 @@ class ExtrusionRatioTestController:
             self.last_sample_rotations_total = rotations_total
             self.phase = "WATCHING"
             if completed:
-                self.message = (
-                    f"Homed {self.home_sequences_completed} time(s); post-home sequence complete. "
-                    f"Waiting for the next {self.spins_per_home} spins."
-                )
+                if self.use_crammer_load:
+                    self.message = (
+                        f"Homed {self.home_sequences_completed} time(s); post-home sequence complete. "
+                        f"Waiting for next low-load event <= {self.low_load_threshold_pct:.1f}% "
+                        f"(fallback {self.spins_per_home} spins)."
+                    )
+                else:
+                    self.message = (
+                        f"Homed {self.home_sequences_completed} time(s); post-home sequence complete. "
+                        f"Waiting for the next {self.spins_per_home} spins."
+                    )
             else:
                 self.message = "Post-home sequence interrupted by stop request."
 
@@ -2768,10 +3108,18 @@ class ExtrusionRatioTestController:
             # while waiting for each spin-threshold home event.
             self._set_blastgates_open(True)
             self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+            if RATIO_USE_CRAMMER_LOAD and crammer.connected:
+                try:
+                    crammer.send("RUN")
+                except Exception:
+                    pass
 
             while not self._stop.is_set():
                 connected, rotations_total = self._sample_snapshot()
+                crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
                 should_wait = False
+                trigger_reason = ""
+                trigger_home_now = False
 
                 with self._lock:
                     if not connected:
@@ -2791,15 +3139,43 @@ class ExtrusionRatioTestController:
                             self.rotations_since_home += delta
                         self.rotations_until_home = max(0.0, float(self.spins_per_home) - self.rotations_since_home)
 
+                    extruding_now = abs(self.live_extruder_velocity) >= MOONRAKER_EXTRUDER_VELOCITY_MIN
+                    using_load_trigger = self.use_crammer_load and crammer_connected and crammer_running and extruding_now
+
+                    if using_load_trigger:
+                        now = time.monotonic()
+                        below = crammer_load_pct <= self.low_load_threshold_pct
+                        above_rearm = crammer_load_pct >= (self.low_load_threshold_pct + self.low_load_hyst_pct)
+                        if above_rearm:
+                            self.low_load_armed = True
+
+                        cooldown_ok = (now - self.last_low_load_trigger_at) >= self.low_load_retrigger_sec
+                        if below and self.low_load_armed and cooldown_ok:
+                            trigger_home_now = True
+                            trigger_reason = (
+                                f"Crammer load low ({crammer_load_pct:.1f}% <= {self.low_load_threshold_pct:.1f}%). "
+                                f"Running air-lock home sequence."
+                            )
+                            self.low_load_armed = False
+                            self.last_low_load_trigger_at = now
+                    else:
+                        # Fallback behavior when load control is unavailable.
+                        trigger_home_now = self.rotations_since_home >= self.spins_per_home
+                        if trigger_home_now:
+                            trigger_reason = (
+                                f"Spin threshold reached at {rotations_total:.4f}; "
+                                f"running air-lock home sequence."
+                            )
+
                 if should_wait:
                     self._stop.wait(self.poll_sec)
                     continue
 
-                with self._lock:
-                    ready = self.rotations_since_home >= self.spins_per_home
-
-                if ready:
-                    self._trigger_home(rotations_total)
+                if trigger_home_now:
+                    self._trigger_home(rotations_total, trigger_reason)
+                    with self._lock:
+                        if "Crammer load low" in trigger_reason:
+                            self.low_load_home_count += 1
                     self._stop.wait(self.poll_sec)
                     continue
 
@@ -2817,6 +3193,11 @@ class ExtrusionRatioTestController:
                 pass
             try:
                 self._arduino("MOTOR_STOP")
+            except Exception:
+                pass
+            try:
+                if crammer.connected:
+                    crammer.send("STOP")
             except Exception:
                 pass
             with self._lock:
@@ -2840,6 +3221,14 @@ class ExtrusionRatioTestController:
                 "home_sequences_completed": self.home_sequences_completed,
                 "last_home_rotations_total": self.last_home_rotations_total,
                 "last_home_response": list(self.last_home_response),
+                "use_crammer_load": self.use_crammer_load,
+                "crammer_connected": self.crammer_connected,
+                "crammer_running": self.crammer_running,
+                "crammer_load_pct": self.crammer_load_pct,
+                "low_load_threshold_pct": self.low_load_threshold_pct,
+                "low_load_hyst_pct": self.low_load_hyst_pct,
+                "low_load_retrigger_sec": self.low_load_retrigger_sec,
+                "low_load_home_count": self.low_load_home_count,
                 "last_error": self.last_error,
             }
 
@@ -3011,6 +3400,7 @@ def api_health():
     return jsonify({
         "ok": True,
         "arduino_connected": arduino.connected,
+        "crammer_connected": crammer.connected,
         "dryer_connected": dryer.connected,
         "moonraker": moonraker.snapshot(),
         "event_log": event_logger.info(),
@@ -3048,6 +3438,12 @@ def api_estop():
         errors.append(f"Arduino ESTOP: {exc}")
 
     try:
+        if crammer.connected:
+            crammer.send("STOP")
+    except Exception as exc:
+        errors.append(f"Crammer STOP: {exc}")
+
+    try:
         if dryer.connected:
             run_state = dryer.get_run_state_raw()
             if run_state == 100:
@@ -3082,6 +3478,7 @@ def api_estop():
 if __name__ == "__main__":
     print(f"LunaRecycle backend starting on http://{SERVER_HOST}:{SERVER_PORT}")
     print(f"  Arduino: {ARDUINO_PORT} @ {ARDUINO_BAUDRATE} baud  (Gate servos, DC motor, INA219)")
+    print(f"  Crammer: {CRAMMER_PORT} @ {CRAMMER_BAUDRATE} baud  (Closed-loop load monitor)")
     print(f"  Dryer  : {DRYER_PORT}   @ {DRYER_BAUDRATE} baud, ID {DRYER_DEVICE_ID}")
     print(f"  Event log: {event_logger.info()['path']}")
 
@@ -3094,6 +3491,13 @@ if __name__ == "__main__":
     except Exception as exc:
         print(f"  Arduino not connected yet ({exc}); supervisor will retry")
     arduino.start_supervisor()
+
+    try:
+        crammer.connect(CRAMMER_PORT, CRAMMER_BAUDRATE)
+        print(f"  Crammer connected on {CRAMMER_PORT}")
+    except Exception as exc:
+        print(f"  Crammer not connected yet ({exc}); supervisor will retry")
+    crammer.start_supervisor()
 
     if moonraker.enabled:
         print(f"  Moonraker WS: {MOONRAKER_WS_URL}")

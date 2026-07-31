@@ -856,6 +856,45 @@
           </div>
         </section>
 
+        <section class="card">
+          <div class="hd">
+            <div class="title">
+              <div class="sicon" aria-hidden="true">◎</div>
+              <div style="min-width:0">
+                <h2>Crammer</h2>
+                <div class="hint">closed-loop load monitor + run control</div>
+              </div>
+            </div>
+            <div class="pill">
+              <span class="dot" id="crammerDot"></span>
+              <span>Crammer: <strong id="crammerConnState">DISCONNECTED</strong></span>
+            </div>
+          </div>
+          <div class="bd">
+            <div class="row" style="margin-bottom:8px; flex-wrap:wrap; gap:6px;">
+              <input type="text" id="crammerPortInput" value="/dev/ttyACM1" placeholder="server default"
+                style="width:150px;" title="Serial port for the crammer board. Pi: /dev/ttyACM1, Windows: COMx" />
+              <button class="btn mini" id="btnCrammerConnect">Connect</button>
+              <button class="btn mini" id="btnCrammerDisconnect">Disconnect</button>
+              <button class="btn mini" id="btnCrammerRefresh">Status</button>
+            </div>
+            <div class="split" style="margin-bottom:8px;">
+              <div class="kv"><div class="k">Running</div><div class="v" id="crammerRunningText">—</div></div>
+              <div class="kv"><div class="k">Live Load</div><div class="v"><span id="crammerLoadText">—</span><small> %</small></div></div>
+              <div class="kv"><div class="k">Physical RPM</div><div class="v" id="crammerPhysRpmText">—</div></div>
+              <div class="kv"><div class="k">Output RPM</div><div class="v" id="crammerOutRpmText">—</div></div>
+            </div>
+            <div class="meter" style="margin-bottom:8px;"><span id="crammerLoadBar" style="width:0%"></span></div>
+            <div class="act-actions" style="margin-bottom:8px;">
+              <button class="btn mini primary" id="btnCrammerG">Send G</button>
+              <button class="btn mini" id="btnCrammerS">Send S</button>
+              <button class="btn mini" id="btnCrammerRun">RUN</button>
+              <button class="btn mini" id="btnCrammerStop">STOP</button>
+            </div>
+            <div id="crammerStatusText" class="kv" style="font-size:10px; font-family:var(--mono); color:var(--muted); min-height:24px;">—</div>
+          </div>
+        </section>
+
         <section class="card" id="processAutomationCard">
           <div class="hd">
             <div class="title">
@@ -1105,6 +1144,14 @@
       arduinoConnected: false,
       arduinoFailCount: 0,
       arduinoPolling: false,
+      crammerConnected: false,
+      crammerFailCount: 0,
+      crammerPolling: false,
+      crammerRunning: false,
+      crammerLoadPct: 0,
+      crammerPhysRpm: 0,
+      crammerOutRpm: 0,
+      crammerLagTicks: 0,
       doorState: "IDLE",
       doorA_min: "—", doorA_max: "—",
       doorB_min: "—", doorB_max: "—",
@@ -1462,6 +1509,96 @@
       renderArduino();
     }
 
+    async function crammerConnect(){
+      const port = $("#crammerPortInput").value.trim();
+      try{
+        const body = port ? { port } : {};
+        const data = await apiArduino("/crammer/connect", {
+          method: "POST",
+          body: JSON.stringify(body)
+        });
+        S.crammerConnected = true;
+        log(`Crammer connected on ${data.port}.`, "good");
+        await crammerRefreshStatus(true);
+      }catch(err){
+        S.crammerConnected = false;
+        log(`Crammer connect failed: ${err.message}`, "bad");
+      }
+      renderArduino();
+    }
+
+    async function crammerDisconnect(){
+      try{ await apiArduino("/crammer/disconnect", { method: "POST" }); }catch(_){ }
+      S.crammerConnected = false;
+      log("Crammer disconnected.", "warn");
+      renderArduino();
+    }
+
+    async function crammerRefreshStatus(silent=false){
+      try{
+        const res = await apiArduino("/crammer/status", { method: "GET" });
+        S.crammerFailCount = 0;
+        S.crammerConnected = !!res.connected;
+        const d = res.data || {};
+        S.crammerRunning = Number(d.running || 0) === 1;
+        S.crammerLoadPct = Number(d.load_pct || 0);
+        S.crammerPhysRpm = Number(d.phys_rpm || 0);
+        S.crammerOutRpm = Number(d.out_rpm || 0);
+        S.crammerLagTicks = Number(d.lag_ticks || 0);
+        const statusEl = $("#crammerStatusText");
+        if(statusEl){
+          if(res.data && Object.keys(res.data).length > 0){
+            statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
+          }else{
+            statusEl.textContent = "—";
+          }
+        }
+      }catch(err){
+        S.crammerFailCount = (S.crammerFailCount || 0) + 1;
+        if(S.crammerFailCount >= 3){ S.crammerConnected = false; }
+        if(!silent){ log(`Crammer status failed: ${err.message}`, "bad"); }
+      }
+      renderArduino();
+    }
+
+    async function pollCrammer(){
+      if(S.crammerPolling) return;
+      S.crammerPolling = true;
+      try{ await crammerRefreshStatus(true); }
+      finally{ S.crammerPolling = false; }
+    }
+
+    async function crammerCommand(label, cmd){
+      if(!S.crammerConnected){
+        log(`${label}: Crammer not connected.`, "bad");
+        return;
+      }
+      try{
+        const res = await apiArduino("/crammer/command", {
+          method: "POST",
+          body: JSON.stringify({ cmd })
+        }, 10000);
+        log(`${label} OK.`, "good", summarizeResponse(res));
+        await crammerRefreshStatus(true);
+      }catch(err){
+        log(`${label} failed: ${err.message}`, "bad");
+      }
+    }
+
+    async function crammerRunStop(label, path){
+      if(!S.crammerConnected){
+        log(`${label}: Crammer not connected.`, "bad");
+        return;
+      }
+      try{
+        const res = await apiArduino(path, { method: "POST" }, 10000);
+        log(`${label} OK.`, "good", summarizeResponse(res));
+        await crammerRefreshStatus(true);
+      }catch(err){
+        log(`${label} failed: ${err.message}`, "bad");
+      }
+    }
+
     async function pollArduino(){
       if(S.arduinoPolling) return;   // never let background polls overlap
       S.arduinoPolling = true;
@@ -1483,6 +1620,27 @@
         $("#arduinoState").textContent = "DISCONNECTED";
         $("#btnArduinoMode").classList.remove("primary");
       }
+
+      const cdot = $("#crammerDot");
+      const cstate = $("#crammerConnState");
+      if(cdot && cstate){
+        if(S.crammerConnected){
+          cdot.className = "dot good";
+          cstate.textContent = "CONNECTED";
+        }else{
+          cdot.className = "dot";
+          cstate.textContent = "DISCONNECTED";
+        }
+      }
+      setText("crammerRunningText", S.crammerRunning ? "RUN" : "STOP");
+      setText("crammerLoadText", Number(S.crammerLoadPct || 0).toFixed(1));
+      setText("crammerPhysRpmText", Number(S.crammerPhysRpm || 0).toFixed(2));
+      setText("crammerOutRpmText", Number(S.crammerOutRpm || 0).toFixed(2));
+      const bar = document.getElementById("crammerLoadBar");
+      if(bar){
+        bar.style.width = `${clamp(Number(S.crammerLoadPct || 0), 0, 100)}%`;
+      }
+
       // Automation — Size Reduction
       const running = String(S.srRun).toUpperCase() === "YES";
       setText("srRunText", running ? "RUNNING" : (S.srRun === "—" ? "—" : "IDLE"));
@@ -2470,6 +2628,15 @@
       on("btnArduinoDisconnect", "click", arduinoDisconnect);
       on("btnArduinoRefresh",    "click", ()=>arduinoRefreshStatus());
 
+      // Crammer connection + run controls
+      on("btnCrammerConnect", "click", crammerConnect);
+      on("btnCrammerDisconnect", "click", crammerDisconnect);
+      on("btnCrammerRefresh", "click", ()=>crammerRefreshStatus());
+      on("btnCrammerG", "click", ()=>crammerCommand("Crammer G", "G"));
+      on("btnCrammerS", "click", ()=>crammerCommand("Crammer S", "S"));
+      on("btnCrammerRun", "click", ()=>crammerRunStop("Crammer RUN", "/crammer/run"));
+      on("btnCrammerStop", "click", ()=>crammerRunStop("Crammer STOP", "/crammer/stop"));
+
       // Manual command console
       on("btnConsoleSend",  "click", sendConsoleCommand);
       on("btnConsoleClear", "click", ()=>{ const o = $("#consoleOut"); if(o){ o.textContent = ""; } });
@@ -2496,6 +2663,7 @@
     let last = performance.now();
     let dryerPollTimer = 0;
     let arduinoPollTimer = 0;
+    let crammerPollTimer = 0;
     let srPollTimer = 0;
     let ratioPollTimer = 0;
 
@@ -2506,6 +2674,7 @@
       S.uptimeSec += dt;
       dryerPollTimer += dt;
       arduinoPollTimer += dt;
+      crammerPollTimer += dt;
       srPollTimer += dt;
       ratioPollTimer += dt;
 
@@ -2522,6 +2691,11 @@
       if(arduinoPollTimer >= 1.5){
         arduinoPollTimer = 0;
         pollArduino();
+      }
+
+      if(crammerPollTimer >= 1.0){
+        crammerPollTimer = 0;
+        pollCrammer();
       }
 
       // Size Reduction progress heartbeat (slower than the status poll).
@@ -2550,6 +2724,7 @@
       log("Console initialized.", "good");
       log("Dryer card: switch to LIVE to poll the local Modbus API.", "info");
       log("Arduino: connect via the Arduino panel (/dev/ttyACM0 default on the Pi).", "info");
+      log("Crammer: connect via the Crammer panel and use G/S or RUN/STOP for sanity checks.", "info");
       log("Command console: type raw serial commands once the Arduino is connected.", "info");
 
       S.connected = false;

@@ -802,6 +802,18 @@
                 <div class="k">Mode</div>
                 <div class="v"><strong id="dryerMode">OFFLINE</strong></div>
               </div>
+              <div class="kv">
+                <div class="k">Manual Airflow SP</div>
+                <div class="v"><span id="dryer_airflow_manual_sp">—</span></div>
+              </div>
+              <div class="kv">
+                <div class="k">SW Airflow</div>
+                <div class="v"><span id="dryer_airflow_sw">—</span></div>
+              </div>
+              <div class="kv">
+                <div class="k">Process Blower PWM</div>
+                <div class="v"><span id="dryer_blower_pwm">—</span><small> %</small></div>
+              </div>
             </div>
           </div>
         </section>
@@ -2492,6 +2504,9 @@
 
       setText("dryer_run_state", d.run_state != null ? `${d.run_state} (0x${Number(d.run_state).toString(16).toUpperCase().padStart(4,"0")})` : "—");
       setText("dryer_state_guess", d.dryer_state_guess ?? "—");
+      setText("dryer_airflow_manual_sp", d.manual_process_airflow_setpoint != null ? String(d.manual_process_airflow_setpoint) : "—");
+      setText("dryer_airflow_sw", d.software_generated_airflow != null ? String(d.software_generated_airflow) : "—");
+      setText("dryer_blower_pwm", d.process_blower_pwm_pct != null ? String(d.process_blower_pwm_pct) : "—");
 
       setText("heater_set_lbl", d.process_setpoint != null ? Number(d.process_setpoint).toFixed(1) : "—");
 

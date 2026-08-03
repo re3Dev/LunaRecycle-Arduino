@@ -80,6 +80,14 @@ DRYER_STOPBITS  = int(os.environ.get("LUNA_DRYER_STOPBITS", "1"))
 DRYER_BYTESIZE  = int(os.environ.get("LUNA_DRYER_BYTESIZE", "8"))
 DRYER_TIMEOUT   = 0.5    # seconds
 
+# Dryer register map helpers (0-based addresses used by pymodbus).
+DRYER_INPUT_PROCESS_BLOWER_PWM_ADDR = 7    # 30008 (percent)
+DRYER_INPUT_SW_AIRFLOW_ADDR = 11           # 30012 (software-generated airflow, read-only)
+DRYER_INPUT_MANUAL_AIRFLOW_READBACK_ADDR = 51  # 30052 (manual airflow readback)
+DRYER_HOLDING_MANUAL_AIRFLOW_ADDR = 51     # 40052 (LSW), 40053 (MSW)
+DRYER_HOLDING_STORE_DATA_ADDR = 17         # 40018
+DRYER_STORE_DATA_BIT = 1                   # bit 1
+
 
 def _parse_int_set_env(name: str, default: str) -> set[int]:
     raw = os.environ.get(name, default)
@@ -1473,6 +1481,23 @@ def _u16(x: int) -> int:
     return x & 0xFFFF
 
 
+def _s32(x: int) -> int:
+    x &= 0xFFFFFFFF
+    return x - 0x100000000 if x >= 0x80000000 else x
+
+
+def _pack_s32_lsw_msw(value: int) -> tuple[int, int]:
+    raw = int(value) & 0xFFFFFFFF
+    lsw = raw & 0xFFFF
+    msw = (raw >> 16) & 0xFFFF
+    return lsw, msw
+
+
+def _unpack_s32_lsw_msw(lsw: int, msw: int) -> int:
+    raw = ((int(msw) & 0xFFFF) << 16) | (int(lsw) & 0xFFFF)
+    return _s32(raw)
+
+
 def _coerce_setpoint_to_raw_deci(value: object) -> tuple[int, float]:
     """Accept C or raw-deci setpoint input and return (raw_deci, celsius).
 
@@ -1574,6 +1599,17 @@ class DryerModbus:
             if wr.isError():
                 raise RuntimeError(str(wr))
 
+    def read_input_s32_lsw_msw(self, addr_lsw: int) -> int:
+        regs = self.read_input(addr_lsw, 2)
+        return _unpack_s32_lsw_msw(regs[0], regs[1])
+
+    def write_holding_s32_lsw_msw(self, addr_lsw: int, value: int) -> None:
+        if value < -2147483648 or value > 2147483647:
+            raise ValueError("value must fit in signed 32-bit range")
+        lsw, msw = _pack_s32_lsw_msw(value)
+        self.write_holding(addr_lsw, lsw)
+        self.write_holding(addr_lsw + 1, msw)
+
     def pulse_holding(
         self,
         addr: int,
@@ -1599,12 +1635,28 @@ class DryerModbus:
     def get_aux_temp(self) -> int:          return _s16(self.read_input(19)[0])
     def get_mode_state(self) -> int:        return self.read_input(0)[0]
     def get_output_word(self) -> int:       return self.read_input(25)[0]
+    def get_process_blower_pwm_percent(self) -> int: return self.read_input(DRYER_INPUT_PROCESS_BLOWER_PWM_ADDR)[0]
+    def get_software_generated_airflow(self) -> int: return _s16(self.read_input(DRYER_INPUT_SW_AIRFLOW_ADDR)[0])
+    def get_manual_process_airflow_setpoint_readback(self) -> int:
+        return self.read_input_s32_lsw_msw(DRYER_INPUT_MANUAL_AIRFLOW_READBACK_ADDR)
 
     def set_process_setpoint(self, value: int) -> None:
         self.write_holding(21, _u16(value))
 
     def set_dewpoint_setpoint(self, value: int) -> None:
         self.write_holding(23, _u16(value))
+
+    def store_data_in_memory(self, pulse_time: float = 0.3) -> None:
+        current = self.read_holding(DRYER_HOLDING_STORE_DATA_ADDR, 1)[0]
+        bitmask = 1 << DRYER_STORE_DATA_BIT
+        self.write_holding(DRYER_HOLDING_STORE_DATA_ADDR, current | bitmask)
+        time.sleep(max(0.05, float(pulse_time)))
+        self.write_holding(DRYER_HOLDING_STORE_DATA_ADDR, current & ~bitmask)
+
+    def set_manual_process_airflow_setpoint(self, value: int, store_to_memory: bool = True) -> None:
+        self.write_holding_s32_lsw_msw(DRYER_HOLDING_MANUAL_AIRFLOW_ADDR, int(value))
+        if store_to_memory:
+            self.store_data_in_memory()
 
     def toggle_on_off(self) -> None:
         before = self.get_run_state_raw()
@@ -1667,6 +1719,9 @@ class DryerModbus:
         dew_sp            = self.get_dewpoint_setpoint()
         status_word       = self.get_status_word()
         output_word       = self.get_output_word()
+        process_blower_pwm_pct = self.get_process_blower_pwm_percent()
+        software_generated_airflow = self.get_software_generated_airflow()
+        manual_airflow_setpoint_readback = self.get_manual_process_airflow_setpoint_readback()
         process_temp_c    = process_temp / 10.0
         process_sp_c      = float(process_sp)
         process_sp_target_raw = int(round(process_sp_c * 10.0))
@@ -1760,6 +1815,9 @@ class DryerModbus:
             "status_bits_set":    self._bits_set(status_word),
             "output_word":        output_word,
             "output_word_hex":    f"0x{output_word:04X}",
+            "process_blower_pwm_pct": process_blower_pwm_pct,
+            "software_generated_airflow": software_generated_airflow,
+            "manual_process_airflow_setpoint": manual_airflow_setpoint_readback,
         }
 
 
@@ -1865,6 +1923,51 @@ def api_dryer_set_dewpoint_sp():
         raw, celsius = _coerce_setpoint_to_raw_deci(request.json["value"])
         dryer.set_dewpoint_setpoint(raw)
         return jsonify({"ok": True, "value_raw": raw, "value_c": round(celsius, 1)})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/dryer/process_airflow/status", methods=["GET"])
+def api_dryer_process_airflow_status():
+    try:
+        if not dryer.ensure_connected():
+            raise RuntimeError("Failed to connect to Modbus device.")
+        return jsonify({
+            "ok": True,
+            "data": {
+                "manual_process_airflow_setpoint": dryer.get_manual_process_airflow_setpoint_readback(),
+                "software_generated_airflow": dryer.get_software_generated_airflow(),
+                "process_blower_pwm_pct": dryer.get_process_blower_pwm_percent(),
+                "units_note": "Airflow units are m3/hr in metric mode or CFM in imperial mode.",
+            },
+        })
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/dryer/process_airflow/set", methods=["POST"])
+def api_dryer_process_airflow_set():
+    try:
+        body = request.get_json(silent=True) or {}
+        if "value" not in body:
+            return jsonify({"ok": False, "error": "value is required"}), 400
+        value = int(round(float(body.get("value"))))
+        store_to_memory = bool(body.get("store_to_memory", True))
+        if value < -2147483648 or value > 2147483647:
+            return jsonify({"ok": False, "error": "value out of signed 32-bit range"}), 400
+        if not dryer.ensure_connected():
+            raise RuntimeError("Failed to connect to Modbus device.")
+        dryer.set_manual_process_airflow_setpoint(value, store_to_memory=store_to_memory)
+        readback = dryer.get_manual_process_airflow_setpoint_readback()
+        return jsonify({
+            "ok": True,
+            "data": {
+                "requested": value,
+                "readback": readback,
+                "store_to_memory": store_to_memory,
+                "units_note": "Airflow units are m3/hr in metric mode or CFM in imperial mode.",
+            },
+        })
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
 

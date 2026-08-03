@@ -168,8 +168,9 @@ RATIO_TEST_BG_SETTLE_SEC = float(os.environ.get("LUNA_RATIO_TEST_BG_SETTLE_SEC",
 RATIO_TEST_STOP_SETTLE_SEC = float(os.environ.get("LUNA_RATIO_TEST_STOP_SETTLE_SEC", "5.0"))
 RATIO_TEST_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_TEST_REVERSE_SEC", "3.0"))
 RATIO_TEST_FORWARD_RECOVER_SEC = float(os.environ.get("LUNA_RATIO_TEST_FORWARD_RECOVER_SEC", "4.0"))
-RATIO_POST_HOME_RECOVERY_CHECK_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_CHECK_SEC", "6.0"))
+RATIO_POST_HOME_RECOVERY_CHECK_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_CHECK_SEC", "8.0"))
 RATIO_POST_HOME_RECOVERY_LOAD_PCT = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_LOAD_PCT", "60.0"))
+RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES = int(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES", "2"))
 RATIO_POST_HOME_RECOVERY_STOP1_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STOP1_SEC", "3.0"))
 RATIO_POST_HOME_RECOVERY_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_REVERSE_SEC", "5.0"))
 RATIO_POST_HOME_RECOVERY_STOP2_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STOP2_SEC", "3.0"))
@@ -3060,10 +3061,12 @@ class ExtrusionRatioTestController:
         self.low_load_armed = True
         self.post_home_recovery_check_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_CHECK_SEC))
         self.post_home_recovery_load_pct = max(0.0, min(100.0, float(RATIO_POST_HOME_RECOVERY_LOAD_PCT)))
+        self.post_home_recovery_required_homes = max(1, int(RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES))
         self.post_home_recovery_stop1_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP1_SEC))
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
         self.last_post_home_recovery_applied = False
+        self.post_home_unrecovered_streak = 0
 
     def _arduino(self, cmd: str) -> list[str]:
         try:
@@ -3169,7 +3172,7 @@ class ExtrusionRatioTestController:
         response = self._arduino("AGITATOR_HOME")
         # Re-assert the requested continuous feed behavior after each home.
         self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
-        recovery_applied = self._post_home_recovery_if_needed()
+        recovery_applied, pending_homes = self._post_home_recovery_if_needed()
 
         with self._lock:
             self.last_home_response = response
@@ -3177,17 +3180,28 @@ class ExtrusionRatioTestController:
             self.last_home_rotations_total = rotations_total
             self.last_post_home_recovery_applied = bool(recovery_applied)
             self.phase = "WATCHING"
+            if recovery_applied:
+                recovery_note = "Recovery applied."
+            elif pending_homes > 0:
+                recovery_note = (
+                    f"Recovery pending: need {pending_homes} more unrecovered "
+                    f"home(s) before reverse sequence."
+                )
+            else:
+                recovery_note = "Recovery not needed."
             self.message = (
                 f"Homed {self.home_sequences_completed} time(s). "
-                f"Recovery {'applied' if recovery_applied else 'not needed'}. "
+                f"{recovery_note} "
                 f"Waiting for next low-load event <= {self.low_load_threshold_pct:.1f}%."
             )
 
-    def _post_home_recovery_if_needed(self) -> bool:
+    def _post_home_recovery_if_needed(self) -> tuple[bool, int]:
         check_sec = self.post_home_recovery_check_sec
         recover_threshold = self.post_home_recovery_load_pct
         if check_sec <= 0:
-            return False
+            with self._lock:
+                self.post_home_unrecovered_streak = 0
+            return False, 0
 
         deadline = time.monotonic() + check_sec
         recovered = False
@@ -3202,8 +3216,20 @@ class ExtrusionRatioTestController:
                 break
             self._stop.wait(min(self.poll_sec, remaining))
 
-        if recovered or self._stop.is_set():
-            return False
+        if recovered:
+            with self._lock:
+                self.post_home_unrecovered_streak = 0
+            return False, 0
+        if self._stop.is_set():
+            return False, 0
+
+        with self._lock:
+            self.post_home_unrecovered_streak += 1
+            unrecovered_streak = self.post_home_unrecovered_streak
+            required = self.post_home_recovery_required_homes
+
+        if unrecovered_streak < required:
+            return False, (required - unrecovered_streak)
 
         with self._lock:
             self.phase = "RECOVERY"
@@ -3220,9 +3246,13 @@ class ExtrusionRatioTestController:
             return True
         self._arduino("MOTOR_STOP")
         if self._stop.wait(self.post_home_recovery_stop2_sec):
-            return True
+            with self._lock:
+                self.post_home_unrecovered_streak = 0
+            return True, 0
         self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
-        return True
+        with self._lock:
+            self.post_home_unrecovered_streak = 0
+        return True, 0
 
     def _run(self):
         try:
@@ -3342,10 +3372,12 @@ class ExtrusionRatioTestController:
                 "low_load_armed": self.low_load_armed,
                 "post_home_recovery_check_sec": self.post_home_recovery_check_sec,
                 "post_home_recovery_load_pct": self.post_home_recovery_load_pct,
+                "post_home_recovery_required_homes": self.post_home_recovery_required_homes,
                 "post_home_recovery_stop1_sec": self.post_home_recovery_stop1_sec,
                 "post_home_recovery_reverse_sec": self.post_home_recovery_reverse_sec,
                 "post_home_recovery_stop2_sec": self.post_home_recovery_stop2_sec,
                 "last_post_home_recovery_applied": self.last_post_home_recovery_applied,
+                "post_home_unrecovered_streak": self.post_home_unrecovered_streak,
                 "last_error": self.last_error,
             }
 

@@ -308,7 +308,7 @@ const float TC_homePos       = 0.0;
 const float TC_bag1Pos       = -25.0;
 const float TC_bag2Pos       = -565.0;   // Tune to the Bag 2 stack position.
 const float TC_bag1ShredderPos = -450.0;
-const float TC_bag2ShredderPos = -290.0;   // 20mm farther right than -275.0.
+const float TC_bag2ShredderPos = -310.0;   // 20mm farther right than -275.0.
 const float TC_stepperMinPos = -570.0;
 const float TC_stepperMaxPos = -10.0;
 

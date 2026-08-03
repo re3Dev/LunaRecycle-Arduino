@@ -315,16 +315,14 @@ const float TC_stepperMaxPos = -10.0;
 const int TC_homeDir = 1;   // Change to -1 if homing moves away from the switch.
 const unsigned long TC_debounceMs      = 50;
 const unsigned long TC_shredderPauseMs = 1000;
+const unsigned long TC_bag2PreDropDwellMs = 1000;   // pause over shredder before vacuum off [tune]
 
 // ── Size Reduction (automated shred cadence) tunables ──────────────────────
 // First-guess defaults from the process spec; verify on hardware. PE bags come
 // from the LEFT cassette (bag 1), PA+EVOH+PE from the RIGHT cassette (bag 2).
 const unsigned long SR_shredTimePerBagMs = 3000;    // dwell per bag (~3 s)     [tune]
-const int           SR_reverseEveryBags  = 10;      // reverse-clear cadence    [tune]
-const unsigned long SR_reverseDurationMs = 5000;    // reverse-clear time (5 s) [tune]
 const int           SR_coolEveryBags     = 100;     // motor-cool cadence       [tune]
 const unsigned long SR_coolDurationMs    = 15000;   // cool pause (15 s)        [tune]
-const unsigned long SR_endReverseMs      = 5000;    // final reverse (5 s)      [tune]
 
 // ============================================================================
 //  Objects
@@ -394,9 +392,7 @@ enum TCState {
   TC_BAG_TO_SHREDDER,
   TC_MANUAL_MOVE,
   TC_SR_SHREDDING,
-  TC_SR_REVERSING,
   TC_SR_COOLING,
-  TC_SR_END_REVERSE,
   TC_SR_POSTRUN_FORWARD,
   TC_DONE
 };
@@ -564,8 +560,8 @@ void systemDiagUpdateLed() {
   }
 
   // Size-reduction cycle running.
-  if (srRunning || tcState == TC_SR_SHREDDING || tcState == TC_SR_REVERSING ||
-      tcState == TC_SR_COOLING || tcState == TC_SR_END_REVERSE ||
+  if (srRunning || tcState == TC_SR_SHREDDING ||
+      tcState == TC_SR_COOLING ||
       tcState == TC_SR_POSTRUN_FORWARD) {
     systemDiagSetColor(255, 0, 255);  // bright magenta
     return;
@@ -1070,6 +1066,9 @@ const __FlashStringHelper* tcActiveBagName() {
 
 void tcDropAtShredderAndContinue() {
   // Release the bag over the shredder, then dwell.
+  if (tcActiveBag == 2 && TC_bag2PreDropDwellMs > 0) {
+    delay(TC_bag2PreDropDwellMs);
+  }
   tcPumpOff();
   delay(TC_shredderPauseMs);
 
@@ -1242,8 +1241,8 @@ void tcMoveStepperTo(float targetMm) {
 // ============================================================================
 //  Size Reduction - automated shred cadence (process spec, Step 3)
 //  Interleaves PE bags (LEFT cassette / bag 1) and PA+EVOH+PE bags (RIGHT
-//  cassette / bag 2) at a PE:PA ratio, shredding each. Periodically reverses
-//  the shredder to clear the blades and pauses to cool the motor. Non-blocking:
+//  cassette / bag 2) at a PE:PA ratio, shredding each while keeping the
+//  shredder in FWD. Includes cooling pauses. Non-blocking:
 //  layered on the trash-conveyor state machine, so serial / E-STOP stay live.
 //  Stops when both target counts are met or both cassettes are empty.
 // ============================================================================
@@ -1262,17 +1261,17 @@ bool srSelectNextBag() {
   return true;
 }
 
-void srBeginEndReverse() {
-  shredderSetDirection(false);   // REV
+void srBeginPostrunForward() {
+  shredderSetDirection(true);   // FWD
   shredderOn();
   srPhaseStart = millis();
-  tcState = TC_SR_END_REVERSE;
-  Serial.println(F("[SIZERED] Targets met / both cassettes empty - final reverse"));
+  tcState = TC_SR_POSTRUN_FORWARD;
+  Serial.println(F("[SIZERED] Targets met / both cassettes empty - post-run shred forward 30s before gate close"));
 }
 
 void srMoveToNextBag() {
   if (!srSelectNextBag()) {
-    srBeginEndReverse();
+    srBeginPostrunForward();
     return;
   }
   tcMoveTo(tcActiveBagPosition(), TC_MOVE_TO_BAG);
@@ -1325,6 +1324,9 @@ void srStart(long peUnits, long paUnits) {
 
 void srAfterDrop() {
   // Bag has arrived over the shredder: release it and dwell while it shreds.
+  if (tcActiveBag == 2 && TC_bag2PreDropDwellMs > 0) {
+    delay(TC_bag2PreDropDwellMs);
+  }
   tcPumpOff();
   if (tcActiveBag == 2) { srPaRemaining--; srPeInCadence = 0; }
   else                  { srPeRemaining--; srPeInCadence++; }
@@ -1381,23 +1383,9 @@ void srServiceTimedPhase() {
           srPhaseStart = millis();
           tcState = TC_SR_COOLING;
           Serial.println(F("[SIZERED] Cooling pause"));
-        } else if (SR_reverseEveryBags > 0 && (srBagsShredded % SR_reverseEveryBags) == 0) {
-          shredderSetDirection(false);
-          shredderOn();
-          srPhaseStart = millis();
-          tcState = TC_SR_REVERSING;
-          Serial.println(F("[SIZERED] Reverse-clearing blades"));
         } else {
           srDispatchNextBag();
         }
-      }
-      break;
-
-    case TC_SR_REVERSING:
-      if (elapsed >= SR_reverseDurationMs) {
-        shredderSetDirection(true);
-        shredderOn();
-        srDispatchNextBag();
       }
       break;
 
@@ -1406,16 +1394,6 @@ void srServiceTimedPhase() {
         shredderSetDirection(true);
         shredderOn();
         srDispatchNextBag();
-      }
-      break;
-
-    case TC_SR_END_REVERSE:
-      if (elapsed >= SR_endReverseMs) {
-        shredderSetDirection(true);
-        shredderOn();
-        srPhaseStart = millis();
-        tcState = TC_SR_POSTRUN_FORWARD;
-        Serial.println(F("[SIZERED] Post-run shred forward 30s before gate close"));
       }
       break;
 
@@ -1452,8 +1430,8 @@ void tcRunState() {
   }
 
   // Size-reduction timed phases run while the stepper is parked.
-  if (tcState == TC_SR_SHREDDING || tcState == TC_SR_REVERSING ||
-      tcState == TC_SR_COOLING   || tcState == TC_SR_END_REVERSE ||
+  if (tcState == TC_SR_SHREDDING ||
+      tcState == TC_SR_COOLING   ||
       tcState == TC_SR_POSTRUN_FORWARD) {
     srServiceTimedPhase();
     return;
@@ -1540,9 +1518,7 @@ const __FlashStringHelper* tcStateName() {
     case TC_BAG_TO_SHREDDER:  return F("PICKING");
     case TC_MANUAL_MOVE:      return F("MANUAL");
     case TC_SR_SHREDDING:
-    case TC_SR_REVERSING:
     case TC_SR_COOLING:
-    case TC_SR_END_REVERSE:
     case TC_SR_POSTRUN_FORWARD: return F("SIZERED");
     case TC_DONE:             return F("DONE");
     default:                  return F("WAIT_HOME");

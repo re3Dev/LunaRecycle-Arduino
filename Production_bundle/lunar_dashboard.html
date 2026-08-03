@@ -2505,8 +2505,10 @@
           }),
         });
         S.dryerAirflowSpDirty = false;
-        const saved = (res.store_to_memory === true) ? "saved" : "not saved";
-        log(`Dryer airflow setpoint set to ${res.value}.`, "good", `Controller memory: ${saved}.`);
+        const payload = res.data || {};
+        const readback = payload.readback ?? value;
+        const saved = (payload.store_to_memory === true) ? "saved" : "not saved";
+        log(`Dryer airflow setpoint set to ${readback}.`, "good", `Controller memory: ${saved}.`);
         await dryerRefresh(true);
       }catch(err){
         log(`Dryer airflow setpoint failed: ${err.message}`, "bad");

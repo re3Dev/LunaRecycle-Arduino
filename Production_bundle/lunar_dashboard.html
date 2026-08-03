@@ -761,6 +761,18 @@
               <button class="btn mini primary" id="btnDryerSetProcessSp">Apply</button>
             </div>
 
+            <div class="row" style="margin-bottom:10px; flex-wrap:wrap; gap:8px; align-items:center;">
+              <div class="pill">
+                <span>Manual Airflow Setpoint</span>
+              </div>
+              <input type="number" id="dryerAirflowSpInput" step="1" placeholder="Airflow value"
+                style="max-width:160px;" />
+              <label class="label" for="dryerAirflowStoreMemory">
+                <input type="checkbox" id="dryerAirflowStoreMemory" checked /> Store to memory
+              </label>
+              <button class="btn mini primary" id="btnDryerSetAirflow">Apply Airflow</button>
+            </div>
+
             <div class="dryer-grid-3">
               <div class="kv">
                 <div class="k">Process Temp</div>
@@ -1240,6 +1252,7 @@
 
       estop: false,
       dryerProcessSpDirty: false,
+      dryerAirflowSpDirty: false,
 
       dryerData: {
         mode_state: null,
@@ -2405,6 +2418,10 @@
         if(spInput && !S.dryerProcessSpDirty && document.activeElement !== spInput){
           spInput.value = d.process_setpoint ?? "";
         }
+        const airflowInput = $("#dryerAirflowSpInput");
+        if(airflowInput && !S.dryerAirflowSpDirty && document.activeElement !== airflowInput){
+          airflowInput.value = d.manual_process_airflow_setpoint ?? "";
+        }
         const dewInput = $("#dryerDewSpInput");
         if(dewInput && document.activeElement !== dewInput){ dewInput.value = d.dewpoint_setpoint ?? ""; }
 
@@ -2463,6 +2480,36 @@
         await dryerRefresh(true);
       }catch(err){
         log(`Dryer setpoint failed: ${err.message}`, "bad");
+      }
+    }
+
+    async function dryerSetAirflowSp(){
+      if(!S.dryerIoLive){
+        log("Dryer IO is in SIM mode. Switch to LIVE first.", "warn");
+        return;
+      }
+      const inputEl = $("#dryerAirflowSpInput");
+      const raw = Number(inputEl?.value);
+      if(!Number.isFinite(raw)){
+        log("Enter a valid manual airflow setpoint value.", "bad");
+        return;
+      }
+      const value = Math.round(raw);
+      const storeToMemory = !!$("#dryerAirflowStoreMemory")?.checked;
+      try{
+        const res = await api("/process_airflow/set", {
+          method: "POST",
+          body: JSON.stringify({
+            value,
+            store_to_memory: storeToMemory,
+          }),
+        });
+        S.dryerAirflowSpDirty = false;
+        const saved = (res.store_to_memory === true) ? "saved" : "not saved";
+        log(`Dryer airflow setpoint set to ${res.value}.`, "good", `Controller memory: ${saved}.`);
+        await dryerRefresh(true);
+      }catch(err){
+        log(`Dryer airflow setpoint failed: ${err.message}`, "bad");
       }
     }
 
@@ -2622,6 +2669,14 @@
       on("btnDryerToggle",     "click", dryerToggle);
       on("btnDryerSetProcessSp", "click", dryerSetProcessSp);
       on("dryerProcessSpInput", "input", ()=>{ S.dryerProcessSpDirty = true; });
+      on("btnDryerSetAirflow", "click", dryerSetAirflowSp);
+      on("dryerAirflowSpInput", "input", ()=>{ S.dryerAirflowSpDirty = true; });
+      on("dryerAirflowSpInput", "keydown", (e)=>{
+        if(e.key === "Enter"){
+          e.preventDefault();
+          dryerSetAirflowSp();
+        }
+      });
 
       // Arduino connection
       on("btnArduinoMode", "click", async ()=>{

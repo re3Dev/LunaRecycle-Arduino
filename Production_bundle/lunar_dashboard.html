@@ -2506,9 +2506,19 @@
         });
         S.dryerAirflowSpDirty = false;
         const payload = res.data || {};
-        const readback = payload.readback ?? value;
+        const requested = payload.requested ?? value;
+        const holdingEcho = payload.holding_echo ?? requested;
+        const readback = payload.readback ?? holdingEcho;
         const saved = (payload.store_to_memory === true) ? "saved" : "not saved";
-        log(`Dryer airflow setpoint set to ${readback}.`, "good", `Controller memory: ${saved}.`);
+        if(readback === requested){
+          log(`Dryer airflow setpoint applied at ${readback}.`, "good", `Controller memory: ${saved}.`);
+        }else{
+          log(
+            `Airflow set requested ${requested}, controller reports ${readback}.`,
+            "warn",
+            `Holding echo ${holdingEcho}; memory ${saved}. Likely controller mode/logic is overriding manual SP.`
+          );
+        }
         await dryerRefresh(true);
       }catch(err){
         log(`Dryer airflow setpoint failed: ${err.message}`, "bad");

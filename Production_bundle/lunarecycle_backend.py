@@ -1603,12 +1603,37 @@ class DryerModbus:
         regs = self.read_input(addr_lsw, 2)
         return _unpack_s32_lsw_msw(regs[0], regs[1])
 
+    def read_holding_s32_lsw_msw(self, addr_lsw: int) -> int:
+        regs = self.read_holding(addr_lsw, 2)
+        return _unpack_s32_lsw_msw(regs[0], regs[1])
+
     def write_holding_s32_lsw_msw(self, addr_lsw: int, value: int) -> None:
         if value < -2147483648 or value > 2147483647:
             raise ValueError("value must fit in signed 32-bit range")
         lsw, msw = _pack_s32_lsw_msw(value)
-        self.write_holding(addr_lsw, lsw)
-        self.write_holding(addr_lsw + 1, msw)
+        with self._lock:
+            wr = self.client.write_registers(
+                address=addr_lsw,
+                values=[lsw, msw],
+                device_id=DRYER_DEVICE_ID,
+            )
+            if wr.isError():
+                # Some controllers reject FC16 for specific addresses; fall
+                # back to two FC6 writes for compatibility.
+                wr1 = self.client.write_register(
+                    address=addr_lsw,
+                    value=lsw & 0xFFFF,
+                    device_id=DRYER_DEVICE_ID,
+                )
+                if wr1.isError():
+                    raise RuntimeError(str(wr1))
+                wr2 = self.client.write_register(
+                    address=addr_lsw + 1,
+                    value=msw & 0xFFFF,
+                    device_id=DRYER_DEVICE_ID,
+                )
+                if wr2.isError():
+                    raise RuntimeError(str(wr2))
 
     def pulse_holding(
         self,
@@ -1958,12 +1983,15 @@ def api_dryer_process_airflow_set():
         if not dryer.ensure_connected():
             raise RuntimeError("Failed to connect to Modbus device.")
         dryer.set_manual_process_airflow_setpoint(value, store_to_memory=store_to_memory)
+        holding_echo = dryer.read_holding_s32_lsw_msw(DRYER_HOLDING_MANUAL_AIRFLOW_ADDR)
         readback = dryer.get_manual_process_airflow_setpoint_readback()
         return jsonify({
             "ok": True,
             "data": {
                 "requested": value,
+                "holding_echo": holding_echo,
                 "readback": readback,
+                "applied": (readback == value),
                 "store_to_memory": store_to_memory,
                 "units_note": "Airflow units are m3/hr in metric mode or CFM in imperial mode.",
             },

@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>LunaRecycle Auto Workflow</title>
+  <style>
+    :root{
+      --bg:#0b1118;
+      --card:#131c28;
+      --line:rgba(255,255,255,.12);
+      --text:#e9f1ff;
+      --muted:rgba(233,241,255,.7);
+      --good:#3ad5a6;
+      --warn:#ffc65a;
+      --bad:#ff6b83;
+      --accent:#7fa8ff;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:radial-gradient(1200px 500px at 0% -20%, rgba(127,168,255,.20), transparent 60%), var(--bg);
+      color:var(--text);
+      font-family:"Segoe UI", Tahoma, sans-serif;
+    }
+    .wrap{max-width:920px; margin:24px auto; padding:0 14px}
+    .head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px}
+    h1{font-size:18px; margin:0}
+    .pill{padding:7px 10px; border:1px solid var(--line); border-radius:999px; font-size:12px; color:var(--muted)}
+    .card{background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden}
+    .hd{padding:10px 12px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:10px}
+    .hd .title{font-size:14px; font-weight:700}
+    .chip{padding:6px 10px; border-radius:999px; border:1px solid var(--line); font-size:11px; color:var(--muted)}
+    .chip.good{color:#042015; background:var(--good); border-color:var(--good)}
+    .chip.warn{color:#2c2000; background:var(--warn); border-color:var(--warn)}
+    .chip.bad{color:#30060f; background:var(--bad); border-color:var(--bad)}
+    .bd{padding:12px}
+    .grid{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px}
+    .cell label{display:block; font-size:11px; color:var(--muted); margin-bottom:4px}
+    .wf-hidden{display:none !important}
+    input,select,button{
+      width:100%;
+      padding:8px 9px;
+      border-radius:10px;
+      border:1px solid var(--line);
+      background:#0f1722;
+      color:var(--text);
+      font-size:12px;
+    }
+    button{cursor:pointer; font-weight:700}
+    button.primary{background:linear-gradient(135deg, var(--accent), var(--good)); color:#061019}
+    button.danger{background:rgba(255,107,131,.15); border-color:rgba(255,107,131,.5)}
+    .actions{display:flex; gap:8px; margin-top:10px}
+    .actions button{width:auto; min-width:140px}
+    .stats{display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:8px; margin-top:10px}
+    .kv{border:1px solid var(--line); border-radius:10px; padding:8px}
+    .kv .k{font-size:10px; color:var(--muted)}
+    .kv .v{font-size:13px; font-weight:700; margin-top:2px}
+    .hint{font-size:12px; color:var(--muted); margin-top:8px}
+    .log{margin-top:8px; border:1px solid var(--line); border-radius:10px; background:#0b1320; padding:8px; height:180px; overflow:auto; font-family:Consolas, monospace; font-size:11px; line-height:1.35}
+    @media (max-width:760px){
+      .grid{grid-template-columns:1fr 1fr}
+      .stats{grid-template-columns:1fr}
+      .actions{flex-wrap:wrap}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head">
+      <h1>LunaRecycle Auto Workflow</h1>
+      <div class="pill" id="connPill">Arduino: <strong id="connText">CHECKING</strong></div>
+    </div>
+
+    <section class="card" id="workflowCard">
+      <div class="hd">
+        <div class="title">Auto Workflow</div>
+        <span class="chip" id="workflowChip">IDLE</span>
+      </div>
+      <div class="bd">
+        <div class="grid">
+          <div class="cell">
+            <label for="wfSrMode">SR mode</label>
+            <select id="wfSrMode">
+              <option value="units" selected>Units</option>
+              <option value="ratio">Ratio (until empty)</option>
+            </select>
+          </div>
+          <div class="cell">
+            <label for="wfPeUnits">PE units</label>
+            <input type="number" id="wfPeUnits" min="0" step="1" value="8" />
+          </div>
+          <div class="cell">
+            <label for="wfPaUnits">PA units</label>
+            <input type="number" id="wfPaUnits" min="0" step="1" value="2" />
+          </div>
+          <div class="cell wf-hidden" id="wfRatioPeCell">
+            <label for="wfRatioPe">Ratio PE part</label>
+            <input type="number" id="wfRatioPe" min="1" step="1" value="4" />
+          </div>
+          <div class="cell wf-hidden" id="wfRatioPaCell">
+            <label for="wfRatioPa">Ratio PA part</label>
+            <input type="number" id="wfRatioPa" min="1" step="1" value="1" />
+          </div>
+          <div class="cell">
+            <label for="wfDryMinutes">Dry min</label>
+            <input type="number" id="wfDryMinutes" min="1" step="1" value="5" />
+          </div>
+          <div class="cell">
+            <label for="wfDryTempC">Dry temp C</label>
+            <input type="number" id="wfDryTempC" min="1" max="250" step="1" value="70" />
+          </div>
+          <div class="cell">
+            <label for="wfFeedVacPct">Feed Vacuum %</label>
+            <input type="number" id="wfFeedVacPct" min="0" max="100" step="1" value="90" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="primary" id="btnWorkflowStart">Start Workflow</button>
+          <button class="danger" id="btnWorkflowStop">Stop Workflow</button>
+        </div>
+
+        <div class="stats">
+          <div class="kv"><div class="k">Dry Planned</div><div class="v" id="wfDryPlannedText">—</div></div>
+          <div class="kv"><div class="k">Dry Elapsed</div><div class="v" id="wfDryElapsedText">—</div></div>
+          <div class="kv"><div class="k">Dry Remaining</div><div class="v" id="wfDryRemainingText">—</div></div>
+        </div>
+
+        <div class="hint" id="workflowModeHint">SR uses fixed PE/PA unit counts.</div>
+        <div class="hint" id="workflowStatusText">Ready.</div>
+        <div class="log" id="workflowLog" aria-label="Workflow log"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const ARDUINO_BASE = "/api";
+    const DRYER_BASE = "/api/dryer";
+
+    const S = {
+      arduinoConnected: false,
+      workflowRunning: false,
+      workflowStopRequested: false,
+      workflowPhase: "IDLE",
+      workflowMsg: "Ready.",
+      srPolling: false,
+      dryPolling: false,
+      feedPolling: false,
+      srRun: "—",
+      srPhase: "—",
+      srPeLeft: "—",
+      srPaLeft: "—",
+      dryPhase: "—",
+      dryRunning: false,
+      dryRemain: "—",
+      dryElapsed: "—",
+      dryPlanned: "—",
+    };
+
+    const $ = (q, el=document) => el.querySelector(q);
+
+    async function fetchJSON(url, opts={}, timeoutMs=10000){
+      const ctrl = new AbortController();
+      const id = setTimeout(()=>ctrl.abort(), timeoutMs);
+      try{
+        const res = await fetch(url, {
+          signal: ctrl.signal,
+          headers: { "Content-Type": "application/json" },
+          ...opts,
+        });
+        const data = await res.json();
+        if(!res.ok || data.ok === false){
+          throw new Error(data.error || `HTTP ${res.status}`);
+        }
+        return data;
+      } finally {
+        clearTimeout(id);
+      }
+    }
+
+    async function apiArduino(path, opts={}, timeoutMs=10000){
+      return fetchJSON(`${ARDUINO_BASE}${path}`, opts, timeoutMs);
+    }
+
+    function setText(id, val){ const el = document.getElementById(id); if(el) el.textContent = val; }
+
+    function fmtDuration(sec){
+      const s = Math.max(0, Math.round(Number(sec) || 0));
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return `${m}:${String(r).padStart(2, "0")}`;
+    }
+
+    function workflowLog(msg, kind="info"){
+      const out = $("#workflowLog");
+      if(!out) return;
+      const time = new Date().toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+      const line = document.createElement("div");
+      if(kind === "good") line.style.color = "var(--good)";
+      else if(kind === "warn") line.style.color = "var(--warn)";
+      else if(kind === "bad") line.style.color = "var(--bad)";
+      line.textContent = `[${time}] ${msg}`;
+      out.appendChild(line);
+      out.scrollTop = out.scrollHeight;
+    }
+
+    function workflowSet(phase, msg, running){
+      if(phase !== undefined) S.workflowPhase = phase;
+      if(msg !== undefined) S.workflowMsg = msg;
+      if(running !== undefined) S.workflowRunning = !!running;
+      render();
+    }
+
+    function render(){
+      setText("workflowStatusText", S.workflowMsg || "Ready.");
+      setText("wfDryPlannedText", S.dryPlanned);
+      setText("wfDryElapsedText", S.dryElapsed);
+      setText("wfDryRemainingText", S.dryRemain);
+
+      const chip = $("#workflowChip");
+      if(chip){
+        const phase = String(S.workflowPhase || "IDLE");
+        chip.textContent = S.workflowRunning ? phase.toUpperCase() : phase;
+        chip.className = "chip";
+        if(phase === "ERROR") chip.classList.add("bad");
+        else if(phase === "STOPPING") chip.classList.add("warn");
+        else if(S.workflowRunning) chip.classList.add("good");
+      }
+
+      setText("connText", S.arduinoConnected ? "CONNECTED" : "DISCONNECTED");
+    }
+
+    async function arduinoRefreshStatus(silent=false){
+      try{
+        const res = await apiArduino("/arduino/status", { method: "GET" }, 8000);
+        S.arduinoConnected = !!res.connected;
+      }catch(err){
+        S.arduinoConnected = false;
+        if(!silent) workflowLog(`Arduino status failed: ${err.message}`, "bad");
+      }
+      render();
+    }
+
+    async function srRefreshStatus(silent=false){
+      try{
+        const res = await apiArduino("/sr/status", { method: "GET" });
+        const d = res.data || {};
+        S.srRun = d.run !== undefined ? d.run : "—";
+        S.srPhase = d.phase || "—";
+        S.srPeLeft = d.pe_left !== undefined ? d.pe_left : "—";
+        S.srPaLeft = d.pa_left !== undefined ? d.pa_left : "—";
+      }catch(err){
+        if(!silent) workflowLog(`Size Reduction status failed: ${err.message}`, "bad");
+      }
+    }
+
+    async function dryRefreshStatus(silent=false){
+      try{
+        const res = await apiArduino("/dry/status", { method: "GET" });
+        const d = res.data || {};
+        S.dryPhase = d.phase || "—";
+        S.dryRunning = !!d.running;
+        const totalSec = Math.max(0, Number(d.total_seconds || 0));
+        const elapsedSec = Math.max(0, Number(d.elapsed_seconds || 0));
+        const remainingSec = Math.max(0, Number(d.remaining_seconds || 0));
+        const cfgMinutes = parseFloat($("#wfDryMinutes")?.value || "0");
+        const cfgTotalSec = Number.isFinite(cfgMinutes) && cfgMinutes > 0 ? Math.round(cfgMinutes * 60) : 0;
+        const plannedSec = totalSec > 0 ? totalSec : cfgTotalSec;
+        S.dryPlanned = plannedSec > 0 ? fmtDuration(plannedSec) : "—";
+        S.dryElapsed = (S.dryRunning || elapsedSec > 0) ? fmtDuration(elapsedSec) : "—";
+        S.dryRemain  = S.dryRunning ? fmtDuration(remainingSec) : "—";
+      }catch(err){
+        if(!silent) workflowLog(`Drying status failed: ${err.message}`, "bad");
+      }
+      render();
+    }
+
+    async function feedRefreshStatus(silent=false){
+      try{ await apiArduino("/feed/status", { method: "GET" }); }
+      catch(err){ if(!silent) workflowLog(`Feed status failed: ${err.message}`, "bad"); }
+    }
+
+    function workflowUpdateModeUI(){
+      const mode = String($("#wfSrMode")?.value || "units").toLowerCase();
+      const ratio = mode === "ratio";
+      $("#wfRatioPeCell")?.classList.toggle("wf-hidden", !ratio);
+      $("#wfRatioPaCell")?.classList.toggle("wf-hidden", !ratio);
+      const hint = $("#workflowModeHint");
+      if(hint){
+        hint.textContent = ratio
+          ? "SR uses PE:PA ratio and runs until IR no longer detects bags."
+          : "SR uses fixed PE/PA unit counts.";
+      }
+    }
+
+    function readWorkflowConfig(){
+      const srMode = String($("#wfSrMode")?.value || "units").toLowerCase();
+      const cfg = {
+        srMode,
+        pe: parseInt($("#wfPeUnits")?.value || "0", 10) || 0,
+        pa: parseInt($("#wfPaUnits")?.value || "0", 10) || 0,
+        ratioPe: parseInt($("#wfRatioPe")?.value || "0", 10) || 0,
+        ratioPa: parseInt($("#wfRatioPa")?.value || "0", 10) || 0,
+        dryMinutes: parseFloat($("#wfDryMinutes")?.value || "0"),
+        dryTempC: parseInt($("#wfDryTempC")?.value || "0", 10),
+        vacPct: parseInt($("#wfFeedVacPct")?.value || "0", 10) || 0,
+      };
+
+      if(cfg.srMode === "ratio"){
+        if(cfg.ratioPe <= 0 || cfg.ratioPa <= 0) throw new Error("Ratio mode requires PE and PA parts greater than zero.");
+        const ratioScale = 1000;
+        cfg.pe = cfg.ratioPe * ratioScale;
+        cfg.pa = cfg.ratioPa * ratioScale;
+        cfg.srLabel = `${cfg.ratioPe}:${cfg.ratioPa} ratio until empty`;
+      }else{
+        if(cfg.pe < 0 || cfg.pa < 0 || (cfg.pe + cfg.pa) <= 0) throw new Error("Set PE/PA units: at least one must be greater than zero.");
+        cfg.srLabel = `${cfg.pe} PE + ${cfg.pa} PA`;
+      }
+
+      if(!(cfg.dryMinutes > 0)) throw new Error("Dry minutes must be greater than zero.");
+      if(!(cfg.dryTempC > 0 && cfg.dryTempC <= 250)) throw new Error("Dry temp must be 1-250 C.");
+      if(cfg.vacPct < 0 || cfg.vacPct > 100) throw new Error("Vacuum percent must be 0-100.");
+      return cfg;
+    }
+
+    async function workflowSleep(ms){
+      let remaining = Math.max(0, ms);
+      while(remaining > 0){
+        if(S.workflowStopRequested) throw new Error("Workflow stop requested.");
+        const step = Math.min(200, remaining);
+        await new Promise((resolve)=>setTimeout(resolve, step));
+        remaining -= step;
+      }
+    }
+
+    async function workflowHoldShredder(ms){
+      const total = Math.max(0, Number(ms) || 0);
+      const started = Date.now();
+      while((Date.now() - started) < total){
+        if(S.workflowStopRequested) throw new Error("Workflow stop requested.");
+        try{ await apiArduino("/shredder/fwd", { method: "POST" }); }catch(_){ }
+        const elapsed = Date.now() - started;
+        const remaining = Math.max(0, total - elapsed);
+        if(remaining <= 0) break;
+        await workflowSleep(Math.min(5000, remaining));
+      }
+    }
+
+    async function workflowStopAll(){
+      const calls = ["/sr/stop", "/dry/stop", "/dry_hold/stop", "/feed/stop"];
+      for(const path of calls){
+        try{ await apiArduino(path, { method: "POST" }); }catch(_){ }
+      }
+      try{ await apiArduino("/motor/stop", { method: "POST" }); }catch(_){ }
+      try{ await apiArduino("/shredder/off", { method: "POST" }); }catch(_){ }
+      try{
+        await apiArduino("/blastgate/home", {
+          method: "POST",
+          body: JSON.stringify({ gate: "ALL" }),
+        }, 20000);
+      }catch(_){ }
+      try{ await apiArduino("/gate/close", { method: "POST" }); }catch(_){ }
+      await srRefreshStatus(true);
+      await dryRefreshStatus(true);
+      await feedRefreshStatus(true);
+    }
+
+    async function workflowRunTcHome(){
+      workflowSet("TC HOME", "Running homing before automation...", true);
+      await apiArduino("/tc/home", { method: "POST" }, 60000);
+      workflowLog("TC_HOME sent. Waiting for conveyor READY.", "info");
+
+      const started = Date.now();
+      const timeoutMs = 180000;
+      while(true){
+        if(S.workflowStopRequested) throw new Error("Workflow stop requested.");
+        const st = await apiArduino("/arduino/status", { method: "GET" }, 8000);
+        S.arduinoConnected = !!st.connected;
+        const data = st.data || {};
+        const state = String(data.tc_state || "").toUpperCase();
+        if(state === "READY") return;
+        if(Date.now() - started > timeoutMs) throw new Error("TC_HOME timed out waiting for READY.");
+        await workflowSleep(1000);
+      }
+    }
+
+    async function workflowWaitSrDone(cfg){
+      async function stopSrAndConfirmRatioStop(timeoutMs=15000){
+        const started = Date.now();
+        while(Date.now() - started < timeoutMs){
+          try{ await apiArduino("/sr/stop", { method: "POST" }); }catch(_){ }
+          await workflowSleep(1200);
+          await srRefreshStatus(true);
+          const runNow = String(S.srRun || "").toUpperCase();
+          if(runNow !== "YES") return true;
+        }
+        return false;
+      }
+
+      let seenRunning = false;
+      while(true){
+        if(S.workflowStopRequested) throw new Error("Workflow stop requested.");
+        await srRefreshStatus(true);
+        const run = String(S.srRun || "").toUpperCase();
+        if(run === "YES") seenRunning = true;
+
+        if(cfg && cfg.srMode === "ratio" && seenRunning){
+          const peLeft = Number(S.srPeLeft);
+          const paLeft = Number(S.srPaLeft);
+          if(Number.isFinite(peLeft) && Number.isFinite(paLeft) && (peLeft <= 0 || paLeft <= 0)){
+            const stopped = await stopSrAndConfirmRatioStop();
+            if(!stopped) throw new Error("Ratio-mode empty condition detected, but SR did not stop.");
+            return { stoppedByRatio: true, peLeft, paLeft };
+          }
+        }
+
+        if(seenRunning && run !== "YES") return { stoppedByRatio: false };
+        await workflowSleep(2000);
+      }
+    }
+
+    async function workflowRunDryHold(cfg){
+      await apiArduino("/dry_hold/start", {
+        method: "POST",
+        body: JSON.stringify({
+          minutes: cfg.dryMinutes,
+          temp_c: cfg.dryTempC,
+          mixer_pwm: 200,
+          dir: "FWD",
+        }),
+      });
+
+      while(true){
+        if(S.workflowStopRequested) throw new Error("Workflow stop requested.");
+        const res = await apiArduino("/dry_hold/status", { method: "GET" });
+        const d = res.data || {};
+        if(!d.running){
+          const phase = String(d.phase || "").toUpperCase();
+          if(phase === "ERROR") throw new Error(d.message || "Dry hold failed.");
+          return;
+        }
+        await workflowSleep(2000);
+      }
+    }
+
+    async function workflowEnsureDryerLive(){
+      try{
+        const data = await fetchJSON(`${DRYER_BASE}/connect`, { method: "POST" }, 8000);
+        if(data.connected) workflowLog("Dryer LIVE telemetry connected for workflow.", "good");
+        else workflowLog("Dryer LIVE telemetry connect returned not connected.", "warn");
+      }catch(_){
+        workflowLog("Dryer LIVE telemetry connection failed; workflow will continue.", "warn");
+      }
+    }
+
+    async function workflowStart(){
+      if(S.workflowRunning){
+        workflowLog("Workflow already running.", "warn");
+        return;
+      }
+
+      await arduinoRefreshStatus(true);
+      if(!S.arduinoConnected){
+        workflowSet("IDLE", "Arduino is not connected.", false);
+        workflowLog("Arduino is not connected.", "bad");
+        return;
+      }
+
+      let cfg;
+      try{
+        cfg = readWorkflowConfig();
+      }catch(err){
+        workflowSet("IDLE", err.message, false);
+        workflowLog(err.message, "bad");
+        return;
+      }
+
+      const out = $("#workflowLog");
+      if(out) out.textContent = "";
+
+      S.workflowStopRequested = false;
+      workflowSet("TC HOME", "Running homing before automation...", true);
+      workflowLog(`Starting workflow: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed threshold mode @ vac ${cfg.vacPct}%`, "info");
+
+      try{
+        await workflowRunTcHome();
+        workflowLog("TC_HOME complete (conveyor READY).", "good");
+
+        workflowSet("SIZE REDUCTION", "Running Step 1/3...", true);
+        await apiArduino("/motor/set", {
+          method: "POST",
+          body: JSON.stringify({ speed: 200, dir: "FWD" }),
+        });
+        await apiArduino("/shredder/fwd", { method: "POST" });
+        try{ await apiArduino("/gate/open", { method: "POST" }); }catch(_){ }
+        await apiArduino("/sr/start", {
+          method: "POST",
+          body: JSON.stringify({ pe_units: cfg.pe, pa_units: cfg.pa }),
+        }, 60000);
+
+        workflowLog("Step 1 started: Size Reduction with mixer FWD @ 200 and shredder FWD.", "good");
+        const srResult = await workflowWaitSrDone(cfg);
+        workflowLog("Step 1 complete. Holding shredder ON for 30s post-run.", "info");
+        await workflowHoldShredder(30000);
+        try{ await apiArduino("/shredder/off", { method: "POST" }); }catch(_){ }
+        try{ await apiArduino("/gate/close", { method: "POST" }); }catch(_){ }
+        if(srResult && srResult.stoppedByRatio){
+          workflowLog(`Step 1 complete: ratio mode stopped on empty stream (PE left=${srResult.peLeft}, PA left=${srResult.paLeft}).`, "warn");
+        }else{
+          workflowLog("Step 1 complete (shredder gates closed).", "good");
+        }
+
+        workflowSet("DRYING", "Connecting dryer LIVE telemetry...", true);
+        await workflowEnsureDryerLive();
+        workflowSet("DRYING", "Running Step 2/3...", true);
+        workflowLog("Step 2 started: Dryer hold active (mixer stays FWD @ 200).", "good");
+        await workflowRunDryHold(cfg);
+        workflowLog("Step 2 complete.", "good");
+
+        workflowSet("FEED", "Running Step 3/3...", true);
+        await apiArduino("/blastgate/homemax", {
+          method: "POST",
+          body: JSON.stringify({ gate: "ALL" }),
+        }, 20000);
+        await apiArduino("/motor/set", {
+          method: "POST",
+          body: JSON.stringify({ speed: 200, dir: "FWD" }),
+        });
+        await apiArduino("/feed/start", {
+          method: "POST",
+          body: JSON.stringify({ vacuum_pct: cfg.vacPct }),
+        });
+
+        await feedRefreshStatus(true);
+        workflowLog(`Step 3 started: blastgates OPEN, mixer FWD @ 200, threshold watcher running (vac ${cfg.vacPct}%).`, "good");
+        workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 200; use Stop Workflow when done.", false);
+      }catch(err){
+        if(S.workflowStopRequested){
+          workflowLog("Workflow stopped by operator.", "warn");
+          workflowSet("STOPPED", "Workflow stopped.", false);
+        }else{
+          workflowLog(`Workflow failed: ${err.message}`, "bad");
+          workflowSet("ERROR", `Workflow failed: ${err.message}`, false);
+          await workflowStopAll();
+        }
+      }
+    }
+
+    async function workflowStop(){
+      S.workflowStopRequested = true;
+      workflowSet("STOPPING", "Stopping all workflow stages...", true);
+      workflowLog("Stop requested. Sending stop commands.", "warn");
+      await workflowStopAll();
+      workflowSet("STOPPED", "Workflow stopped.", false);
+    }
+
+    function bind(){
+      $("#btnWorkflowStart")?.addEventListener("click", workflowStart);
+      $("#btnWorkflowStop")?.addEventListener("click", workflowStop);
+      $("#wfSrMode")?.addEventListener("change", workflowUpdateModeUI);
+      $("#wfDryMinutes")?.addEventListener("input", ()=>{ dryRefreshStatus(true); });
+    }
+
+    async function boot(){
+      bind();
+      workflowUpdateModeUI();
+      render();
+      await arduinoRefreshStatus(true);
+      await dryRefreshStatus(true);
+      setInterval(()=>{ arduinoRefreshStatus(true); }, 1500);
+      setInterval(()=>{ dryRefreshStatus(true); }, 2000);
+    }
+
+    boot();
+  </script>
+</body>
+</html>

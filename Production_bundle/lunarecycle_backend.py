@@ -3104,7 +3104,7 @@ class ExtrusionRatioTestController:
             self.phase = "ARMED"
             self.started_at = time.monotonic()
             self.message = (
-                f"Watching Moonraker + crammer load; homing when load <= "
+                f"Watching crammer load; homing when load <= "
                 f"{self.low_load_threshold_pct:.1f}% with vacuum at {self.vacuum_pct}% "
                 f"and mixer FWD {RATIO_TEST_MIX_PWM}."
             )
@@ -3268,24 +3268,17 @@ class ExtrusionRatioTestController:
             while not self._stop.is_set():
                 connected, rotations_total = self._sample_snapshot()
                 crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
-                should_wait = False
                 trigger_reason = ""
                 trigger_home_now = False
 
                 with self._lock:
-                    if not connected:
-                        self.phase = "WAITING"
-                        self.message = "Waiting for Moonraker extrusion data."
-                        should_wait = True
-                    else:
-                        self.phase = "WATCHING"
-                        self.message = (
-                            f"Armed. Waiting for low-load <= {self.low_load_threshold_pct:.1f}% "
-                            f"while extruding."
-                        )
+                    self.phase = "WATCHING"
+                    self.message = (
+                        f"Armed. Waiting for low-load <= {self.low_load_threshold_pct:.1f}% "
+                        f"from crammer feedback."
+                    )
 
-                    extruding_now = abs(self.live_extruder_velocity) >= MOONRAKER_EXTRUDER_VELOCITY_MIN
-                    using_load_trigger = crammer_connected and crammer_running and extruding_now
+                    using_load_trigger = crammer_connected and crammer_running
 
                     if using_load_trigger:
                         now = time.monotonic()
@@ -3308,12 +3301,6 @@ class ExtrusionRatioTestController:
                             self.message = "Waiting for crammer connection/status."
                         elif not crammer_running:
                             self.message = "Waiting for crammer RUN state."
-                        elif not extruding_now:
-                            self.message = "Waiting for extrusion activity."
-
-                if should_wait:
-                    self._stop.wait(self.poll_sec)
-                    continue
 
                 if trigger_home_now:
                     self._trigger_home(rotations_total, trigger_reason)

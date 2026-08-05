@@ -438,7 +438,7 @@
           temp_c: cfg.dryTempC,
           mixer_pwm: 150,
           dir: "FWD",
-          keep_dryer_on: true,
+          keep_dryer_on: false,
         }),
       });
 
@@ -558,7 +558,7 @@
 
         await feedRefreshStatus(true);
         workflowLog(`Step 3 started: blastgates OPEN, mixer FWD @ 150, threshold watcher running (vac ${cfg.vacPct}%).`, "good");
-        workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open, mixer FWD @ 150, and dryer ON; use Stop Workflow when done.", false);
+        workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 150; dryer is OFF. Use Stop Workflow when done.", false);
       }catch(err){
         if(S.workflowStopRequested){
           workflowLog("Workflow stopped by operator.", "warn");

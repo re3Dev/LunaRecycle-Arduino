@@ -320,7 +320,7 @@ const unsigned long TC_bag2PreDropDwellMs = 1000;   // pause over shredder befor
 // ── Size Reduction (automated shred cadence) tunables ──────────────────────
 // First-guess defaults from the process spec; verify on hardware. PE bags come
 // from the LEFT cassette (bag 1), PA+EVOH+PE from the RIGHT cassette (bag 2).
-const unsigned long SR_shredTimePerBagMs = 3000;    // dwell per bag (~3 s)     [tune]
+const unsigned long SR_shredTimePerBagMs = 5000;    // dwell per bag (~5 s)     [tune]
 const int           SR_coolEveryBags     = 100;     // motor-cool cadence       [tune]
 const unsigned long SR_coolDurationMs    = 15000;   // cool pause (15 s)        [tune]
 

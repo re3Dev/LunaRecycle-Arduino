@@ -407,22 +407,32 @@
     async function workflowWaitSrDone(cfg){
       async function stopSrAndConfirmRatioStop(timeoutMs=15000){
         const started = Date.now();
+        let stopConfirmCount = 0;
         while(Date.now() - started < timeoutMs){
           try{ await apiArduino("/sr/stop", { method: "POST" }); }catch(_){ }
           await workflowSleep(1200);
           await srRefreshStatus(true);
           const runNow = String(S.srRun || "").toUpperCase();
-          if(runNow !== "YES") return true;
+          if(runNow === "NO"){
+            stopConfirmCount += 1;
+            if(stopConfirmCount >= 2) return true;
+          }else if(runNow === "YES"){
+            stopConfirmCount = 0;
+          }
         }
         return false;
       }
 
       let seenRunning = false;
+      let doneConfirmCount = 0;
       while(true){
         if(S.workflowStopRequested) throw new Error("Workflow stop requested.");
         await srRefreshStatus(true);
         const run = String(S.srRun || "").toUpperCase();
-        if(run === "YES") seenRunning = true;
+        if(run === "YES"){
+          seenRunning = true;
+          doneConfirmCount = 0;
+        }
 
         if(cfg && cfg.srMode === "ratio" && seenRunning){
           const peLeft = Number(S.srPeLeft);
@@ -434,7 +444,11 @@
           }
         }
 
-        if(seenRunning && run !== "YES") return { stoppedByRatio: false };
+        // Only complete SR when firmware explicitly reports run=NO twice.
+        if(seenRunning && run === "NO"){
+          doneConfirmCount += 1;
+          if(doneConfirmCount >= 2) return { stoppedByRatio: false };
+        }
         await workflowSleep(2000);
       }
     }

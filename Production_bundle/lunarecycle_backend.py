@@ -2865,6 +2865,7 @@ class SimpleDryHoldController:
         self.mixer_pwm = 0
         self.mixer_dir = "FWD"
         self.keep_dryer_on_after = False
+        self.dryer_on = False
         self.message = "Ready."
         self.last_error = ""
 
@@ -2885,6 +2886,8 @@ class SimpleDryHoldController:
         dryer.set_process_setpoint(int(round(float(temp_c))))
         if dryer.get_run_state_raw() != 100:
             dryer.toggle_on_off()
+        with self._lock:
+            self.dryer_on = True
 
     def _dryer_off(self) -> None:
         try:
@@ -2895,6 +2898,8 @@ class SimpleDryHoldController:
                 set_dryer_power(False)
             except Exception:
                 pass
+            with self._lock:
+                self.dryer_on = False
 
     def _run(self, total_seconds: int, temp_c: int, mixer_pwm: int, mixer_dir: str):
         try:
@@ -2997,6 +3002,9 @@ class SimpleDryHoldController:
                 "elapsed_seconds": elapsed,
                 "remaining_seconds": remaining,
                 "temp_c": self.temp_c,
+                "dryer_on": self.dryer_on,
+                "mixing": self.running and self.mixer_pwm > 0,
+                "preheat_due": False,
                 "mixer_pwm": self.mixer_pwm,
                 "mixer_dir": self.mixer_dir,
                 "keep_dryer_on_after": self.keep_dryer_on_after,

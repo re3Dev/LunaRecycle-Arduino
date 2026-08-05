@@ -382,6 +382,17 @@
     }
 
     async function workflowWaitSrDone(cfg){
+      function remainingCounts(){
+        const peLeft = Number(S.srPeLeft);
+        const paLeft = Number(S.srPaLeft);
+        return {
+          peLeft,
+          paLeft,
+          hasPe: Number.isFinite(peLeft) && peLeft > 0,
+          hasPa: Number.isFinite(paLeft) && paLeft > 0,
+        };
+      }
+
       async function stopSrAndConfirmRatioStop(timeoutMs=15000){
         const started = Date.now();
         let stopConfirmCount = 0;
@@ -424,7 +435,13 @@
         // Only complete SR when firmware explicitly reports run=NO twice.
         if(seenRunning && run === "NO"){
           doneConfirmCount += 1;
-          if(doneConfirmCount >= 2) return { stoppedByRatio: false };
+          if(doneConfirmCount >= 2){
+            const rem = remainingCounts();
+            if(rem.hasPe || rem.hasPa){
+              throw new Error(`Size Reduction stopped early with bags remaining (PE left=${S.srPeLeft}, PA left=${S.srPaLeft}).`);
+            }
+            return { stoppedByRatio: false };
+          }
         }
         await workflowSleep(2000);
       }

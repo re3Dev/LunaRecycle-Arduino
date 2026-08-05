@@ -1970,16 +1970,35 @@
       }
     }
 
-    async function workflowHoldShredder(ms){
-      const total = Math.max(0, Number(ms) || 0);
-      const started = Date.now();
-      while((Date.now() - started) < total){
+    async function workflowForceShredderOff(maxAttempts=5){
+      const tries = Math.max(1, Number(maxAttempts) || 1);
+      for(let i=0; i<tries; i++){
         if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
-        try{ await apiArduino("/shredder/fwd", { method: "POST" }); }catch(_){ }
-        const elapsed = Date.now() - started;
-        const remaining = Math.max(0, total - elapsed);
-        if(remaining <= 0) break;
-        await workflowSleep(Math.min(5000, remaining));
+        try{ await apiArduino("/shredder/off", { method: "POST" }); }catch(_){ }
+        await workflowSleep(250);
+        try{
+          const st = await apiArduino("/arduino/status", { method: "GET" }, 8000);
+          const data = st.data || {};
+          const shredder = String(data.shredder || "").toUpperCase();
+          if(shredder === "OFF"){
+            return true;
+          }
+        }catch(_){ }
+        await workflowSleep(500);
+      }
+      return false;
+    }
+
+    async function workflowTailShredderThenStop(ms){
+      const total = Math.max(0, Number(ms) || 0);
+      try{ await apiArduino("/shredder/fwd", { method: "POST" }); }catch(_){ }
+      try{ await apiArduino("/shredder/on", { method: "POST" }); }catch(_){ }
+      if(total > 0){
+        await workflowSleep(total);
+      }
+      const offOk = await workflowForceShredderOff(6);
+      if(!offOk){
+        workflowLog("Warning: shredder OFF not confirmed after retries.", "warn");
       }
     }
 
@@ -2216,9 +2235,8 @@
         }, 60000);
         workflowLog("Step 1 started: Size Reduction with mixer FWD @ 150 and shredder FWD.", "good");
         const srResult = await workflowWaitSrDone(cfg);
-        workflowLog("Step 1 complete. Holding shredder ON for 30s post-run.", "info");
-        await workflowHoldShredder(30000);
-        try{ await apiArduino("/shredder/off", { method: "POST" }); }catch(_){ }
+        workflowLog("Step 1 complete. Running shredder for 30s post-run, then turning OFF.", "info");
+        await workflowTailShredderThenStop(30000);
         try{ await apiArduino("/gate/close", { method: "POST" }); }catch(_){ }
         if(srResult && srResult.stoppedByRatio){
           workflowLog(`Step 1 complete: ratio mode stopped on empty stream (PE left=${srResult.peLeft}, PA left=${srResult.paLeft}).`, "warn");

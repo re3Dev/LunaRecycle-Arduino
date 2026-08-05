@@ -2864,6 +2864,7 @@ class SimpleDryHoldController:
         self.temp_c = 0
         self.mixer_pwm = 0
         self.mixer_dir = "FWD"
+        self.keep_dryer_on_after = False
         self.message = "Ready."
         self.last_error = ""
 
@@ -2919,7 +2920,14 @@ class SimpleDryHoldController:
                     pass
                 self._stop.wait(5.0)
 
-            self._dryer_off()
+            with self._lock:
+                keep_dryer_on_after = bool(self.keep_dryer_on_after)
+
+            # Normal workflow handoff can keep the dryer running into feed;
+            # STOP/ERROR paths still shut it down for safety.
+            if self._stop.is_set() or not keep_dryer_on_after:
+                self._dryer_off()
+
             with self._lock:
                 self.running = False
                 if self._stop.is_set():
@@ -2927,7 +2935,10 @@ class SimpleDryHoldController:
                     self.message = "Dry hold stopped."
                 else:
                     self.phase = "DONE"
-                    self.message = "Dry hold complete."
+                    if keep_dryer_on_after:
+                        self.message = "Dry hold complete; dryer remains ON for next stage."
+                    else:
+                        self.message = "Dry hold complete."
         except Exception as exc:
             try:
                 self._dryer_off()
@@ -2942,7 +2953,14 @@ class SimpleDryHoldController:
             with self._lock:
                 self._thread = None
 
-    def start(self, total_seconds: int, temp_c: int, mixer_pwm: int = 200, mixer_dir: str = "FWD"):
+    def start(
+        self,
+        total_seconds: int,
+        temp_c: int,
+        mixer_pwm: int = 200,
+        mixer_dir: str = "FWD",
+        keep_dryer_on_after: bool = False,
+    ):
         with self._lock:
             if self.running:
                 raise RuntimeError("Dry hold already running.")
@@ -2954,6 +2972,7 @@ class SimpleDryHoldController:
             self.mixer_pwm = max(0, min(255, int(mixer_pwm)))
             d = str(mixer_dir).strip().upper()
             self.mixer_dir = d if d in ("FWD", "REV") else "FWD"
+            self.keep_dryer_on_after = bool(keep_dryer_on_after)
 
         self._stop.clear()
         self._thread = threading.Thread(
@@ -2980,6 +2999,7 @@ class SimpleDryHoldController:
                 "temp_c": self.temp_c,
                 "mixer_pwm": self.mixer_pwm,
                 "mixer_dir": self.mixer_dir,
+                "keep_dryer_on_after": self.keep_dryer_on_after,
                 "message": self.message,
                 "last_error": self.last_error,
             }
@@ -2993,10 +3013,16 @@ class FeedController:
     /api/extrusion_ratio_test/*.
     """
 
-    def start(self, vacuum_pct: int, poll_sec: Optional[float] = None) -> None:
+    def start(
+        self,
+        vacuum_pct: int,
+        poll_sec: Optional[float] = None,
+        allow_post_home_recovery: bool = False,
+    ) -> None:
         ratio_test.start(
             poll_sec=FEED_POLL_SEC if poll_sec is None else max(0.1, float(poll_sec)),
             vacuum_pct=max(0, min(100, int(vacuum_pct))),
+            allow_post_home_recovery=bool(allow_post_home_recovery),
         )
 
     def stop(self) -> None:
@@ -3065,6 +3091,7 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_stop1_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP1_SEC))
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
+        self.allow_post_home_recovery = True
         self.last_post_home_recovery_applied = False
         self.post_home_unrecovered_streak = 0
 
@@ -3089,7 +3116,12 @@ class ExtrusionRatioTestController:
             direction = "FWD"
         return self._arduino(f"MOTOR_SET {pwm} {direction}")
 
-    def start(self, poll_sec: Optional[float] = None, vacuum_pct: Optional[int] = None):
+    def start(
+        self,
+        poll_sec: Optional[float] = None,
+        vacuum_pct: Optional[int] = None,
+        allow_post_home_recovery: Optional[bool] = None,
+    ):
         with self._lock:
             if self.running:
                 raise RuntimeError("Extruder ratio test already running.")
@@ -3100,6 +3132,8 @@ class ExtrusionRatioTestController:
                 self.poll_sec = max(0.1, float(poll_sec))
             if vacuum_pct is not None:
                 self.vacuum_pct = max(0, min(100, int(vacuum_pct)))
+            if allow_post_home_recovery is not None:
+                self.allow_post_home_recovery = bool(allow_post_home_recovery)
             self.running = True
             self.phase = "ARMED"
             self.started_at = time.monotonic()
@@ -3196,6 +3230,11 @@ class ExtrusionRatioTestController:
             )
 
     def _post_home_recovery_if_needed(self) -> tuple[bool, int]:
+        if not self.allow_post_home_recovery:
+            with self._lock:
+                self.post_home_unrecovered_streak = 0
+            return False, 0
+
         check_sec = self.post_home_recovery_check_sec
         recover_threshold = self.post_home_recovery_load_pct
         if check_sec <= 0:
@@ -3363,6 +3402,7 @@ class ExtrusionRatioTestController:
                 "post_home_recovery_stop1_sec": self.post_home_recovery_stop1_sec,
                 "post_home_recovery_reverse_sec": self.post_home_recovery_reverse_sec,
                 "post_home_recovery_stop2_sec": self.post_home_recovery_stop2_sec,
+                "allow_post_home_recovery": self.allow_post_home_recovery,
                 "last_post_home_recovery_applied": self.last_post_home_recovery_applied,
                 "post_home_unrecovered_streak": self.post_home_unrecovered_streak,
                 "last_error": self.last_error,
@@ -3437,13 +3477,14 @@ def api_dry_status():
 
 @app.route("/api/dry_hold/start", methods=["POST"])
 def api_dry_hold_start():
-    """Begin backend-owned simple dry hold. Body: {minutes, temp_c, mixer_pwm?, dir?}."""
+    """Begin backend-owned simple dry hold. Body: {minutes, temp_c, mixer_pwm?, dir?, keep_dryer_on?}."""
     try:
         body = request.get_json(silent=True) or {}
         minutes = float(body.get("minutes", 0))
         temp_c = int(body.get("temp_c", 0))
         mixer_pwm = int(body.get("mixer_pwm", 200))
         mixer_dir = str(body.get("dir", "FWD"))
+        keep_dryer_on = str(body.get("keep_dryer_on", "0")).strip().lower() in ("1", "true", "yes", "on")
         if minutes <= 0:
             return jsonify({"ok": False, "error": "minutes must be > 0"}), 400
         if temp_c <= 0 or temp_c > 250:
@@ -3452,7 +3493,13 @@ def api_dry_hold_start():
             return jsonify({"ok": False, "error": "mixer_pwm must be 0-255"}), 400
         if mixer_dir.strip().upper() not in ("FWD", "REV"):
             return jsonify({"ok": False, "error": "dir must be FWD or REV"}), 400
-        dry_hold.start(int(minutes * 60), temp_c, mixer_pwm=mixer_pwm, mixer_dir=mixer_dir)
+        dry_hold.start(
+            int(minutes * 60),
+            temp_c,
+            mixer_pwm=mixer_pwm,
+            mixer_dir=mixer_dir,
+            keep_dryer_on_after=keep_dryer_on,
+        )
         return jsonify({"ok": True, "data": dry_hold.status()})
     except RuntimeError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400
@@ -3481,9 +3528,14 @@ def api_feed_start():
         body = request.get_json(silent=True) or {}
         poll_sec = body.get("poll_sec", None)
         vacuum_pct   = int(body.get("vacuum_pct", FEED_VACUUM_PCT))
+        allow_recovery = str(body.get("allow_recovery", "0")).strip().lower() in ("1", "true", "yes", "on")
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
-        feeder.start(vacuum_pct=vacuum_pct, poll_sec=poll_sec)
+        feeder.start(
+            vacuum_pct=vacuum_pct,
+            poll_sec=poll_sec,
+            allow_post_home_recovery=allow_recovery,
+        )
         return jsonify({"ok": True, "data": feeder.status()})
     except RuntimeError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 400

@@ -2160,14 +2160,33 @@
           temp_c: cfg.dryTempC,
           mixer_pwm: 150,
           dir: "FWD",
+          keep_dryer_on: true,
         }),
       });
 
+      let seenRunning = false;
+      const started = Date.now();
+      const startupTimeoutMs = 30000;
       while(true){
         if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
         const res = await apiArduino("/dry_hold/status", { method: "GET" });
         const d = res.data || {};
-        if(!d.running){
+        const running = !!d.running;
+        const phase = String(d.phase || "").toUpperCase();
+        if(running) seenRunning = true;
+
+        if(!seenRunning){
+          if(phase === "ERROR"){
+            throw new Error(d.message || "Dry hold failed.");
+          }
+          if(Date.now() - started > startupTimeoutMs){
+            throw new Error("Dry hold did not enter RUNNING state in time.");
+          }
+          await workflowSleep(500);
+          continue;
+        }
+
+        if(!running){
           const phase = String(d.phase || "").toUpperCase();
           if(phase === "ERROR"){
             throw new Error(d.message || "Dry hold failed.");
@@ -2264,11 +2283,12 @@
           method: "POST",
           body: JSON.stringify({
             vacuum_pct: cfg.vacPct,
+            allow_recovery: false,
           }),
         });
         await feedRefreshStatus(true);
         workflowLog(`Step 3 started: blastgates OPEN, mixer FWD @ 150, threshold watcher running (vac ${cfg.vacPct}%).`, "good");
-        workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 150; use Stop Workflow when done.", false);
+        workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open, mixer FWD @ 150, and dryer ON; use Stop Workflow when done.", false);
       }catch(err){
         if(S.workflowStopRequested){
           workflowLog("Workflow stopped by operator.", "warn");

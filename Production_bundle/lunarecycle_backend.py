@@ -337,6 +337,26 @@ class EventLogger:
             self._last_error = "failed_to_write_event_log"
             pass
 
+    def log_system_event(self, category: str, message: str, **details) -> None:
+        try:
+            with self._lock:
+                self._sync_file_state_locked()
+                event = {
+                    "ts": datetime.now(EVENT_LOG_TZ).strftime("%Y-%m-%dT%H:%M:%S"),
+                    "event": "system",
+                    "category": str(category),
+                    "message": str(message),
+                }
+                for key, value in details.items():
+                    if value is None:
+                        continue
+                    event[str(key)] = value
+                self._append_event(event)
+                self._last_error = ""
+        except Exception:
+            self._last_error = "failed_to_write_event_log"
+            pass
+
     def mark_all_off(self) -> None:
         for actuator in (
             "mixer_motor",
@@ -824,6 +844,17 @@ class ArduinoBridge:
         # while the serial line is busy with a blocking command (blast gate).
         self._last_status: dict = {}
         self._last_status_ts = 0.0
+        self._last_safety_fault: dict = {}
+
+    def _record_safety_fault(self, source: str, message: str, severity: str = "error") -> None:
+        fault = {
+            "ts": datetime.now(EVENT_LOG_TZ).strftime("%Y-%m-%dT%H:%M:%S"),
+            "source": str(source),
+            "severity": str(severity),
+            "message": str(message),
+        }
+        self._last_safety_fault = fault
+        event_logger.log_system_event("safety", str(message), source=source, severity=severity)
 
     # ── Connection ────────────────────────────────────────────────────────────
 
@@ -1000,7 +1031,7 @@ class ArduinoBridge:
             event_logger.log_actuator_action("blast_gate", "STOP")
 
     @staticmethod
-    def _track_async_firmware_line(line: str) -> None:
+    def _track_async_firmware_line_base(line: str) -> None:
         if not isinstance(line, str) or not line:
             return
 
@@ -1058,6 +1089,36 @@ class ArduinoBridge:
 
         if line == "[TC] Manual move complete":
             event_logger.log_actuator_action("tc_stepper", "MOVE_COMPLETE")
+            return
+
+    def _track_async_firmware_line(self, line: str) -> None:
+        if not isinstance(line, str) or not line:
+            return
+
+        ArduinoBridge._track_async_firmware_line_base(line)
+
+        if line.startswith("[TC][SAFE]"):
+            self._record_safety_fault("tc", line, "error")
+            return
+
+        if line.startswith("[TC] Bag not detected"):
+            self._record_safety_fault("tc", line, "warn")
+            return
+
+        if line.startswith("[TC] Bag 1 move to pick point failed"):
+            self._record_safety_fault("tc", line, "error")
+            return
+
+        if line.startswith("[TC] Vacuum not detected") or line.startswith("[TC][SAFE] Vacuum lost"):
+            self._record_safety_fault("tc", line, "error")
+            return
+
+        if line.startswith("[AGITATOR_HOME] ERROR"):
+            self._record_safety_fault("agitator", line, "error")
+            return
+
+        if line.startswith("[RPM] hall noise storm detected"):
+            self._record_safety_fault("mixer_rpm", line, "error")
             return
 
     def _reset_serial_locked(self) -> None:
@@ -1232,20 +1293,39 @@ class ArduinoBridge:
         cached=True instead of erroring, so the dashboard stays 'connected'.
         """
         if not self.connected:
-            return {"connected": False, "data": dict(self._last_status), "cached": True}
+            return {
+                "connected": False,
+                "data": dict(self._last_status),
+                "cached": True,
+                "last_safety_fault": dict(self._last_safety_fault),
+            }
         if not self._lock.acquire(timeout=0.3):
-            return {"connected": True, "data": dict(self._last_status), "cached": True}
+            return {
+                "connected": True,
+                "data": dict(self._last_status),
+                "cached": True,
+                "last_safety_fault": dict(self._last_safety_fault),
+            }
         try:
             result = self._lines_to_status(self._send_command("STATUS"))
             if result:
                 self._last_status = result
                 self._last_status_ts = time.monotonic()
-            return {"connected": True, "data": result or dict(self._last_status),
-                    "cached": not bool(result)}
+            return {
+                "connected": True,
+                "data": result or dict(self._last_status),
+                "cached": not bool(result),
+                "last_safety_fault": dict(self._last_safety_fault),
+            }
         except self.SERIAL_IO_EXCEPTIONS as exc:
             self._reset_serial_locked()
-            return {"connected": False, "data": dict(self._last_status),
-                    "cached": True, "error": str(exc)}
+            return {
+                "connected": False,
+                "data": dict(self._last_status),
+                "cached": True,
+                "error": str(exc),
+                "last_safety_fault": dict(self._last_safety_fault),
+            }
         finally:
             self._lock.release()
 
@@ -2072,6 +2152,7 @@ def api_arduino_status():
         "connected": snap["connected"],
         "cached": snap.get("cached", False),
         "data": snap.get("data", {}),
+        "last_safety_fault": snap.get("last_safety_fault", {}),
     })
 
 

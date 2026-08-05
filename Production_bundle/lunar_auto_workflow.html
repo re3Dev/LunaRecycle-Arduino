@@ -129,6 +129,7 @@
 
         <div class="hint" id="workflowModeHint">SR uses fixed PE/PA unit counts.</div>
         <div class="hint" id="workflowStatusText">Ready.</div>
+        <div class="hint" id="workflowSafetyText">Safety: none</div>
         <div class="log" id="workflowLog" aria-label="Workflow log"></div>
       </div>
     </section>
@@ -144,6 +145,8 @@
       workflowStopRequested: false,
       workflowPhase: "IDLE",
       workflowMsg: "Ready.",
+      lastSafetyFault: null,
+      lastSafetyFaultKey: "",
       srPolling: false,
       dryPolling: false,
       feedPolling: false,
@@ -214,6 +217,10 @@
 
     function render(){
       setText("workflowStatusText", S.workflowMsg || "Ready.");
+      const safetyText = S.lastSafetyFault && S.lastSafetyFault.message
+        ? `Safety: ${S.lastSafetyFault.message}`
+        : "Safety: none";
+      setText("workflowSafetyText", safetyText);
       setText("wfDryPlannedText", S.dryPlanned);
       setText("wfDryElapsedText", S.dryElapsed);
       setText("wfDryRemainingText", S.dryRemain);
@@ -235,6 +242,19 @@
       try{
         const res = await apiArduino("/arduino/status", { method: "GET" }, 8000);
         S.arduinoConnected = !!res.connected;
+        const fault = res.last_safety_fault && typeof res.last_safety_fault === "object"
+          ? res.last_safety_fault
+          : null;
+        S.lastSafetyFault = fault;
+        const faultKey = fault ? `${fault.ts || ""}|${fault.source || ""}|${fault.message || ""}` : "";
+        if(fault && faultKey && faultKey !== S.lastSafetyFaultKey){
+          S.lastSafetyFaultKey = faultKey;
+          const severity = String(fault.severity || "warn").toLowerCase();
+          const kind = severity === "error" ? "bad" : severity === "warn" ? "warn" : "info";
+          const msg = String(fault.message || "Safety event");
+          const src = String(fault.source || "system").toUpperCase();
+          workflowLog(`Safety event (${src}): ${msg}`, kind);
+        }
       }catch(err){
         S.arduinoConnected = false;
         if(!silent) workflowLog(`Arduino status failed: ${err.message}`, "bad");

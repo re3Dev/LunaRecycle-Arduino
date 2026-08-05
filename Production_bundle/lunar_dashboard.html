@@ -1118,6 +1118,7 @@
             </div>
             <div class="hint" id="workflowModeHint">SR uses fixed PE/PA unit counts.</div>
             <div class="hint" id="workflowStatusText">Ready.</div>
+            <div class="hint" id="workflowSafetyText">Safety: none</div>
             <div class="log" id="workflowLog" style="margin-top:6px; max-height:110px;" aria-label="Workflow log"></div>
           </div>
         </section>
@@ -1223,6 +1224,8 @@
       workflowStopRequested: false,
       workflowPhase: "IDLE",
       workflowMsg: "Ready.",
+      lastSafetyFault: null,
+      lastSafetyFaultKey: "",
 
       moonraker: {
         connected: false,
@@ -1515,6 +1518,22 @@
         if(d.motor_pwm    !== undefined) S.motorPwm    = Number(d.motor_pwm);
         if(d.motor_dir    !== undefined) S.motorDir    = d.motor_dir;
         if(d.mixer_rpm    !== undefined) S.mixerRpm    = d.mixer_rpm;
+        const fault = res.last_safety_fault && typeof res.last_safety_fault === "object"
+          ? res.last_safety_fault
+          : null;
+        S.lastSafetyFault = fault;
+        const faultKey = fault ? `${fault.ts || ""}|${fault.source || ""}|${fault.message || ""}` : "";
+        if(fault && faultKey && faultKey !== S.lastSafetyFaultKey){
+          S.lastSafetyFaultKey = faultKey;
+          const severity = String(fault.severity || "warn").toLowerCase();
+          const kind = severity === "error" ? "bad" : severity === "warn" ? "warn" : "info";
+          const msg = String(fault.message || "Safety event");
+          const src = String(fault.source || "system").toUpperCase();
+          log(`Safety event (${src})`, kind, msg);
+          if(S.workflowRunning){
+            workflowLog(`Safety event (${src}): ${msg}`, kind);
+          }
+        }
         const statusEl = $("#arduinoStatusText");
         if(res.data && Object.keys(res.data).length > 0){
           statusEl.textContent = Object.entries(res.data).map(([k,v])=>`${k}=${v}`).join("  ");
@@ -1721,6 +1740,10 @@
       }
 
       setText("workflowStatusText", S.workflowMsg || "Ready.");
+      const safetyText = S.lastSafetyFault && S.lastSafetyFault.message
+        ? `Safety: ${S.lastSafetyFault.message}`
+        : "Safety: none";
+      setText("workflowSafetyText", safetyText);
       const wchip = document.getElementById("workflowChip");
       if(wchip){
         const phase = String(S.workflowPhase || "IDLE");

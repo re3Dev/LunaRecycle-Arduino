@@ -363,6 +363,19 @@
       }
     }
 
+    async function workflowPrimeShredderBeforeSR(ms){
+      const total = Math.max(0, Number(ms) || 0);
+      workflowSet("SIZE REDUCTION", `Priming shredder for ${Math.round(total / 1000)}s...`, true);
+      try{ await apiArduino("/shredder/fwd", { method: "POST" }); }catch(_){ }
+      try{ await apiArduino("/gate/open", { method: "POST" }); }catch(_){ }
+      try{ await apiArduino("/shredder/on", { method: "POST" }); }catch(_){ }
+      workflowLog(`Pre-run prime: shredder ON with gates OPEN for ${Math.round(total / 1000)}s.`, "info");
+      if(total > 0){
+        await workflowSleep(total);
+      }
+      workflowLog("Pre-run prime complete. Starting pick/place size-reduction.", "good");
+    }
+
     async function workflowRunShredderTailDuringDry(ms){
       const total = Math.max(0, Number(ms) || 0);
       try{ await apiArduino("/shredder/fwd", { method: "POST" }); }catch(_){ }
@@ -568,6 +581,7 @@
         workflowLog("TC_HOME complete (conveyor READY).", "good");
 
         workflowSet("SIZE REDUCTION", "Running Step 1/3...", true);
+        await workflowPrimeShredderBeforeSR(30000);
         await apiArduino("/motor/set", {
           method: "POST",
           body: JSON.stringify({ speed: 150, dir: "FWD" }),

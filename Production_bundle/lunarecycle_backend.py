@@ -163,7 +163,8 @@ MOONRAKER_EXTRUDER_UNITS_PER_ROTATION = float(os.environ.get("LUNA_MOONRAKER_EXT
 RATIO_TEST_POLL_SEC = float(os.environ.get("LUNA_RATIO_TEST_POLL_SEC", "0.5"))
 RATIO_TEST_VACUUM_BOOST_SEC = float(os.environ.get("LUNA_RATIO_TEST_VACUUM_BOOST_SEC", "5.0"))
 RATIO_TEST_VACUUM_IDLE_PCT = int(os.environ.get("LUNA_RATIO_TEST_VACUUM_IDLE_PCT", "15"))
-RATIO_TEST_MIX_PWM = int(os.environ.get("LUNA_RATIO_TEST_MIX_PWM", "150"))
+RATIO_TEST_MIX_PWM = int(os.environ.get("LUNA_RATIO_TEST_MIX_PWM", "200"))
+RATIO_TEST_MIX_PWM_REV = int(os.environ.get("LUNA_RATIO_TEST_MIX_PWM_REV", "255"))
 RATIO_TEST_BG_SETTLE_SEC = float(os.environ.get("LUNA_RATIO_TEST_BG_SETTLE_SEC", "5.0"))
 RATIO_TEST_STOP_SETTLE_SEC = float(os.environ.get("LUNA_RATIO_TEST_STOP_SETTLE_SEC", "5.0"))
 RATIO_TEST_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_TEST_REVERSE_SEC", "3.0"))
@@ -3369,7 +3370,7 @@ class ExtrusionRatioTestController:
         self._arduino("MOTOR_STOP")
         if self._stop.wait(self.post_home_recovery_stop1_sec):
             return True
-        self._set_mixer(RATIO_TEST_MIX_PWM, "REV")
+        self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
         if self._stop.wait(self.post_home_recovery_reverse_sec):
             return True
         self._arduino("MOTOR_STOP")

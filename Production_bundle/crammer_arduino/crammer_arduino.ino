@@ -36,7 +36,7 @@ const float ACCEL = 150.0;           // Linear acceleration rate (RPM/sec)
 // ----------------------------------------
 // DETERMINISTIC CLUTCH CONFIGURATION
 // ----------------------------------------
-const float LAG_START = 0.0;        // Hardcoded baseline free-running noise floor from spreadsheet
+const float LAG_START = 26.0;        // Hardcoded baseline free-running noise floor from spreadsheet
 float lagStop;                       // Calculated ONCE during setup based on MAX_RPM
 
 // ---------------------------------------------------------

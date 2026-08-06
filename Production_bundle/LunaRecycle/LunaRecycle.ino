@@ -271,6 +271,9 @@ const unsigned long TC_postPickLiftSettleMs  = 200;
 const unsigned long TC_bag2ExtraLiftSettleMs = 400;
 const unsigned long TC_minTravelAfterUpMs    = 250;
 const int           TC_servoTravelMaxDeg     = 10;
+const int           TC_servoTravelAngleToleranceDeg = 5;   // allow small command-angle slack before blocking X travel
+const int           TC_servoTravelSafeRetryCount = 3;      // recovery retries before declaring interlock failure
+const unsigned long TC_servoTravelSafeRetryDelayMs = 100;  // pause between retries
 const int TC_vacuumConfirmSamples     = 3;
 const unsigned long TC_vacuumConfirmDelayMs = 1;
 const int TC_vacuumFastConfirmSamples = 2;
@@ -974,7 +977,9 @@ void tcReturnServoToUp() {
 }
 
 bool tcServoReadyForTravel() {
-  if (tcCurrentServoAngle > TC_servoTravelMaxDeg) {
+  // No direct servo encoder is available; treat the commanded angle as the
+  // best available position signal and allow a small tolerance band.
+  if (tcCurrentServoAngle > (TC_servoTravelMaxDeg + TC_servoTravelAngleToleranceDeg)) {
     return false;
   }
   return (unsigned long)(millis() - tcServoLastUpMs) >= TC_minTravelAfterUpMs;
@@ -985,12 +990,26 @@ bool tcEnsureServoTravelSafe() {
     return true;
   }
 
-  Serial.println(F("[TC][SAFE] Servo not travel-safe; raising before X move"));
-  tcReturnServoToUp();
-  if (TC_minTravelAfterUpMs > 0) {
-    delay(TC_minTravelAfterUpMs);
+  for (int attempt = 1; attempt <= TC_servoTravelSafeRetryCount; attempt++) {
+    Serial.print(F("[TC][SAFE] Servo not travel-safe; recovery attempt "));
+    Serial.print(attempt);
+    Serial.print(F("/"));
+    Serial.println(TC_servoTravelSafeRetryCount);
+
+    tcReturnServoToUp();
+    if (TC_minTravelAfterUpMs > 0) {
+      delay(TC_minTravelAfterUpMs);
+    }
+
+    if (tcServoReadyForTravel()) {
+      return true;
+    }
+
+    if (attempt < TC_servoTravelSafeRetryCount && TC_servoTravelSafeRetryDelayMs > 0) {
+      delay(TC_servoTravelSafeRetryDelayMs);
+    }
   }
-  return tcServoReadyForTravel();
+  return false;
 }
 
 void tcMoveTo(float targetMm, TCState nextState) {
@@ -1005,7 +1024,10 @@ void tcMoveTo(float targetMm, TCState nextState) {
     TC_stepper.stop();
     TC_stepper.disableOutputs();
     tcState = TC_READY;
-    Serial.println(F("[TC][SAFE] Servo travel interlock failed - motion halted"));
+    Serial.print(F("[TC][SAFE] Servo travel interlock failed - motion halted angle="));
+    Serial.print(tcCurrentServoAngle);
+    Serial.print(F(" up_age_ms="));
+    Serial.println((unsigned long)(millis() - tcServoLastUpMs));
     return;
   }
 

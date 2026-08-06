@@ -3364,15 +3364,42 @@ class ExtrusionRatioTestController:
             self.phase = "RECOVERY"
             self.message = (
                 f"Post-home load did not exceed {recover_threshold:.1f}% in {check_sec:.1f}s; "
-                f"running stop/reverse/stop recovery."
+                f"running stop/reverse-until-recovered/stop recovery."
             )
 
         self._arduino("MOTOR_STOP")
         if self._stop.wait(self.post_home_recovery_stop1_sec):
-            return True
+            return True, 0
         self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
-        if self._stop.wait(self.post_home_recovery_reverse_sec):
-            return True
+
+        # Hold reverse until the crammer load recovers above threshold.
+        reverse_started = time.monotonic()
+        min_reverse_sec = max(0.0, float(self.post_home_recovery_reverse_sec))
+        next_home_at = reverse_started + max(0.1, float(self.low_load_retrigger_sec))
+        while not self._stop.is_set():
+            _, _, load_pct = self._sample_crammer()
+            if load_pct > recover_threshold and (time.monotonic() - reverse_started) >= min_reverse_sec:
+                break
+
+            # While reverse recovery is active, keep running air-lock homes on
+            # the normal retrigger cadence until load recovers.
+            now = time.monotonic()
+            if now >= next_home_at:
+                try:
+                    response = self._arduino("AGITATOR_HOME")
+                    with self._lock:
+                        self.last_home_response = response
+                        self.home_sequences_completed += 1
+                        self.low_load_home_count += 1
+                except Exception:
+                    pass
+                next_home_at = now + max(0.1, float(self.low_load_retrigger_sec))
+
+            self._stop.wait(self.poll_sec)
+
+        if self._stop.is_set():
+            return True, 0
+
         self._arduino("MOTOR_STOP")
         if self._stop.wait(self.post_home_recovery_stop2_sec):
             with self._lock:

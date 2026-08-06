@@ -2002,6 +2002,24 @@
       }
     }
 
+    async function workflowRunShredderTailDuringDry(ms){
+      const total = Math.max(0, Number(ms) || 0);
+      try{ await apiArduino("/shredder/fwd", { method: "POST" }); }catch(_){ }
+      try{ await apiArduino("/shredder/on", { method: "POST" }); }catch(_){ }
+      try{ await apiArduino("/gate/open", { method: "POST" }); }catch(_){ }
+      workflowLog(`Drying started: keeping shredder ON for ${Math.round(total / 1000)}s tail.`, "info");
+
+      if(total > 0){
+        try{ await workflowSleep(total); }
+        catch(_){ return; }
+      }
+      if(S.workflowStopRequested) return;
+
+      try{ await apiArduino("/shredder/off", { method: "POST" }); }catch(_){ }
+      try{ await apiArduino("/gate/close", { method: "POST" }); }catch(_){ }
+      workflowLog("Shredder tail complete: shredder OFF and gates CLOSED.", "good");
+    }
+
     async function workflowStopAll(){
       const calls = ["/sr/stop", "/dry/stop", "/dry_hold/stop", "/feed/stop"];
       for(const path of calls){
@@ -2298,7 +2316,9 @@
         await workflowEnsureDryerLive();
         workflowSet("DRYING", "Running Step 2/3...", true);
         workflowLog("Step 2 started: Dryer hold active (mixer stays FWD @ 150).", "good");
+        const shredderTailPromise = workflowRunShredderTailDuringDry(60000);
         await workflowRunDryHold(cfg);
+        await shredderTailPromise;
         workflowLog("Step 2 complete.", "good");
 
         workflowSet("FEED", "Running Step 3/3...", true);

@@ -3476,6 +3476,10 @@ class ExtrusionRatioTestController:
                 self.home_sequences_completed += 1
                 self.low_load_home_count += 1
 
+            # Resume the barrel immediately after the home so the recovery
+            # check does not leave the mixer parked for the whole window.
+            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+
             # Re-check load after Stage 2 for a longer hold window before escalating.
             stage2_check_sec = max(check_sec, self.post_home_recovery_stage2_check_sec)
             stage2_deadline = time.monotonic() + stage2_check_sec

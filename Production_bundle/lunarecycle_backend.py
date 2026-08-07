@@ -175,6 +175,7 @@ RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES = int(os.environ.get("LUNA_RATIO_POST_HO
 RATIO_POST_HOME_RECOVERY_STOP1_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STOP1_SEC", "3.0"))
 RATIO_POST_HOME_RECOVERY_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_REVERSE_SEC", "5.0"))
 RATIO_POST_HOME_RECOVERY_STOP2_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STOP2_SEC", "3.0"))
+RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC", "15.0"))
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
 MOONRAKER_FE_RETRY_SEC = float(os.environ.get("LUNA_MOONRAKER_FE_RETRY_SEC", "5.0"))
@@ -3181,6 +3182,7 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_stop1_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP1_SEC))
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
+        self.post_home_recovery_stage2_check_sec = max(1.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC))
         self.allow_post_home_recovery = True
         self.last_post_home_recovery_applied = False
         self.post_home_unrecovered_streak = 0
@@ -3311,6 +3313,13 @@ class ExtrusionRatioTestController:
                 return True
         return False
 
+    @staticmethod
+    def _home_error_line(response_lines: list[str]) -> str:
+        for line in response_lines or []:
+            if isinstance(line, str) and line.startswith("[AGITATOR_HOME] ERROR"):
+                return line
+        return ""
+
     def _trigger_home(self, rotations_total: float, reason: str):
         with self._lock:
             self.phase = "HOMING"
@@ -3415,8 +3424,9 @@ class ExtrusionRatioTestController:
             return True, 0
         self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
-        # Re-check load after Stage 2 before escalating to Stage 3.
-        stage2_deadline = time.monotonic() + check_sec
+        # Re-check load after Stage 2 for a longer hold window before escalating.
+        stage2_check_sec = max(check_sec, self.post_home_recovery_stage2_check_sec)
+        stage2_deadline = time.monotonic() + stage2_check_sec
         while not self._stop.is_set() and time.monotonic() < stage2_deadline:
             _, _, load_pct = self._sample_crammer()
             if load_pct > recover_threshold:
@@ -3430,6 +3440,37 @@ class ExtrusionRatioTestController:
 
         if self._stop.is_set():
             return True, 0
+
+        # Before Stage 3, prove the air-lock can still complete a home.
+        with self._lock:
+            self.phase = "RECOVERY"
+            self.message = (
+                "Stage 2 did not recover load; validating air-lock home before Stage 3."
+            )
+
+        preflight_response = self._arduino("AGITATOR_HOME")
+        if not self._home_completed(preflight_response):
+            err = self._home_error_line(preflight_response)
+            err_l = err.lower()
+            if (not preflight_response) or ("timeout" in err_l) or ("fault" in err_l) or ("driver" in err_l):
+                raise RuntimeError(
+                    "Air-lock preflight home failed after Stage 2; aborting recovery "
+                    f"to avoid repeated home timeouts. response={preflight_response}"
+                )
+            # Busy/overlap should not escalate; return to watch mode and retry later.
+            with self._lock:
+                self.last_home_response = preflight_response
+                self.phase = "WATCHING"
+                self.message = (
+                    "Air-lock busy before Stage 3; skipped escalation and will retry "
+                    "on next low-load trigger."
+                )
+            return True, 0
+
+        with self._lock:
+            self.last_home_response = preflight_response
+            self.home_sequences_completed += 1
+            self.low_load_home_count += 1
 
         # Stage 3: sustained reverse + periodic homing until recovery.
         with self._lock:
@@ -3445,6 +3486,7 @@ class ExtrusionRatioTestController:
         reverse_started = time.monotonic()
         min_reverse_sec = max(0.0, float(self.post_home_recovery_reverse_sec))
         next_home_at = reverse_started + max(0.1, float(self.low_load_retrigger_sec))
+        stage3_home_failures = 0
         while not self._stop.is_set():
             _, _, load_pct = self._sample_crammer()
             if load_pct > recover_threshold and (time.monotonic() - reverse_started) >= min_reverse_sec:
@@ -3459,12 +3501,21 @@ class ExtrusionRatioTestController:
                     try:
                         response = self._arduino("AGITATOR_HOME")
                         if self._home_completed(response):
+                            stage3_home_failures = 0
                             with self._lock:
                                 self.last_home_response = response
                                 self.home_sequences_completed += 1
                                 self.low_load_home_count += 1
+                        else:
+                            stage3_home_failures += 1
+                            err = self._home_error_line(response).lower()
+                            if ("timeout" in err) or ("fault" in err) or ("driver" in err) or stage3_home_failures >= 2:
+                                raise RuntimeError(
+                                    "Air-lock home failed during Stage 3 recovery; "
+                                    f"aborting to prevent repeated fault retries. response={response}"
+                                )
                     except Exception:
-                        pass
+                        raise
                 next_home_at = now + max(0.1, float(self.low_load_retrigger_sec))
 
             self._stop.wait(self.poll_sec)
@@ -3591,6 +3642,7 @@ class ExtrusionRatioTestController:
                 "post_home_recovery_stop1_sec": self.post_home_recovery_stop1_sec,
                 "post_home_recovery_reverse_sec": self.post_home_recovery_reverse_sec,
                 "post_home_recovery_stop2_sec": self.post_home_recovery_stop2_sec,
+                "post_home_recovery_stage2_check_sec": self.post_home_recovery_stage2_check_sec,
                 "allow_post_home_recovery": self.allow_post_home_recovery,
                 "last_post_home_recovery_applied": self.last_post_home_recovery_applied,
                 "post_home_unrecovered_streak": self.post_home_unrecovered_streak,

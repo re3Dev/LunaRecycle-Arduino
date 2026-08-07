@@ -3430,7 +3430,7 @@ class ExtrusionRatioTestController:
 
         if self.use_post_home_recovery_stage2:
             # Stage 2: one fixed stop/reverse/stop burst, then resume forward and
-            # check again for recovery before escalating.
+            # home the air-lock right as forward resumes.
             self._arduino("MOTOR_STOP")
             if self._stop.wait(self.post_home_recovery_stop1_sec):
                 return True, 0
@@ -3441,6 +3441,35 @@ class ExtrusionRatioTestController:
             if self._stop.wait(self.post_home_recovery_stop2_sec):
                 return True, 0
             self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+
+            # Home immediately after Stage 2 returns to forward so the next
+            # recovery step does not wait until the later Stage 3 dwell.
+            with self._lock:
+                self.phase = "RECOVERY"
+                self.message = "Stage 2 resumed forward; running air-lock home now."
+
+            stage2_home_response = self._arduino("AGITATOR_HOME")
+            if not self._home_completed(stage2_home_response):
+                err = self._home_error_line(stage2_home_response)
+                err_l = err.lower()
+                if (not stage2_home_response) or ("timeout" in err_l) or ("fault" in err_l) or ("driver" in err_l):
+                    raise RuntimeError(
+                        "Air-lock home failed immediately after Stage 2 forward resume; "
+                        f"aborting recovery. response={stage2_home_response}"
+                    )
+                with self._lock:
+                    self.last_home_response = stage2_home_response
+                    self.phase = "WATCHING"
+                    self.message = (
+                        "Air-lock busy immediately after Stage 2 forward resume; "
+                        "will retry on next low-load trigger."
+                    )
+                return True, 0
+
+            with self._lock:
+                self.last_home_response = stage2_home_response
+                self.home_sequences_completed += 1
+                self.low_load_home_count += 1
 
             # Re-check load after Stage 2 for a longer hold window before escalating.
             stage2_check_sec = max(check_sec, self.post_home_recovery_stage2_check_sec)
@@ -3461,43 +3490,11 @@ class ExtrusionRatioTestController:
         else:
             self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
-        # Give the system a tunable pause before Stage 3 starts homing.
+        # Give the system a tunable pause before Stage 3 starts sustaining
+        # reverse recovery.
         self._arduino("MOTOR_STOP")
         if self._stop.wait(self.post_home_recovery_stage3_stop_sec):
             return True, 0
-
-        # Before Stage 3, prove the air-lock can still complete a home.
-        with self._lock:
-            self.phase = "RECOVERY"
-            self.message = (
-                "Stage 2 skipped; validating air-lock home before Stage 3."
-                if not self.use_post_home_recovery_stage2
-                else "Stage 2 did not recover load; validating air-lock home before Stage 3."
-            )
-
-        preflight_response = self._arduino("AGITATOR_HOME")
-        if not self._home_completed(preflight_response):
-            err = self._home_error_line(preflight_response)
-            err_l = err.lower()
-            if (not preflight_response) or ("timeout" in err_l) or ("fault" in err_l) or ("driver" in err_l):
-                raise RuntimeError(
-                    "Air-lock preflight home failed after Stage 2; aborting recovery "
-                    f"to avoid repeated home timeouts. response={preflight_response}"
-                )
-            # Busy/overlap should not escalate; return to watch mode and retry later.
-            with self._lock:
-                self.last_home_response = preflight_response
-                self.phase = "WATCHING"
-                self.message = (
-                    "Air-lock busy before Stage 3; skipped escalation and will retry "
-                    "on next low-load trigger."
-                )
-            return True, 0
-
-        with self._lock:
-            self.last_home_response = preflight_response
-            self.home_sequences_completed += 1
-            self.low_load_home_count += 1
 
         # Stage 3: sustained reverse + periodic homing until recovery.
         with self._lock:

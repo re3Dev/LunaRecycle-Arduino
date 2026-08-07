@@ -3206,6 +3206,22 @@ class ExtrusionRatioTestController:
             direction = "FWD"
         return self._arduino(f"MOTOR_SET {pwm} {direction}")
 
+    def _agitator_state(self) -> str:
+        try:
+            lines = self._arduino("AGITATOR_STATUS")
+        except Exception:
+            return ""
+        for line in lines:
+            if not isinstance(line, str) or not line.startswith("[AGITATOR]"):
+                continue
+            for part in line.replace("[AGITATOR]", "").strip().split():
+                if "=" not in part:
+                    continue
+                k, _, v = part.partition("=")
+                if k.strip().lower() == "state":
+                    return str(v).strip().upper()
+        return ""
+
     def start(
         self,
         poll_sec: Optional[float] = None,
@@ -3288,14 +3304,33 @@ class ExtrusionRatioTestController:
             self.crammer_load_pct = load_pct
         return connected, running, load_pct
 
+    @staticmethod
+    def _home_completed(response_lines: list[str]) -> bool:
+        for line in response_lines or []:
+            if isinstance(line, str) and line.startswith("[AGITATOR_HOME] homing complete"):
+                return True
+        return False
+
     def _trigger_home(self, rotations_total: float, reason: str):
         with self._lock:
             self.phase = "HOMING"
             self.message = reason
 
         response = self._arduino("AGITATOR_HOME")
+        home_ok = self._home_completed(response)
         # Re-assert the requested continuous feed behavior after each home.
         self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+
+        if not home_ok:
+            with self._lock:
+                self.last_home_response = response
+                self.phase = "WATCHING"
+                self.message = (
+                    "Air-lock home did not complete (busy/error); "
+                    "will retry on the next low-load trigger."
+                )
+            return
+
         recovery_applied, pending_homes = self._post_home_recovery_if_needed()
 
         with self._lock:
@@ -3419,14 +3454,17 @@ class ExtrusionRatioTestController:
             # the normal retrigger cadence until load recovers.
             now = time.monotonic()
             if now >= next_home_at:
-                try:
-                    response = self._arduino("AGITATOR_HOME")
-                    with self._lock:
-                        self.last_home_response = response
-                        self.home_sequences_completed += 1
-                        self.low_load_home_count += 1
-                except Exception:
-                    pass
+                state = self._agitator_state()
+                if state in ("", "IDLE"):
+                    try:
+                        response = self._arduino("AGITATOR_HOME")
+                        if self._home_completed(response):
+                            with self._lock:
+                                self.last_home_response = response
+                                self.home_sequences_completed += 1
+                                self.low_load_home_count += 1
+                    except Exception:
+                        pass
                 next_home_at = now + max(0.1, float(self.low_load_retrigger_sec))
 
             self._stop.wait(self.poll_sec)

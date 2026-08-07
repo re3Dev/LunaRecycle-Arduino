@@ -1690,6 +1690,12 @@ void agitatorHomeFromHallRisingEdge() {
 }
 
 void agitatorStartHome(bool reverseSeek = false) {
+  if (agitatorRunState != AGITATOR_IDLE) {
+    Serial.print(F("[AGITATOR_HOME] ERROR: busy state="));
+    Serial.println(agitatorStateName());
+    return;
+  }
+
   agitatorDisableMotion();
   agitatorMotionStartMs = millis();
   agitatorHallEdgeDetected = false;

@@ -40,6 +40,14 @@ from pymodbus.client import ModbusSerialClient
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
+
+def _parse_optional_bool(value: object) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Configuration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -176,6 +184,7 @@ RATIO_POST_HOME_RECOVERY_STOP1_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_
 RATIO_POST_HOME_RECOVERY_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_REVERSE_SEC", "5.0"))
 RATIO_POST_HOME_RECOVERY_STOP2_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STOP2_SEC", "3.0"))
 RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC", "15.0"))
+RATIO_USE_POST_HOME_RECOVERY_STAGE2 = _env_flag("LUNA_RATIO_USE_POST_HOME_RECOVERY_STAGE2", "1")
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
 MOONRAKER_FE_RETRY_SEC = float(os.environ.get("LUNA_MOONRAKER_FE_RETRY_SEC", "5.0"))
@@ -3109,11 +3118,13 @@ class FeedController:
         vacuum_pct: int,
         poll_sec: Optional[float] = None,
         allow_post_home_recovery: bool = False,
+        use_post_home_recovery_stage2: Optional[bool] = None,
     ) -> None:
         ratio_test.start(
             poll_sec=FEED_POLL_SEC if poll_sec is None else max(0.1, float(poll_sec)),
             vacuum_pct=max(0, min(100, int(vacuum_pct))),
             allow_post_home_recovery=bool(allow_post_home_recovery),
+            use_post_home_recovery_stage2=use_post_home_recovery_stage2,
         )
 
     def stop(self) -> None:
@@ -3183,6 +3194,7 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
         self.post_home_recovery_stage2_check_sec = max(1.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC))
+        self.use_post_home_recovery_stage2 = bool(RATIO_USE_POST_HOME_RECOVERY_STAGE2)
         self.allow_post_home_recovery = True
         self.last_post_home_recovery_applied = False
         self.post_home_unrecovered_streak = 0
@@ -3229,6 +3241,7 @@ class ExtrusionRatioTestController:
         poll_sec: Optional[float] = None,
         vacuum_pct: Optional[int] = None,
         allow_post_home_recovery: Optional[bool] = None,
+        use_post_home_recovery_stage2: Optional[bool] = None,
     ):
         with self._lock:
             if self.running:
@@ -3242,6 +3255,8 @@ class ExtrusionRatioTestController:
                 self.vacuum_pct = max(0, min(100, int(vacuum_pct)))
             if allow_post_home_recovery is not None:
                 self.allow_post_home_recovery = bool(allow_post_home_recovery)
+            if use_post_home_recovery_stage2 is not None:
+                self.use_post_home_recovery_stage2 = bool(use_post_home_recovery_stage2)
             self.running = True
             self.phase = "ARMED"
             self.started_at = time.monotonic()
@@ -3411,41 +3426,46 @@ class ExtrusionRatioTestController:
                 f"running staged recovery (fixed reverse burst, then sustained reverse if needed)."
             )
 
-        # Stage 2: one fixed stop/reverse/stop burst, then resume forward and
-        # check again for recovery before escalating.
-        self._arduino("MOTOR_STOP")
-        if self._stop.wait(self.post_home_recovery_stop1_sec):
-            return True, 0
-        self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
-        if self._stop.wait(self.post_home_recovery_reverse_sec):
-            return True, 0
-        self._arduino("MOTOR_STOP")
-        if self._stop.wait(self.post_home_recovery_stop2_sec):
-            return True, 0
-        self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
-
-        # Re-check load after Stage 2 for a longer hold window before escalating.
-        stage2_check_sec = max(check_sec, self.post_home_recovery_stage2_check_sec)
-        stage2_deadline = time.monotonic() + stage2_check_sec
-        while not self._stop.is_set() and time.monotonic() < stage2_deadline:
-            _, _, load_pct = self._sample_crammer()
-            if load_pct > recover_threshold:
-                with self._lock:
-                    self.post_home_unrecovered_streak = 0
+        if self.use_post_home_recovery_stage2:
+            # Stage 2: one fixed stop/reverse/stop burst, then resume forward and
+            # check again for recovery before escalating.
+            self._arduino("MOTOR_STOP")
+            if self._stop.wait(self.post_home_recovery_stop1_sec):
                 return True, 0
-            remaining = stage2_deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            self._stop.wait(min(self.poll_sec, remaining))
+            self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
+            if self._stop.wait(self.post_home_recovery_reverse_sec):
+                return True, 0
+            self._arduino("MOTOR_STOP")
+            if self._stop.wait(self.post_home_recovery_stop2_sec):
+                return True, 0
+            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
-        if self._stop.is_set():
-            return True, 0
+            # Re-check load after Stage 2 for a longer hold window before escalating.
+            stage2_check_sec = max(check_sec, self.post_home_recovery_stage2_check_sec)
+            stage2_deadline = time.monotonic() + stage2_check_sec
+            while not self._stop.is_set() and time.monotonic() < stage2_deadline:
+                _, _, load_pct = self._sample_crammer()
+                if load_pct > recover_threshold:
+                    with self._lock:
+                        self.post_home_unrecovered_streak = 0
+                    return True, 0
+                remaining = stage2_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._stop.wait(min(self.poll_sec, remaining))
+
+            if self._stop.is_set():
+                return True, 0
+        else:
+            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
         # Before Stage 3, prove the air-lock can still complete a home.
         with self._lock:
             self.phase = "RECOVERY"
             self.message = (
-                "Stage 2 did not recover load; validating air-lock home before Stage 3."
+                "Stage 2 skipped; validating air-lock home before Stage 3."
+                if not self.use_post_home_recovery_stage2
+                else "Stage 2 did not recover load; validating air-lock home before Stage 3."
             )
 
         preflight_response = self._arduino("AGITATOR_HOME")
@@ -3643,6 +3663,7 @@ class ExtrusionRatioTestController:
                 "post_home_recovery_reverse_sec": self.post_home_recovery_reverse_sec,
                 "post_home_recovery_stop2_sec": self.post_home_recovery_stop2_sec,
                 "post_home_recovery_stage2_check_sec": self.post_home_recovery_stage2_check_sec,
+                "use_post_home_recovery_stage2": self.use_post_home_recovery_stage2,
                 "allow_post_home_recovery": self.allow_post_home_recovery,
                 "last_post_home_recovery_applied": self.last_post_home_recovery_applied,
                 "post_home_unrecovered_streak": self.post_home_unrecovered_streak,
@@ -3665,6 +3686,7 @@ def api_extrusion_ratio_test_start():
         ratio_test.start(
             poll_sec=body.get("poll_sec"),
             vacuum_pct=body.get("vacuum_pct"),
+            use_post_home_recovery_stage2=_parse_optional_bool(body.get("use_post_home_recovery_stage2")),
         )
         return jsonify({"ok": True, "data": ratio_test.status()})
     except Exception as exc:
@@ -3770,12 +3792,14 @@ def api_feed_start():
         poll_sec = body.get("poll_sec", None)
         vacuum_pct   = int(body.get("vacuum_pct", FEED_VACUUM_PCT))
         allow_recovery = str(body.get("allow_recovery", "0")).strip().lower() in ("1", "true", "yes", "on")
+        use_stage2 = _parse_optional_bool(body.get("use_post_home_recovery_stage2"))
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
         feeder.start(
             vacuum_pct=vacuum_pct,
             poll_sec=poll_sec,
             allow_post_home_recovery=allow_recovery,
+            use_post_home_recovery_stage2=use_stage2,
         )
         return jsonify({"ok": True, "data": feeder.status()})
     except RuntimeError as exc:

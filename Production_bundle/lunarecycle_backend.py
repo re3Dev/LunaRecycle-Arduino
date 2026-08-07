@@ -3364,12 +3364,46 @@ class ExtrusionRatioTestController:
             self.phase = "RECOVERY"
             self.message = (
                 f"Post-home load did not exceed {recover_threshold:.1f}% in {check_sec:.1f}s; "
-                f"running stop/reverse-until-recovered/stop recovery."
+                f"running staged recovery (fixed reverse burst, then sustained reverse if needed)."
             )
 
+        # Stage 2: one fixed stop/reverse/stop burst, then resume forward and
+        # check again for recovery before escalating.
         self._arduino("MOTOR_STOP")
         if self._stop.wait(self.post_home_recovery_stop1_sec):
             return True, 0
+        self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
+        if self._stop.wait(self.post_home_recovery_reverse_sec):
+            return True, 0
+        self._arduino("MOTOR_STOP")
+        if self._stop.wait(self.post_home_recovery_stop2_sec):
+            return True, 0
+        self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+
+        # Re-check load after Stage 2 before escalating to Stage 3.
+        stage2_deadline = time.monotonic() + check_sec
+        while not self._stop.is_set() and time.monotonic() < stage2_deadline:
+            _, _, load_pct = self._sample_crammer()
+            if load_pct > recover_threshold:
+                with self._lock:
+                    self.post_home_unrecovered_streak = 0
+                return True, 0
+            remaining = stage2_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._stop.wait(min(self.poll_sec, remaining))
+
+        if self._stop.is_set():
+            return True, 0
+
+        # Stage 3: sustained reverse + periodic homing until recovery.
+        with self._lock:
+            self.phase = "RECOVERY"
+            self.message = (
+                f"Stage 2 did not recover load > {recover_threshold:.1f}%; "
+                f"running sustained reverse with periodic homing until recovered."
+            )
+
         self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
 
         # Hold reverse until the crammer load recovers above threshold.

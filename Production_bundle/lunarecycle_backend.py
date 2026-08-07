@@ -3196,7 +3196,6 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
         self.post_home_recovery_stage2_check_sec = max(1.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC))
-        self.post_home_recovery_stage2_home_stop_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_HOME_STOP_SEC))
         self.post_home_recovery_stage3_stop_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC))
         self.use_post_home_recovery_stage2 = bool(RATIO_USE_POST_HOME_RECOVERY_STAGE2)
         self.allow_post_home_recovery = True
@@ -3446,9 +3445,6 @@ class ExtrusionRatioTestController:
 
             # Home immediately after Stage 2 returns to forward so the next
             # recovery step does not wait until the later Stage 3 dwell.
-            self._arduino("MOTOR_STOP")
-            if self._stop.wait(self.post_home_recovery_stage2_home_stop_sec):
-                return True, 0
             with self._lock:
                 self.phase = "RECOVERY"
                 self.message = "Stage 2 resumed forward; running air-lock home now."
@@ -3676,7 +3672,6 @@ class ExtrusionRatioTestController:
                 "post_home_recovery_reverse_sec": self.post_home_recovery_reverse_sec,
                 "post_home_recovery_stop2_sec": self.post_home_recovery_stop2_sec,
                 "post_home_recovery_stage2_check_sec": self.post_home_recovery_stage2_check_sec,
-                "post_home_recovery_stage2_home_stop_sec": self.post_home_recovery_stage2_home_stop_sec,
                 "post_home_recovery_stage3_stop_sec": self.post_home_recovery_stage3_stop_sec,
                 "use_post_home_recovery_stage2": self.use_post_home_recovery_stage2,
                 "allow_post_home_recovery": self.allow_post_home_recovery,

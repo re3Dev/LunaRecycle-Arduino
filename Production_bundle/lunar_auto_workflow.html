@@ -25,8 +25,23 @@
     }
     .wrap{max-width:920px; margin:24px auto; padding:0 14px}
     .head{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px}
+    .headRight{display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end}
     h1{font-size:18px; margin:0}
     .pill{padding:7px 10px; border:1px solid var(--line); border-radius:999px; font-size:12px; color:var(--muted)}
+    .headLink{
+      display:inline-flex;
+      align-items:center;
+      padding:8px 10px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:#0f1722;
+      color:var(--text);
+      font-size:12px;
+      font-weight:700;
+      text-decoration:none;
+      white-space:nowrap;
+    }
+    .headLink:hover{background:#152131}
     .card{background:var(--card); border:1px solid var(--line); border-radius:14px; overflow:hidden}
     .hd{padding:10px 12px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:10px}
     .hd .title{font-size:14px; font-weight:700}
@@ -69,7 +84,10 @@
   <div class="wrap">
     <div class="head">
       <h1>LunaRecycle Auto Workflow</h1>
-      <div class="pill" id="connPill">Arduino: <strong id="connText">CHECKING</strong></div>
+      <div class="headRight">
+        <div class="pill" id="connPill">Arduino: <strong id="connText">CHECKING</strong></div>
+        <a class="headLink" href="http://192.168.1.214" title="Open 192.168.1.214">Open 192.168.1.214</a>
+      </div>
     </div>
 
     <section class="card" id="workflowCard">

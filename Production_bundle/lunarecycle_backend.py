@@ -812,6 +812,12 @@ def serve_viewer():
     """Serve the read-only viewer so it runs on http://127.0.0.1:5055/viewer (same-origin)."""
     return send_from_directory(_BUNDLE_DIR, "lunar_viewer.html")
 
+@app.route("/auto")
+@app.route("/auto/")
+def serve_auto_workflow():
+    """Serve the auto workflow dashboard at http://127.0.0.1:5055/auto."""
+    return send_from_directory(_BUNDLE_DIR, "lunar_auto_workflow.html")
+
 @app.route("/model")
 def serve_model():
     """Serve the spatial model so it runs on http://127.0.0.1:5055/model (same-origin)."""

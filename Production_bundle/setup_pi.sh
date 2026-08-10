@@ -37,8 +37,10 @@ echo "==> Copying bundle to ${APP_DIR}"
 mkdir -p "${APP_DIR}"
 cp "${SRC_DIR}/lunarecycle_backend.py" "${APP_DIR}/"
 cp "${SRC_DIR}/lunar_dashboard.html"   "${APP_DIR}/"
+cp "${SRC_DIR}/lunar_auto_workflow.html" "${APP_DIR}/"
 cp "${SRC_DIR}/lunar_viewer.html"      "${APP_DIR}/"
 cp "${SRC_DIR}/lunar_model.html"       "${APP_DIR}/"
+cp "${SRC_DIR}/LunaBotXS-logo.png"     "${APP_DIR}/"
 cp "${SRC_DIR}/requirements.txt"       "${APP_DIR}/"
 
 # Preserve an existing env file so local port tweaks survive re-runs.

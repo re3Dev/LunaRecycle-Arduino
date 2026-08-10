@@ -44,6 +44,7 @@ Routes:
 | Path       | Page                     |
 | ---------- | ------------------------ |
 | `/`        | Control dashboard        |
+| `/auto`    | Auto workflow dashboard  |
 | `/viewer`  | Read-only status viewer  |
 | `/model`   | Spatial model            |
 

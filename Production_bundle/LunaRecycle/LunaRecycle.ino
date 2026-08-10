@@ -282,6 +282,7 @@ const int TC_vacuumFastConfirmSamples = 2;
 // an object is present.
 const bool TC_bagPresentState = LOW;
 const int  TC_bagSensorConfirmSamples    = 5;
+const int  TC_bagSensorPresentConfirmCount = 4;
 const int  TC_bagSensorEmptyConfirmCount = 4;
 const unsigned long TC_bagSensorConfirmDelayMs = 20;
 const int  TC_bagPresentConfirmRounds = 3;
@@ -941,6 +942,23 @@ bool tcBagStackEmptyConfirmed() {
   return emptySamples >= TC_bagSensorEmptyConfirmCount;
 }
 
+bool tcBagStackPresentConfirmed() {
+  if (!tcIrDetectionEnabled) {
+    return true;
+  }
+  int presentSamples = 0;
+  for (int i = 0; i < TC_bagSensorConfirmSamples; i++) {
+    bool bagPresent = digitalRead(tcActiveBagSensorPin()) == TC_bagPresentState;
+    if (bagPresent) {
+      presentSamples++;
+    }
+    if (i < TC_bagSensorConfirmSamples - 1) {
+      delay(TC_bagSensorConfirmDelayMs);
+    }
+  }
+  return presentSamples >= TC_bagSensorPresentConfirmCount;
+}
+
 bool tcBagPresentConfirmed() {
   if (!tcIrDetectionEnabled) {
     return true;
@@ -950,8 +968,7 @@ bool tcBagPresentConfirmed() {
   int rounds = max(1, TC_bagPresentConfirmRounds);
   int requiredPasses = min(rounds, max(1, TC_bagPresentConfirmPassesRequired));
   for (int i = 0; i < rounds; i++) {
-    bool emptyNow = tcBagStackEmptyConfirmed();
-    if (!emptyNow) {
+    if (tcBagStackPresentConfirmed()) {
       presentPasses++;
       if (presentPasses >= requiredPasses) {
         return true;

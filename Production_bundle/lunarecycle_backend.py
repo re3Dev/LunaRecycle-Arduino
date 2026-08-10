@@ -3163,6 +3163,417 @@ dry_hold = SimpleDryHoldController()
 feeder = FeedController()
 
 
+class AutoWorkflowController:
+    """Backend-owned 3-step auto workflow that survives browser navigation."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._reset()
+
+    def _reset(self) -> None:
+        self.phase = "IDLE"
+        self.running = False
+        self.stop_requested = False
+        self.message = "Ready."
+        self.last_error = ""
+        self.started_at = 0.0
+        self.finished_at = 0.0
+        self.config: dict = {}
+        self.progress: dict = {
+            "sr_run": "—",
+            "sr_phase": "—",
+            "sr_pe_left": "—",
+            "sr_pa_left": "—",
+            "dry_phase": "—",
+            "dry_running": False,
+            "dry_planned_seconds": 0,
+            "dry_elapsed_seconds": 0,
+            "dry_remaining_seconds": 0,
+            "feed_running": False,
+            "feed_phase": "—",
+        }
+        self._logs: list[dict] = []
+        self._next_log_id = 1
+
+    def _log(self, message: str, level: str = "info") -> None:
+        ts = datetime.now(EVENT_LOG_TZ).strftime("%Y-%m-%dT%H:%M:%S")
+        with self._lock:
+            entry = {
+                "id": self._next_log_id,
+                "ts": ts,
+                "level": str(level),
+                "message": str(message),
+            }
+            self._next_log_id += 1
+            self._logs.append(entry)
+            if len(self._logs) > 300:
+                self._logs = self._logs[-300:]
+
+    def _set_state(self, phase: str, message: str, running: Optional[bool] = None) -> None:
+        with self._lock:
+            self.phase = str(phase)
+            self.message = str(message)
+            if running is not None:
+                self.running = bool(running)
+
+    def _sleep(self, seconds: float) -> None:
+        remaining = max(0.0, float(seconds))
+        while remaining > 0.0:
+            if self._stop.is_set():
+                raise RuntimeError("Workflow stop requested.")
+            step = min(0.2, remaining)
+            self._stop.wait(step)
+            remaining -= step
+
+    def _stop_all(self) -> None:
+        for action in (
+            lambda: arduino.send("SR_STOP"),
+            lambda: dry_hold.stop(),
+            lambda: feeder.stop(),
+            lambda: arduino.send("MOTOR_STOP"),
+            lambda: arduino.send("SHREDDER_OFF"),
+            lambda: arduino.send(BLASTGATE_CLOSE_CMD),
+            lambda: arduino.send("GATE_CLOSE"),
+        ):
+            try:
+                action()
+            except Exception:
+                pass
+
+    def _status_tc_state(self) -> str:
+        snap = arduino.status_for_api()
+        data = snap.get("data") if isinstance(snap.get("data"), dict) else {}
+        return str(data.get("tc_state", "")).strip().upper()
+
+    @staticmethod
+    def _to_int_or_none(value: object) -> Optional[int]:
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    def _refresh_sr_progress(self) -> dict:
+        data = _parse_sizered(arduino.send("SR_STATUS"))
+        run = str(data.get("run", "—"))
+        phase = str(data.get("phase", "—"))
+        pe_left = data.get("pe_left", "—")
+        pa_left = data.get("pa_left", "—")
+        with self._lock:
+            self.progress["sr_run"] = run
+            self.progress["sr_phase"] = phase
+            self.progress["sr_pe_left"] = pe_left
+            self.progress["sr_pa_left"] = pa_left
+        return data
+
+    def _refresh_dry_progress(self) -> dict:
+        d = dry_hold.status()
+        with self._lock:
+            self.progress["dry_phase"] = str(d.get("phase", "—"))
+            self.progress["dry_running"] = bool(d.get("running"))
+            self.progress["dry_planned_seconds"] = int(d.get("total_seconds", 0) or 0)
+            self.progress["dry_elapsed_seconds"] = int(d.get("elapsed_seconds", 0) or 0)
+            self.progress["dry_remaining_seconds"] = int(d.get("remaining_seconds", 0) or 0)
+        return d
+
+    def _refresh_feed_progress(self) -> dict:
+        d = feeder.status()
+        with self._lock:
+            self.progress["feed_running"] = bool(d.get("running"))
+            self.progress["feed_phase"] = str(d.get("phase", "—"))
+        return d
+
+    def _run_tc_home(self) -> None:
+        self._set_state("TC HOME", "Running homing before automation...", True)
+        arduino.send("TC_HOME")
+        self._log("TC_HOME sent. Waiting for conveyor READY.", "info")
+
+        started = time.monotonic()
+        timeout_sec = 180.0
+        while True:
+            if self._stop.is_set():
+                raise RuntimeError("Workflow stop requested.")
+            if self._status_tc_state() == "READY":
+                return
+            if (time.monotonic() - started) > timeout_sec:
+                raise RuntimeError("TC_HOME timed out waiting for READY.")
+            self._sleep(1.0)
+
+    def _wait_sr_done(self, cfg: dict) -> dict:
+        sr_mode = str(cfg.get("sr_mode", "units")).lower()
+        seen_running = False
+        done_confirm = 0
+
+        while True:
+            if self._stop.is_set():
+                raise RuntimeError("Workflow stop requested.")
+
+            sr = self._refresh_sr_progress()
+            run = str(sr.get("run", "")).upper()
+            pe_left_i = self._to_int_or_none(sr.get("pe_left"))
+            pa_left_i = self._to_int_or_none(sr.get("pa_left"))
+
+            if run == "YES":
+                seen_running = True
+                done_confirm = 0
+
+            if sr_mode == "ratio" and seen_running and pe_left_i is not None and pa_left_i is not None:
+                if pe_left_i <= 0 or pa_left_i <= 0:
+                    self._log(
+                        f"Ratio-mode empty stream reached (PE left={pe_left_i}, PA left={pa_left_i}); stopping SR.",
+                        "warn",
+                    )
+                    stop_confirm = 0
+                    stop_started = time.monotonic()
+                    while (time.monotonic() - stop_started) < 15.0:
+                        try:
+                            arduino.send("SR_STOP")
+                        except Exception:
+                            pass
+                        self._sleep(1.2)
+                        sr2 = self._refresh_sr_progress()
+                        run2 = str(sr2.get("run", "")).upper()
+                        if run2 == "NO":
+                            stop_confirm += 1
+                            if stop_confirm >= 2:
+                                return {"stopped_by_ratio": True, "pe_left": pe_left_i, "pa_left": pa_left_i}
+                        else:
+                            stop_confirm = 0
+                    raise RuntimeError("Ratio-mode empty condition detected, but SR did not stop.")
+
+            if seen_running and run == "NO":
+                done_confirm += 1
+                if done_confirm >= 2:
+                    if pe_left_i is not None and pa_left_i is not None and (pe_left_i > 0 or pa_left_i > 0):
+                        raise RuntimeError(
+                            f"Size Reduction stopped early with bags remaining (PE left={pe_left_i}, PA left={pa_left_i})."
+                        )
+                    return {"stopped_by_ratio": False}
+
+            self._sleep(2.0)
+
+    def _run_dry_hold(self, cfg: dict) -> None:
+        dry_minutes = float(cfg.get("dry_minutes", 0))
+        dry_temp_c = int(cfg.get("dry_temp_c", 0))
+        dry_hold.start(
+            int(dry_minutes * 60.0),
+            dry_temp_c,
+            mixer_pwm=150,
+            mixer_dir="FWD",
+            keep_dryer_on_after=False,
+        )
+
+        seen_running = False
+        startup_deadline = time.monotonic() + 30.0
+        while True:
+            if self._stop.is_set():
+                raise RuntimeError("Workflow stop requested.")
+
+            st = self._refresh_dry_progress()
+            running = bool(st.get("running"))
+            phase = str(st.get("phase", "")).upper()
+            if running:
+                seen_running = True
+
+            if not seen_running:
+                if phase == "ERROR":
+                    raise RuntimeError(str(st.get("message", "Dry hold failed.")))
+                if time.monotonic() > startup_deadline:
+                    raise RuntimeError("Dry hold did not enter RUNNING state in time.")
+                self._sleep(0.5)
+                continue
+
+            if not running:
+                if phase == "ERROR":
+                    raise RuntimeError(str(st.get("message", "Dry hold failed.")))
+                return
+
+            self._sleep(2.0)
+
+    def _run(self, cfg: dict) -> None:
+        try:
+            self._set_state("TC HOME", "Running homing before automation...", True)
+            self._log(
+                "Starting workflow: "
+                f"SR {cfg.get('sr_label', '')}, Dry {cfg.get('dry_minutes', 0)} min @ {cfg.get('dry_temp_c', 0)}C, "
+                f"Feed threshold mode @ vac {cfg.get('vac_pct', 0)}%",
+                "info",
+            )
+
+            self._run_tc_home()
+            self._log("TC_HOME complete (conveyor READY).", "good")
+
+            self._set_state("SIZE REDUCTION", "Running Step 1/3...", True)
+            try:
+                arduino.send("SHREDDER_FWD")
+            except Exception:
+                pass
+            try:
+                arduino.send("GATE_OPEN")
+            except Exception:
+                pass
+            try:
+                arduino.send("SHREDDER_ON")
+            except Exception:
+                pass
+            self._log("Pre-run prime: shredder ON with gates OPEN for 30s.", "info")
+            self._sleep(30.0)
+            self._log("Pre-run prime complete. Starting pick/place size-reduction.", "good")
+
+            arduino.send("MOTOR_SET 150 FWD")
+            arduino.send("SHREDDER_FWD")
+            try:
+                arduino.send("GATE_OPEN")
+            except Exception:
+                pass
+            arduino.send(f"SR_START {int(cfg['pe_units'])} {int(cfg['pa_units'])}")
+            self._log("Step 1 started: Size Reduction with mixer FWD @ 150 and shredder FWD.", "good")
+
+            sr_result = self._wait_sr_done(cfg)
+            if sr_result.get("stopped_by_ratio"):
+                self._log(
+                    f"Step 1 complete: ratio mode stopped on empty stream "
+                    f"(PE left={sr_result.get('pe_left')}, PA left={sr_result.get('pa_left')}).",
+                    "warn",
+                )
+            else:
+                self._log("Step 1 complete. Firmware finished the shredder post-run and turned it off.", "good")
+
+            self._set_state("DRYING", "Running Step 2/3...", True)
+            self._log("Step 2 started: Dryer hold active (mixer stays FWD @ 150).", "good")
+
+            tail_thread_stop = threading.Event()
+
+            def _tail() -> None:
+                try:
+                    arduino.send("SHREDDER_FWD")
+                except Exception:
+                    pass
+                try:
+                    arduino.send("SHREDDER_ON")
+                except Exception:
+                    pass
+                try:
+                    arduino.send("GATE_OPEN")
+                except Exception:
+                    pass
+                self._log("Drying started: keeping shredder ON for 60s tail.", "info")
+                started_tail = time.monotonic()
+                while (time.monotonic() - started_tail) < 60.0:
+                    if tail_thread_stop.is_set() or self._stop.is_set():
+                        return
+                    time.sleep(0.2)
+                if tail_thread_stop.is_set() or self._stop.is_set():
+                    return
+                try:
+                    arduino.send("SHREDDER_OFF")
+                except Exception:
+                    pass
+                try:
+                    arduino.send("GATE_CLOSE")
+                except Exception:
+                    pass
+                self._log("Shredder tail complete: shredder OFF and gates CLOSED.", "good")
+
+            tail_thread = threading.Thread(target=_tail, daemon=True)
+            tail_thread.start()
+
+            self._run_dry_hold(cfg)
+            tail_thread_stop.set()
+            self._log("Step 2 complete.", "good")
+
+            self._set_state("FEED", "Running Step 3/3...", True)
+            arduino.send("BLASTGATE_HOMEMAX ALL")
+            arduino.send("MOTOR_SET 150 FWD")
+            feeder.start(vacuum_pct=int(cfg["vac_pct"]), allow_post_home_recovery=True)
+            self._refresh_feed_progress()
+            self._log(
+                f"Step 3 started: blastgates OPEN, mixer FWD @ 150, threshold watcher running "
+                f"(vac {int(cfg['vac_pct'])}%).",
+                "good",
+            )
+
+            self._set_state(
+                "COMPLETE",
+                "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 150; dryer is OFF. Use Stop Workflow when done.",
+                False,
+            )
+
+        except Exception as exc:
+            if self._stop.is_set():
+                self._log("Workflow stopped by operator.", "warn")
+                self._set_state("STOPPED", "Workflow stopped.", False)
+            else:
+                self._log(f"Workflow failed: {exc}", "bad")
+                self._stop_all()
+                self._set_state("ERROR", f"Workflow failed: {exc}", False)
+                with self._lock:
+                    self.last_error = str(exc)
+        finally:
+            with self._lock:
+                self.running = False
+                self.stop_requested = False
+                self.finished_at = time.monotonic()
+                self._thread = None
+
+    def start(self, cfg: dict) -> None:
+        with self._lock:
+            if self.running:
+                raise RuntimeError("Workflow already running.")
+            if self._thread is not None and self._thread.is_alive():
+                raise RuntimeError("Workflow is still stopping.")
+
+            self._reset()
+            self.running = True
+            self.phase = "ARMED"
+            self.message = "Starting workflow..."
+            self.started_at = time.monotonic()
+            self.config = dict(cfg)
+
+        if not arduino.connected:
+            with self._lock:
+                self.running = False
+                self.phase = "IDLE"
+                self.message = "Arduino is not connected."
+            raise RuntimeError("Arduino is not connected.")
+
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, args=(dict(cfg),), daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            self.stop_requested = True
+            if self.running:
+                self.phase = "STOPPING"
+                self.message = "Stopping all workflow stages..."
+        self._stop.set()
+        self._stop_all()
+
+    def status(self, since_id: Optional[int] = None) -> dict:
+        with self._lock:
+            logs = list(self._logs)
+            if since_id is not None:
+                logs = [entry for entry in logs if int(entry.get("id", 0)) > int(since_id)]
+            return {
+                "running": self.running,
+                "phase": self.phase,
+                "message": self.message,
+                "stop_requested": self.stop_requested,
+                "last_error": self.last_error,
+                "started_at_monotonic": self.started_at,
+                "finished_at_monotonic": self.finished_at,
+                "config": dict(self.config),
+                "progress": dict(self.progress),
+                "logs": logs,
+                "last_log_id": self._next_log_id - 1,
+            }
+
+
+auto_workflow = AutoWorkflowController()
+
+
 class ExtrusionRatioTestController:
     """Watch Moonraker extrusion + crammer load and home air lock on low load."""
 
@@ -3836,6 +4247,85 @@ def api_feed_stop():
 @app.route("/api/feed/status", methods=["GET"])
 def api_feed_status():
     return jsonify({"ok": True, "data": feeder.status()})
+
+
+@app.route("/api/auto_workflow/start", methods=["POST"])
+def api_auto_workflow_start():
+    """Start backend-owned auto workflow that continues without an open page."""
+    try:
+        body = request.get_json(silent=True) or {}
+        sr_mode = str(body.get("sr_mode", "units")).strip().lower()
+        dry_minutes = float(body.get("dry_minutes", 0))
+        dry_temp_c = int(body.get("dry_temp_c", 0))
+        vac_pct = int(body.get("vac_pct", 0))
+
+        pe_units = int(body.get("pe_units", 0))
+        pa_units = int(body.get("pa_units", 0))
+        ratio_pe = int(body.get("ratio_pe", 0))
+        ratio_pa = int(body.get("ratio_pa", 0))
+
+        if sr_mode not in ("units", "ratio"):
+            return jsonify({"ok": False, "error": "sr_mode must be units or ratio"}), 400
+        if not (dry_minutes > 0):
+            return jsonify({"ok": False, "error": "dry_minutes must be > 0"}), 400
+        if not (0 < dry_temp_c <= 250):
+            return jsonify({"ok": False, "error": "dry_temp_c must be 1-250"}), 400
+        if not (0 <= vac_pct <= 100):
+            return jsonify({"ok": False, "error": "vac_pct must be 0-100"}), 400
+
+        if sr_mode == "ratio":
+            if ratio_pe <= 0 or ratio_pa <= 0:
+                return jsonify({"ok": False, "error": "ratio_pe/ratio_pa must be > 0 in ratio mode"}), 400
+            scale = 1000
+            pe_units = ratio_pe * scale
+            pa_units = ratio_pa * scale
+            sr_label = f"{ratio_pe}:{ratio_pa} ratio until empty"
+        else:
+            if pe_units < 0 or pa_units < 0 or (pe_units + pa_units) <= 0:
+                return jsonify({"ok": False, "error": "pe_units/pa_units must be >= 0 and not both zero"}), 400
+            sr_label = f"{pe_units} PE + {pa_units} PA"
+
+        cfg = {
+            "sr_mode": sr_mode,
+            "pe_units": int(pe_units),
+            "pa_units": int(pa_units),
+            "ratio_pe": int(ratio_pe),
+            "ratio_pa": int(ratio_pa),
+            "sr_label": sr_label,
+            "dry_minutes": float(dry_minutes),
+            "dry_temp_c": int(dry_temp_c),
+            "vac_pct": int(vac_pct),
+        }
+        auto_workflow.start(cfg)
+        return jsonify({"ok": True, "data": auto_workflow.status()})
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/auto_workflow/stop", methods=["POST"])
+def api_auto_workflow_stop():
+    try:
+        auto_workflow.stop()
+        return jsonify({"ok": True, "data": auto_workflow.status()})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/auto_workflow/status", methods=["GET"])
+def api_auto_workflow_status():
+    try:
+        since_id_raw = request.args.get("since_id", "").strip()
+        since_id: Optional[int] = None
+        if since_id_raw:
+            try:
+                since_id = int(since_id_raw)
+            except Exception:
+                since_id = None
+        return jsonify({"ok": True, "data": auto_workflow.status(since_id=since_id)})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────

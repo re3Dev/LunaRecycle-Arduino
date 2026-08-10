@@ -163,6 +163,7 @@
       workflowStopRequested: false,
       workflowPhase: "IDLE",
       workflowMsg: "Ready.",
+      workflowLogCursor: 0,
       lastSafetyFault: null,
       lastSafetyFaultKey: "",
       srPolling: false,
@@ -565,6 +566,47 @@
       }
     }
 
+    async function workflowRefreshBackendStatus(silent=false){
+      try{
+        const qs = S.workflowLogCursor > 0 ? `?since_id=${encodeURIComponent(S.workflowLogCursor)}` : "";
+        const res = await apiArduino(`/auto_workflow/status${qs}`, { method: "GET" }, 10000);
+        const d = res.data || {};
+        const p = d.progress || {};
+
+        S.workflowRunning = !!d.running;
+        S.workflowStopRequested = !!d.stop_requested;
+        S.workflowPhase = String(d.phase || "IDLE");
+        S.workflowMsg = String(d.message || "Ready.");
+
+        if(p.sr_run !== undefined) S.srRun = p.sr_run;
+        if(p.sr_phase !== undefined) S.srPhase = p.sr_phase;
+        if(p.sr_pe_left !== undefined) S.srPeLeft = p.sr_pe_left;
+        if(p.sr_pa_left !== undefined) S.srPaLeft = p.sr_pa_left;
+
+        const plannedSec = Math.max(0, Number(p.dry_planned_seconds || 0));
+        const elapsedSec = Math.max(0, Number(p.dry_elapsed_seconds || 0));
+        const remainSec = Math.max(0, Number(p.dry_remaining_seconds || 0));
+        S.dryPlanned = plannedSec > 0 ? fmtDuration(plannedSec) : "—";
+        S.dryElapsed = elapsedSec > 0 ? fmtDuration(elapsedSec) : "—";
+        S.dryRemain = (Boolean(p.dry_running) || remainSec > 0) ? fmtDuration(remainSec) : "—";
+
+        const logs = Array.isArray(d.logs) ? d.logs : [];
+        for(const entry of logs){
+          const id = Number(entry.id || 0);
+          if(id > S.workflowLogCursor){
+            S.workflowLogCursor = id;
+          }
+          const lvl = String(entry.level || "info").toLowerCase();
+          const kind = (lvl === "error" || lvl === "bad") ? "bad" : (lvl === "warn" ? "warn" : (lvl === "good" ? "good" : "info"));
+          workflowLog(String(entry.message || ""), kind);
+        }
+
+        render();
+      }catch(err){
+        if(!silent) workflowLog(`Workflow status failed: ${err.message}`, "bad");
+      }
+    }
+
     async function workflowStart(){
       if(S.workflowRunning){
         workflowLog("Workflow already running.", "warn");
@@ -589,83 +631,39 @@
 
       const out = $("#workflowLog");
       if(out) out.textContent = "";
-
-      S.workflowStopRequested = false;
-      workflowSet("TC HOME", "Running homing before automation...", true);
-      workflowLog(`Starting workflow: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed threshold mode @ vac ${cfg.vacPct}%`, "info");
+      S.workflowLogCursor = 0;
 
       try{
-        await workflowRunTcHome();
-        workflowLog("TC_HOME complete (conveyor READY).", "good");
-
-        workflowSet("SIZE REDUCTION", "Running Step 1/3...", true);
-        await workflowPrimeShredderBeforeSR(30000);
-        await apiArduino("/motor/set", {
-          method: "POST",
-          body: JSON.stringify({ speed: 150, dir: "FWD" }),
-        });
-        await apiArduino("/shredder/fwd", { method: "POST" });
-        try{ await apiArduino("/gate/open", { method: "POST" }); }catch(_){ }
-        await apiArduino("/sr/start", {
-          method: "POST",
-          body: JSON.stringify({ pe_units: cfg.pe, pa_units: cfg.pa }),
-        }, 60000);
-
-        workflowLog("Step 1 started: Size Reduction with mixer FWD @ 150 and shredder FWD.", "good");
-        const srResult = await workflowWaitSrDone(cfg);
-        if(srResult && srResult.stoppedByRatio){
-          workflowLog(`Step 1 complete: ratio mode stopped on empty stream (PE left=${srResult.peLeft}, PA left=${srResult.paLeft}).`, "warn");
-        }else{
-          workflowLog("Step 1 complete. Firmware finished the shredder post-run and turned it off.", "good");
-        }
-
-        workflowSet("DRYING", "Connecting dryer LIVE telemetry...", true);
-        await workflowEnsureDryerLive();
-        workflowSet("DRYING", "Running Step 2/3...", true);
-        workflowLog("Step 2 started: Dryer hold active (mixer stays FWD @ 150).", "good");
-        const shredderTailPromise = workflowRunShredderTailDuringDry(60000);
-        await workflowRunDryHold(cfg);
-        await shredderTailPromise;
-        workflowLog("Step 2 complete.", "good");
-
-        workflowSet("FEED", "Running Step 3/3...", true);
-        await apiArduino("/blastgate/homemax", {
-          method: "POST",
-          body: JSON.stringify({ gate: "ALL" }),
-        }, 20000);
-        await apiArduino("/motor/set", {
-          method: "POST",
-          body: JSON.stringify({ speed: 150, dir: "FWD" }),
-        });
-        await apiArduino("/feed/start", {
+        await apiArduino("/auto_workflow/start", {
           method: "POST",
           body: JSON.stringify({
-            vacuum_pct: cfg.vacPct,
-            allow_recovery: true,
+            sr_mode: cfg.srMode,
+            pe_units: cfg.pe,
+            pa_units: cfg.pa,
+            ratio_pe: cfg.ratioPe,
+            ratio_pa: cfg.ratioPa,
+            dry_minutes: cfg.dryMinutes,
+            dry_temp_c: cfg.dryTempC,
+            vac_pct: cfg.vacPct,
           }),
-        });
-
-        await feedRefreshStatus(true);
-        workflowLog(`Step 3 started: blastgates OPEN, mixer FWD @ 150, threshold watcher running (vac ${cfg.vacPct}%).`, "good");
-        workflowSet("COMPLETE", "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 150; dryer is OFF. Use Stop Workflow when done.", false);
+        }, 15000);
+        workflowLog(`Workflow started in backend: SR ${cfg.srLabel}, Dry ${cfg.dryMinutes} min @ ${cfg.dryTempC}C, Feed vac ${cfg.vacPct}%`, "good");
+        await workflowRefreshBackendStatus(true);
       }catch(err){
-        if(S.workflowStopRequested){
-          workflowLog("Workflow stopped by operator.", "warn");
-          workflowSet("STOPPED", "Workflow stopped.", false);
-        }else{
-          workflowLog(`Workflow failed: ${err.message}`, "bad");
-          workflowSet("ERROR", `Workflow failed: ${err.message}`, false);
-          await workflowStopAll();
-        }
+        workflowSet("ERROR", `Workflow failed to start: ${err.message}`, false);
+        workflowLog(`Workflow failed to start: ${err.message}`, "bad");
       }
     }
 
     async function workflowStop(){
-      S.workflowStopRequested = true;
       workflowSet("STOPPING", "Stopping all workflow stages...", true);
       workflowLog("Stop requested. Sending stop commands.", "warn");
-      await workflowStopAll();
-      workflowSet("STOPPED", "Workflow stopped.", false);
+      try{
+        await apiArduino("/auto_workflow/stop", { method: "POST" }, 12000);
+      }catch(err){
+        workflowLog(`Stop failed: ${err.message}`, "bad");
+      }
+      await workflowRefreshBackendStatus(true);
     }
 
     function bind(){
@@ -681,8 +679,10 @@
       render();
       await arduinoRefreshStatus(true);
       await dryRefreshStatus(true);
+      await workflowRefreshBackendStatus(true);
       setInterval(()=>{ arduinoRefreshStatus(true); }, 1500);
       setInterval(()=>{ dryRefreshStatus(true); }, 2000);
+      setInterval(()=>{ workflowRefreshBackendStatus(true); }, 1500);
     }
 
     boot();

@@ -284,6 +284,9 @@ const bool TC_bagPresentState = LOW;
 const int  TC_bagSensorConfirmSamples    = 5;
 const int  TC_bagSensorEmptyConfirmCount = 4;
 const unsigned long TC_bagSensorConfirmDelayMs = 20;
+const int  TC_bagPresentConfirmRounds = 3;
+const int  TC_bagPresentConfirmPassesRequired = 2;
+const unsigned long TC_bagPresentRetryDelayMs = 35;
 // If Bag 1 reads EMPTY at its pick point, verify from a slightly more center-
 // shifted position before stopping the sequence.
 const float TC_bag1EmptyVerifyOffsetMm = 100.0;
@@ -938,6 +941,29 @@ bool tcBagStackEmptyConfirmed() {
   return emptySamples >= TC_bagSensorEmptyConfirmCount;
 }
 
+bool tcBagPresentConfirmed() {
+  if (!tcIrDetectionEnabled) {
+    return true;
+  }
+
+  int presentPasses = 0;
+  int rounds = max(1, TC_bagPresentConfirmRounds);
+  int requiredPasses = min(rounds, max(1, TC_bagPresentConfirmPassesRequired));
+  for (int i = 0; i < rounds; i++) {
+    bool emptyNow = tcBagStackEmptyConfirmed();
+    if (!emptyNow) {
+      presentPasses++;
+      if (presentPasses >= requiredPasses) {
+        return true;
+      }
+    }
+    if (i < rounds - 1 && TC_bagPresentRetryDelayMs > 0) {
+      delay(TC_bagPresentRetryDelayMs);
+    }
+  }
+  return false;
+}
+
 void tcWriteServoAngle(int angle) {
   tcCurrentServoAngle = constrain(angle, TC_servoMinDeg, TC_servoMaxDeg);
   int pulseWidth = map(tcCurrentServoAngle, TC_servoMinDeg, TC_servoMaxDeg, TC_servoMinUs, TC_servoMaxUs);
@@ -1123,10 +1149,11 @@ void tcDropAtShredderAndContinue() {
 }
 
 bool tcPickAtBag() {
-  bool bagPresent = !tcBagStackEmptyConfirmed();
+  bool bagPresent = tcBagPresentConfirmed();
 
   if (tcIrDetectionEnabled && tcActiveBag == 1) {
     if (!bagPresent) {
+      Serial.println(F("[TC][SAFE] Bag 1 failed pre-pick IR confirmation"));
       tcStopPickSequence(F("[TC] Bag not detected - sequence stopped"));
       return false;
     }
@@ -1139,7 +1166,11 @@ bool tcPickAtBag() {
     delay(TC_bagSensorConfirmDelayMs * 2);
 
     // Final confirmation at pick point before vacuum engage.
-    bagPresent = !tcBagStackEmptyConfirmed();
+    bagPresent = tcBagPresentConfirmed();
+  } else if (tcIrDetectionEnabled && !bagPresent) {
+    Serial.print(F("[TC][SAFE] "));
+    Serial.print(tcActiveBagName());
+    Serial.println(F(" failed pre-pick IR confirmation"));
   }
 
   if (!bagPresent) {

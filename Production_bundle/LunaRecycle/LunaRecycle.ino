@@ -1311,7 +1311,8 @@ bool srSelectNextBag() {
 
   if (!pe && !pa) return false;
 
-  // If only one stream still has bags, use it directly.
+  // If only one stream still has bags, keep using that side until it is also
+  // exhausted so the auto workflow does not stop early.
   if (pe && !pa) {
     tcActiveBag = 1;   // PE / LEFT cassette
     return true;

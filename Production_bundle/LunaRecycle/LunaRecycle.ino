@@ -1310,8 +1310,20 @@ bool srSelectNextBag() {
   bool pa = srPaRemaining > 0;
 
   if (!pe && !pa) return false;
-  // Pick PE while within the cadence and available; otherwise a single PA.
-  if (pe && (!pa || srPeInCadence < srRatioPe)) {
+
+  // If only one stream still has bags, use it directly.
+  if (pe && !pa) {
+    tcActiveBag = 1;   // PE / LEFT cassette
+    return true;
+  }
+  if (!pe && pa) {
+    tcActiveBag = 2;   // PA+EVOH+PE / RIGHT cassette
+    return true;
+  }
+
+  // While both streams still have bags, follow the requested PE:PA cadence.
+  // If one stream is exhausted, the single-stream fallback above takes over.
+  if (srPeInCadence < srRatioPe) {
     tcActiveBag = 1;   // PE / LEFT cassette
   } else {
     tcActiveBag = 2;   // PA+EVOH+PE / RIGHT cassette
@@ -1520,8 +1532,10 @@ void tcRunState() {
         Serial.println(srRunning ? F("[SIZERED] Pick OK - moving to shredder")
                                  : F("[TC] Pick complete - moving to shredder"));
       } else if (srRunning) {
-        // Pick failed: treat this cassette as depleted, then continue/finish.
+        // Pick failed: mark that cassette as depleted and let the auto workflow
+        // continue with the remaining stream, or finish once both are exhausted.
         if (tcActiveBag == 2) srPaRemaining = 0; else srPeRemaining = 0;
+        srPeInCadence = 0;
         Serial.print(F("[SIZERED] "));
         Serial.print(tcActiveBag == 1 ? F("PE (left)") : F("PA (right)"));
         Serial.println(F(" cassette empty"));

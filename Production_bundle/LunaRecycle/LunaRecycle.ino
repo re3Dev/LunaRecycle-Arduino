@@ -314,7 +314,7 @@ const int   TC_microsteps = 4;
 const float TC_homePos       = 0.0;
 const float TC_bag1Pos       = -25.0;
 const float TC_bag2Pos       = -565.0;   // Tune to the Bag 2 stack position.
-const float TC_bag1ShredderPos = -450.0;
+const float TC_bag1ShredderPos = -462.0;
 const float TC_bag2ShredderPos = -310.0;   // 20mm farther right than -275.0.
 const float TC_stepperMinPos = -570.0;
 const float TC_stepperMaxPos = -10.0;
@@ -534,16 +534,14 @@ void systemDiagBootTest() {
   delay(120);
   systemDiagSetColor(0, 255, 0);
   delay(120);
-  systemDiagSetColor(0, 0, 255);
+  systemDiagSetColor(255, 255, 0);
   delay(120);
-  systemDiagSetColor(255, 180, 0);
-  delay(600);
   systemDiagSetColor(0, 0, 0);
 }
 
 void systemDiagUpdateLed() {
   if ((long)(systemDiagBootHoldUntilMs - millis()) > 0) {
-    systemDiagSetColor(255, 180, 0);  // hold amber after boot so the steady path is obvious
+    systemDiagSetColor(255, 255, 0);  // yellow while the system is still settling after boot
     return;
   }
 
@@ -554,34 +552,29 @@ void systemDiagUpdateLed() {
     return;
   }
 
-  // Waiting for homing is a setup warning.
-  if (tcState == TC_WAIT_HOME) {
-    systemDiagSetColor(255, 180, 0);  // bright amber
-    return;
-  }
-
-  // Active homing.
-  if (tcState == TC_HOMING || tcState == TC_BACK_TO_BAG1) {
-    systemDiagSetColor(0, 0, 255);    // bright blue
-    return;
-  }
-
-  // Size-reduction cycle running.
-  if (srRunning || tcState == TC_SR_SHREDDING ||
+  // Green while the machine is actively doing work.
+  bool machineActive =
+      motorPwm > 0 ||
+      tcPumpRunning ||
+      shredderRunning ||
+      agitatorRunState != AGITATOR_IDLE ||
+      vacuumPercent > 0 ||
+      srRunning ||
+      tcState == TC_HOMING ||
+      tcState == TC_BACK_TO_BAG1 ||
+      tcState == TC_MOVE_TO_BAG ||
+      tcState == TC_BAG_TO_SHREDDER ||
+      tcState == TC_SR_SHREDDING ||
       tcState == TC_SR_COOLING ||
-      tcState == TC_SR_POSTRUN_FORWARD) {
-    systemDiagSetColor(255, 0, 255);  // bright magenta
+      tcState == TC_SR_POSTRUN_FORWARD;
+
+  if (machineActive) {
+    systemDiagSetColor(0, 255, 0);    // green
     return;
   }
 
-  // Any actuator active.
-  if (motorPwm > 0 || tcPumpRunning || shredderRunning || agitatorRunState != AGITATOR_IDLE || vacuumPercent > 0) {
-    systemDiagSetColor(0, 255, 0);    // bright green
-    return;
-  }
-
-  // Idle and healthy.
-  systemDiagSetColor(0, 255, 255);    // bright cyan
+  // Yellow when the machine is healthy but idle.
+  systemDiagSetColor(255, 255, 0);    // yellow
 }
 
 // ============================================================================

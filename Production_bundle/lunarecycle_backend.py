@@ -3304,6 +3304,7 @@ class AutoWorkflowController:
         sr_mode = str(cfg.get("sr_mode", "units")).lower()
         seen_running = False
         done_confirm = 0
+        continued_after_empty_stream = False
 
         while True:
             if self._stop.is_set():
@@ -3319,28 +3320,15 @@ class AutoWorkflowController:
                 done_confirm = 0
 
             if sr_mode == "ratio" and seen_running and pe_left_i is not None and pa_left_i is not None:
-                if pe_left_i <= 0 or pa_left_i <= 0:
-                    self._log(
-                        f"Ratio-mode empty stream reached (PE left={pe_left_i}, PA left={pa_left_i}); stopping SR.",
-                        "warn",
-                    )
-                    stop_confirm = 0
-                    stop_started = time.monotonic()
-                    while (time.monotonic() - stop_started) < 15.0:
-                        try:
-                            arduino.send("SR_STOP")
-                        except Exception:
-                            pass
-                        self._sleep(1.2)
-                        sr2 = self._refresh_sr_progress()
-                        run2 = str(sr2.get("run", "")).upper()
-                        if run2 == "NO":
-                            stop_confirm += 1
-                            if stop_confirm >= 2:
-                                return {"stopped_by_ratio": True, "pe_left": pe_left_i, "pa_left": pa_left_i}
-                        else:
-                            stop_confirm = 0
-                    raise RuntimeError("Ratio-mode empty condition detected, but SR did not stop.")
+                # In ratio mode, do not stop when only one stream empties.
+                # Keep feeding the remaining stream until both are exhausted.
+                if (pe_left_i <= 0 < pa_left_i) or (pa_left_i <= 0 < pe_left_i):
+                    if not continued_after_empty_stream:
+                        self._log(
+                            f"Ratio-mode empty stream reached (PE left={pe_left_i}, PA left={pa_left_i}); continuing with remaining stream.",
+                            "warn",
+                        )
+                    continued_after_empty_stream = True
 
             if seen_running and run == "NO":
                 done_confirm += 1
@@ -3349,7 +3337,10 @@ class AutoWorkflowController:
                         raise RuntimeError(
                             f"Size Reduction stopped early with bags remaining (PE left={pe_left_i}, PA left={pa_left_i})."
                         )
-                    return {"stopped_by_ratio": False}
+                    return {
+                        "stopped_by_ratio": False,
+                        "continued_after_empty_stream": continued_after_empty_stream,
+                    }
 
             self._sleep(2.0)
 
@@ -3431,11 +3422,10 @@ class AutoWorkflowController:
             self._log("Step 1 started: Size Reduction with mixer FWD @ 150 and shredder FWD.", "good")
 
             sr_result = self._wait_sr_done(cfg)
-            if sr_result.get("stopped_by_ratio"):
+            if sr_result.get("continued_after_empty_stream"):
                 self._log(
-                    f"Step 1 complete: ratio mode stopped on empty stream "
-                    f"(PE left={sr_result.get('pe_left')}, PA left={sr_result.get('pa_left')}).",
-                    "warn",
+                    "Step 1 complete: ratio mode continued on the remaining stream after one side emptied.",
+                    "good",
                 )
             else:
                 self._log("Step 1 complete. Firmware finished the shredder post-run and turned it off.", "good")

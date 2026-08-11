@@ -9,7 +9,7 @@ User=pi
 WorkingDirectory=/opt/lunarecycle
 EnvironmentFile=/opt/lunarecycle/lunarecycle.env
 ExecStart=/opt/lunarecycle/venv/bin/python /opt/lunarecycle/lunarecycle_backend.py
-Restart=on-failure
+Restart=always
 RestartSec=5
 
 # Serial access without running as root: the pi user must be in the

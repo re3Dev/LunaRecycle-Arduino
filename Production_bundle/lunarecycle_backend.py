@@ -3803,8 +3803,6 @@ class ExtrusionRatioTestController:
         if attempts <= 0:
             return
 
-        sufficient_threshold = self.low_load_threshold_pct
-
         self._arduino("MOTOR_STOP")
         with self._lock:
             self.phase = "STARTUP_HOMING"
@@ -3815,16 +3813,6 @@ class ExtrusionRatioTestController:
 
         for idx in range(1, attempts + 1):
             if self._stop.is_set():
-                return
-
-            # Do not overfill: if load is already healthy, stop Stage 1 early.
-            _, _, crammer_load_pct = self._sample_crammer()
-            if crammer_load_pct > sufficient_threshold:
-                with self._lock:
-                    self.message = (
-                        f"Step 1/4 complete early: crammer load {crammer_load_pct:.1f}% "
-                        f"exceeds threshold {sufficient_threshold:.1f}%."
-                    )
                 return
 
             response = self._arduino("AGITATOR_HOME")
@@ -3844,15 +3832,6 @@ class ExtrusionRatioTestController:
                     self.message = (
                         f"Step 1/4: startup home {idx}/{attempts} did not complete; continuing."
                     )
-
-            _, _, crammer_load_pct = self._sample_crammer()
-            if crammer_load_pct > sufficient_threshold:
-                with self._lock:
-                    self.message = (
-                        f"Step 1/4 complete early after home {idx}/{attempts}: "
-                        f"crammer load {crammer_load_pct:.1f}% exceeds threshold {sufficient_threshold:.1f}%."
-                    )
-                return
 
             if idx < attempts and FEED_STARTUP_HOME_INTERVAL_SEC > 0:
                 self._stop.wait(FEED_STARTUP_HOME_INTERVAL_SEC)
@@ -4051,16 +4030,32 @@ class ExtrusionRatioTestController:
             if self._stop.is_set():
                 return
 
-            # Step 2/4 onward: previous feed behavior with mixer forward.
-            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+            # Step 2/4 onward activates only while load is low. High load means
+            # return to Step 1 hold with mixer stopped.
+            stage2_active = False
 
             while not self._stop.is_set():
                 connected, rotations_total = self._sample_snapshot()
                 crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
                 trigger_reason = ""
                 trigger_home_now = False
-                restart_stage1_now = False
-                sufficient_restart_threshold = self.low_load_threshold_pct
+
+                if crammer_load_pct > self.low_load_threshold_pct:
+                    if stage2_active:
+                        self._arduino("MOTOR_STOP")
+                        stage2_active = False
+                    with self._lock:
+                        self.phase = "STARTUP_HOMING"
+                        self.message = (
+                            f"Step 1/4 hold: load {crammer_load_pct:.1f}% is above "
+                            f"threshold {self.low_load_threshold_pct:.1f}%; mixer remains OFF."
+                        )
+                    self._stop.wait(self.poll_sec)
+                    continue
+
+                if not stage2_active:
+                    self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+                    stage2_active = True
 
                 with self._lock:
                     self.phase = "WATCHING"
@@ -4068,14 +4063,6 @@ class ExtrusionRatioTestController:
                         f"Step 2/4: mixer FWD {RATIO_TEST_MIX_PWM}. "
                         f"Waiting for low-load <= {self.low_load_threshold_pct:.1f}% from crammer feedback."
                     )
-
-                    # Any sufficient load immediately returns to Stage 1.
-                    if crammer_load_pct > sufficient_restart_threshold:
-                        restart_stage1_now = True
-                        self.message = (
-                            f"Load recovered to {crammer_load_pct:.1f}% (> {sufficient_restart_threshold:.1f}%). "
-                            f"Returning to Step 1/4 startup homes."
-                        )
 
                     using_load_trigger = crammer_connected and crammer_running
 
@@ -4101,14 +4088,6 @@ class ExtrusionRatioTestController:
                             self.message = "Waiting for crammer connection/status."
                         elif not crammer_running:
                             self.message = "Waiting for crammer RUN state."
-
-                if restart_stage1_now:
-                    self._run_startup_homes()
-                    if self._stop.is_set():
-                        return
-                    self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
-                    self._stop.wait(self.poll_sec)
-                    continue
 
                 if trigger_home_now:
                     self._trigger_home(rotations_total, trigger_reason)

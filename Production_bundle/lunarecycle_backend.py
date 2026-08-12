@@ -2680,6 +2680,8 @@ BLASTGATE_CLOSE_CMD  = os.environ.get("LUNA_BG_CLOSE_CMD", "BLASTGATE_HOME ALL")
 # ── Print-feed threshold-mode defaults ───────────────────────────────────────
 FEED_POLL_SEC             = float(os.environ.get("LUNA_FEED_POLL_SEC", str(RATIO_TEST_POLL_SEC)))
 FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", str(RATIO_TEST_VACUUM_IDLE_PCT)))
+FEED_STARTUP_HOME_ATTEMPTS = max(0, int(os.environ.get("LUNA_FEED_STARTUP_HOME_ATTEMPTS", "3")))
+FEED_STARTUP_HOME_INTERVAL_SEC = max(0.0, float(os.environ.get("LUNA_FEED_STARTUP_HOME_INTERVAL_SEC", "0.5")))
 
 RATIO_USE_CRAMMER_LOAD = _env_flag("LUNA_RATIO_USE_CRAMMER_LOAD", "1")
 RATIO_CRAMMER_LOW_LOAD_PCT = float(os.environ.get("LUNA_RATIO_CRAMMER_LOW_LOAD_PCT", "30.0"))
@@ -3128,12 +3130,14 @@ class FeedController:
         poll_sec: Optional[float] = None,
         allow_post_home_recovery: bool = False,
         use_post_home_recovery_stage2: Optional[bool] = None,
+        startup_home_attempts: Optional[int] = None,
     ) -> None:
         ratio_test.start(
             poll_sec=FEED_POLL_SEC if poll_sec is None else max(0.1, float(poll_sec)),
             vacuum_pct=max(0, min(100, int(vacuum_pct))),
             allow_post_home_recovery=bool(allow_post_home_recovery),
             use_post_home_recovery_stage2=use_post_home_recovery_stage2,
+            startup_home_attempts=startup_home_attempts,
         )
 
     def stop(self) -> None:
@@ -3154,6 +3158,8 @@ class FeedController:
             "live_extruder_velocity": float(rs.get("live_extruder_velocity", 0.0) or 0.0),
             "live_extruder_rotations_total": float(rs.get("live_extruder_rotations_total", 0.0) or 0.0),
             "home_sequences_completed": int(rs.get("home_sequences_completed", 0) or 0),
+            "startup_home_attempts": int(rs.get("startup_home_attempts", 0) or 0),
+            "startup_homes_done": int(rs.get("startup_homes_done", 0) or 0),
             "message": str(rs.get("message", "")),
             "last_error": str(rs.get("last_error", "")),
         }
@@ -3476,18 +3482,17 @@ class AutoWorkflowController:
 
             self._set_state("FEED", "Running Step 3/3...", True)
             arduino.send("BLASTGATE_HOMEMAX ALL")
-            arduino.send("MOTOR_SET 150 FWD")
             feeder.start(vacuum_pct=int(cfg["vac_pct"]), allow_post_home_recovery=True)
             self._refresh_feed_progress()
             self._log(
-                f"Step 3 started: blastgates OPEN, mixer FWD @ 150, threshold watcher running "
-                f"(vac {int(cfg['vac_pct'])}%).",
+                f"Step 3 started: blastgates OPEN, staged feed running "
+                f"(startup homes with mixer stopped, then mixer FWD watcher; vac {int(cfg['vac_pct'])}%).",
                 "good",
             )
 
             self._set_state(
                 "COMPLETE",
-                "Workflow complete. Feed phase is active with blastgates open and mixer FWD @ 150; dryer is OFF. Use Stop Workflow when done.",
+                "Workflow complete. Feed phase is active with blastgates open and staged startup homing before mixer-forward watch; dryer is OFF. Use Stop Workflow when done.",
                 False,
             )
 
@@ -3597,6 +3602,8 @@ class ExtrusionRatioTestController:
         self.low_load_home_count = 0
         self.last_low_load_trigger_at = 0.0
         self.low_load_armed = True
+        self.startup_home_attempts = max(0, int(FEED_STARTUP_HOME_ATTEMPTS))
+        self.startup_homes_done = 0
         self.post_home_recovery_check_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_CHECK_SEC))
         self.post_home_recovery_load_pct = max(0.0, min(100.0, float(RATIO_POST_HOME_RECOVERY_LOAD_PCT)))
         self.post_home_recovery_required_homes = max(1, int(RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES))
@@ -3653,6 +3660,7 @@ class ExtrusionRatioTestController:
         vacuum_pct: Optional[int] = None,
         allow_post_home_recovery: Optional[bool] = None,
         use_post_home_recovery_stage2: Optional[bool] = None,
+        startup_home_attempts: Optional[int] = None,
     ):
         with self._lock:
             if self.running:
@@ -3668,13 +3676,14 @@ class ExtrusionRatioTestController:
                 self.allow_post_home_recovery = bool(allow_post_home_recovery)
             if use_post_home_recovery_stage2 is not None:
                 self.use_post_home_recovery_stage2 = bool(use_post_home_recovery_stage2)
+            if startup_home_attempts is not None:
+                self.startup_home_attempts = max(0, int(startup_home_attempts))
             self.running = True
             self.phase = "ARMED"
             self.started_at = time.monotonic()
             self.message = (
-                f"Watching crammer load; homing when load <= "
-                f"{self.low_load_threshold_pct:.1f}% with vacuum at {self.vacuum_pct}% "
-                f"and mixer FWD {RATIO_TEST_MIX_PWM}."
+                f"Feed staged start armed: {self.startup_home_attempts} startup home attempt(s) with mixer stopped, "
+                f"then low-load watcher at vacuum {self.vacuum_pct}% and mixer FWD {RATIO_TEST_MIX_PWM}."
             )
 
         self._stop.clear()
@@ -3788,6 +3797,44 @@ class ExtrusionRatioTestController:
                 f"{recovery_note} "
                 f"Waiting for next low-load event <= {self.low_load_threshold_pct:.1f}%."
             )
+
+    def _run_startup_homes(self) -> None:
+        attempts = max(0, int(self.startup_home_attempts))
+        if attempts <= 0:
+            return
+
+        self._arduino("MOTOR_STOP")
+        with self._lock:
+            self.phase = "STARTUP_HOMING"
+            self.message = (
+                f"Step 1/4: startup homing with mixer stopped "
+                f"({self.startup_homes_done}/{attempts} complete)."
+            )
+
+        for idx in range(1, attempts + 1):
+            if self._stop.is_set():
+                return
+
+            response = self._arduino("AGITATOR_HOME")
+            home_ok = self._home_completed(response)
+
+            with self._lock:
+                self.last_home_response = response
+                self.startup_homes_done = idx
+                if home_ok:
+                    self.home_sequences_completed += 1
+                    self.last_home_rotations_total = self.live_extruder_rotations_total
+                    self.message = (
+                        f"Step 1/4: startup homing with mixer stopped "
+                        f"({self.startup_homes_done}/{attempts} complete)."
+                    )
+                else:
+                    self.message = (
+                        f"Step 1/4: startup home {idx}/{attempts} did not complete; continuing."
+                    )
+
+            if idx < attempts and FEED_STARTUP_HOME_INTERVAL_SEC > 0:
+                self._stop.wait(FEED_STARTUP_HOME_INTERVAL_SEC)
 
     def _post_home_recovery_if_needed(self) -> tuple[bool, int]:
         if not self.allow_post_home_recovery:
@@ -3972,14 +4019,19 @@ class ExtrusionRatioTestController:
 
     def _run(self):
         try:
-            # Requested behavior: keep mixer forward at configured PWM
-            # threshold watcher is active.
-            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
             if crammer.connected:
                 try:
                     crammer.send("RUN")
                 except Exception:
                     pass
+
+            # Step 1/4: keep mixer stopped and run startup homing attempts.
+            self._run_startup_homes()
+            if self._stop.is_set():
+                return
+
+            # Step 2/4 onward: previous feed behavior with mixer forward.
+            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
             while not self._stop.is_set():
                 connected, rotations_total = self._sample_snapshot()
@@ -3990,8 +4042,8 @@ class ExtrusionRatioTestController:
                 with self._lock:
                     self.phase = "WATCHING"
                     self.message = (
-                        f"Armed. Waiting for low-load <= {self.low_load_threshold_pct:.1f}% "
-                        f"from crammer feedback."
+                        f"Step 2/4: mixer FWD {RATIO_TEST_MIX_PWM}. "
+                        f"Waiting for low-load <= {self.low_load_threshold_pct:.1f}% from crammer feedback."
                     )
 
                     using_load_trigger = crammer_connected and crammer_running
@@ -4059,6 +4111,8 @@ class ExtrusionRatioTestController:
                 "message": self.message,
                 "poll_sec": self.poll_sec,
                 "vacuum_pct": self.vacuum_pct,
+                "startup_home_attempts": self.startup_home_attempts,
+                "startup_homes_done": self.startup_homes_done,
                 "moonraker_connected": self.moonraker_connected,
                 "live_extruder_velocity": self.live_extruder_velocity,
                 "live_extruder_rotations_total": self.live_extruder_rotations_total,
@@ -4209,15 +4263,21 @@ def api_feed_start():
         body = request.get_json(silent=True) or {}
         poll_sec = body.get("poll_sec", None)
         vacuum_pct   = int(body.get("vacuum_pct", FEED_VACUUM_PCT))
+        startup_home_attempts = body.get("startup_home_attempts", None)
         allow_recovery = str(body.get("allow_recovery", "0")).strip().lower() in ("1", "true", "yes", "on")
         use_stage2 = _parse_optional_bool(body.get("use_post_home_recovery_stage2"))
         if not (0 <= vacuum_pct <= 100):
             return jsonify({"ok": False, "error": "vacuum_pct must be 0-100"}), 400
+        if startup_home_attempts is not None:
+            startup_home_attempts = int(startup_home_attempts)
+            if startup_home_attempts < 0:
+                return jsonify({"ok": False, "error": "startup_home_attempts must be >= 0"}), 400
         feeder.start(
             vacuum_pct=vacuum_pct,
             poll_sec=poll_sec,
             allow_post_home_recovery=allow_recovery,
             use_post_home_recovery_stage2=use_stage2,
+            startup_home_attempts=startup_home_attempts,
         )
         return jsonify({"ok": True, "data": feeder.status()})
     except RuntimeError as exc:

@@ -3155,7 +3155,6 @@ class FeedController:
             "crammer_load_pct": float(rs.get("crammer_load_pct", 0.0) or 0.0),
             "low_load_threshold_pct": float(rs.get("low_load_threshold_pct", 0.0) or 0.0),
             "low_load_home_count": int(rs.get("low_load_home_count", 0) or 0),
-            "stage1_rearm_pending": bool(rs.get("stage1_rearm_pending", False)),
             "live_extruder_velocity": float(rs.get("live_extruder_velocity", 0.0) or 0.0),
             "live_extruder_rotations_total": float(rs.get("live_extruder_rotations_total", 0.0) or 0.0),
             "home_sequences_completed": int(rs.get("home_sequences_completed", 0) or 0),
@@ -3603,7 +3602,6 @@ class ExtrusionRatioTestController:
         self.low_load_home_count = 0
         self.last_low_load_trigger_at = 0.0
         self.low_load_armed = True
-        self.stage1_rearm_pending = False
         self.startup_home_attempts = max(0, int(FEED_STARTUP_HOME_ATTEMPTS))
         self.startup_homes_done = 0
         self.post_home_recovery_check_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_CHECK_SEC))
@@ -3805,7 +3803,7 @@ class ExtrusionRatioTestController:
         if attempts <= 0:
             return
 
-        sufficient_threshold = self.post_home_recovery_load_pct
+        sufficient_threshold = self.low_load_threshold_pct
 
         self._arduino("MOTOR_STOP")
         with self._lock:
@@ -4062,7 +4060,7 @@ class ExtrusionRatioTestController:
                 trigger_reason = ""
                 trigger_home_now = False
                 restart_stage1_now = False
-                sufficient_restart_threshold = self.post_home_recovery_load_pct
+                sufficient_restart_threshold = self.low_load_threshold_pct
 
                 with self._lock:
                     self.phase = "WATCHING"
@@ -4071,10 +4069,8 @@ class ExtrusionRatioTestController:
                         f"Waiting for low-load <= {self.low_load_threshold_pct:.1f}% from crammer feedback."
                     )
 
-                    # Match prior stage-2/3/4 semantics: once low-load handling
-                    # has started, sufficient load should restart Stage 1 even
-                    # if RUN state is transient.
-                    if self.stage1_rearm_pending and crammer_load_pct > sufficient_restart_threshold:
+                    # Any sufficient load immediately returns to Stage 1.
+                    if crammer_load_pct > sufficient_restart_threshold:
                         restart_stage1_now = True
                         self.message = (
                             f"Load recovered to {crammer_load_pct:.1f}% (> {sufficient_restart_threshold:.1f}%). "
@@ -4098,7 +4094,6 @@ class ExtrusionRatioTestController:
                             )
                             self.last_low_load_trigger_at = now
                             self.low_load_armed = False
-                            self.stage1_rearm_pending = True
                         else:
                             self.low_load_armed = True
                     else:
@@ -4112,8 +4107,6 @@ class ExtrusionRatioTestController:
                     if self._stop.is_set():
                         return
                     self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
-                    with self._lock:
-                        self.stage1_rearm_pending = False
                     self._stop.wait(self.poll_sec)
                     continue
 
@@ -4174,7 +4167,6 @@ class ExtrusionRatioTestController:
                 "low_load_retrigger_sec": self.low_load_retrigger_sec,
                 "low_load_home_count": self.low_load_home_count,
                 "low_load_armed": self.low_load_armed,
-                "stage1_rearm_pending": self.stage1_rearm_pending,
                 "post_home_recovery_check_sec": self.post_home_recovery_check_sec,
                 "post_home_recovery_load_pct": self.post_home_recovery_load_pct,
                 "post_home_recovery_required_homes": self.post_home_recovery_required_homes,

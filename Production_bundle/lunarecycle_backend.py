@@ -2668,6 +2668,7 @@ MIX_RAMP_STEPS       = int(os.environ.get("LUNA_MIX_RAMP_STEPS", "5"))     # sof
 MIX_RAMP_STEP_SEC    = float(os.environ.get("LUNA_MIX_RAMP_STEP_SEC", "0.20"))  # delay between increments
 MIX_UP_DIR           = os.environ.get("LUNA_MIX_UP_DIR", "FWD").upper()    # upward mixing dir
 MIX_DOWN_DIR         = "REV" if MIX_UP_DIR == "FWD" else "FWD"
+AUTO_DRY_HOLD_MIX_PWM = max(0, min(255, int(os.environ.get("LUNA_AUTO_DRY_HOLD_MIX_PWM", "255"))))
 DISCHARGE_SECONDS    = int(os.environ.get("LUNA_DISCHARGE_SEC", "60"))     # downward mix time
 DISCHARGE_SHAKE      = os.environ.get("LUNA_DISCHARGE_SHAKE", "1").strip().lower() not in ("0", "false", "off", "no")
 DISCHARGE_SHAKE_SEG_SEC = float(os.environ.get("LUNA_DISCHARGE_SHAKE_SEG_SEC", "5"))
@@ -3350,7 +3351,7 @@ class AutoWorkflowController:
         dry_hold.start(
             int(dry_minutes * 60.0),
             dry_temp_c,
-            mixer_pwm=150,
+            mixer_pwm=AUTO_DRY_HOLD_MIX_PWM,
             mixer_dir="FWD",
             keep_dryer_on_after=False,
         )
@@ -3431,7 +3432,7 @@ class AutoWorkflowController:
                 self._log("Step 1 complete. Firmware finished the shredder post-run and turned it off.", "good")
 
             self._set_state("DRYING", "Running Step 2/3...", True)
-            self._log("Step 2 started: Dryer hold active (mixer stays FWD @ 150).", "good")
+            self._log(f"Step 2 started: Dryer hold active (mixer stays FWD @ {AUTO_DRY_HOLD_MIX_PWM}).", "good")
 
             tail_thread_stop = threading.Event()
 

@@ -3805,6 +3805,8 @@ class ExtrusionRatioTestController:
         if attempts <= 0:
             return
 
+        sufficient_threshold = self.post_home_recovery_load_pct
+
         self._arduino("MOTOR_STOP")
         with self._lock:
             self.phase = "STARTUP_HOMING"
@@ -3815,6 +3817,16 @@ class ExtrusionRatioTestController:
 
         for idx in range(1, attempts + 1):
             if self._stop.is_set():
+                return
+
+            # Do not overfill: if load is already healthy, stop Stage 1 early.
+            crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
+            if crammer_connected and crammer_running and crammer_load_pct > sufficient_threshold:
+                with self._lock:
+                    self.message = (
+                        f"Step 1/4 complete early: crammer load {crammer_load_pct:.1f}% "
+                        f"exceeds threshold {sufficient_threshold:.1f}%."
+                    )
                 return
 
             response = self._arduino("AGITATOR_HOME")
@@ -3834,6 +3846,15 @@ class ExtrusionRatioTestController:
                     self.message = (
                         f"Step 1/4: startup home {idx}/{attempts} did not complete; continuing."
                     )
+
+            crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
+            if crammer_connected and crammer_running and crammer_load_pct > sufficient_threshold:
+                with self._lock:
+                    self.message = (
+                        f"Step 1/4 complete early after home {idx}/{attempts}: "
+                        f"crammer load {crammer_load_pct:.1f}% exceeds threshold {sufficient_threshold:.1f}%."
+                    )
+                return
 
             if idx < attempts and FEED_STARTUP_HOME_INTERVAL_SEC > 0:
                 self._stop.wait(FEED_STARTUP_HOME_INTERVAL_SEC)

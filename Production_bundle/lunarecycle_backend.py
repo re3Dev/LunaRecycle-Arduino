@@ -3155,6 +3155,7 @@ class FeedController:
             "crammer_load_pct": float(rs.get("crammer_load_pct", 0.0) or 0.0),
             "low_load_threshold_pct": float(rs.get("low_load_threshold_pct", 0.0) or 0.0),
             "low_load_home_count": int(rs.get("low_load_home_count", 0) or 0),
+            "stage1_rearm_pending": bool(rs.get("stage1_rearm_pending", False)),
             "live_extruder_velocity": float(rs.get("live_extruder_velocity", 0.0) or 0.0),
             "live_extruder_rotations_total": float(rs.get("live_extruder_rotations_total", 0.0) or 0.0),
             "home_sequences_completed": int(rs.get("home_sequences_completed", 0) or 0),
@@ -3602,6 +3603,7 @@ class ExtrusionRatioTestController:
         self.low_load_home_count = 0
         self.last_low_load_trigger_at = 0.0
         self.low_load_armed = True
+        self.stage1_rearm_pending = False
         self.startup_home_attempts = max(0, int(FEED_STARTUP_HOME_ATTEMPTS))
         self.startup_homes_done = 0
         self.post_home_recovery_check_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_CHECK_SEC))
@@ -4038,6 +4040,8 @@ class ExtrusionRatioTestController:
                 crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
                 trigger_reason = ""
                 trigger_home_now = False
+                restart_stage1_now = False
+                sufficient_restart_threshold = self.post_home_recovery_load_pct
 
                 with self._lock:
                     self.phase = "WATCHING"
@@ -4051,6 +4055,17 @@ class ExtrusionRatioTestController:
                     if using_load_trigger:
                         now = time.monotonic()
                         below = crammer_load_pct <= self.low_load_threshold_pct
+                        sufficient_for_restart = crammer_load_pct > sufficient_restart_threshold
+
+                        # After low-load handling begins, any later sufficient
+                        # load in steps 2/3/4 should restart at Step 1 startup homes.
+                        if self.stage1_rearm_pending and sufficient_for_restart:
+                            restart_stage1_now = True
+                            self.message = (
+                                f"Load recovered to {crammer_load_pct:.1f}% (> {sufficient_restart_threshold:.1f}%). "
+                                f"Returning to Step 1/4 startup homes."
+                            )
+
                         # Continuous low-load mode: if we stay below threshold,
                         # keep homing every retrigger interval (no re-arm bounce required).
                         cooldown_ok = (now - self.last_low_load_trigger_at) >= self.low_load_retrigger_sec
@@ -4062,6 +4077,7 @@ class ExtrusionRatioTestController:
                             )
                             self.last_low_load_trigger_at = now
                             self.low_load_armed = False
+                            self.stage1_rearm_pending = True
                         else:
                             self.low_load_armed = True
                     else:
@@ -4069,6 +4085,16 @@ class ExtrusionRatioTestController:
                             self.message = "Waiting for crammer connection/status."
                         elif not crammer_running:
                             self.message = "Waiting for crammer RUN state."
+
+                if restart_stage1_now:
+                    self._run_startup_homes()
+                    if self._stop.is_set():
+                        return
+                    self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+                    with self._lock:
+                        self.stage1_rearm_pending = False
+                    self._stop.wait(self.poll_sec)
+                    continue
 
                 if trigger_home_now:
                     self._trigger_home(rotations_total, trigger_reason)
@@ -4127,6 +4153,7 @@ class ExtrusionRatioTestController:
                 "low_load_retrigger_sec": self.low_load_retrigger_sec,
                 "low_load_home_count": self.low_load_home_count,
                 "low_load_armed": self.low_load_armed,
+                "stage1_rearm_pending": self.stage1_rearm_pending,
                 "post_home_recovery_check_sec": self.post_home_recovery_check_sec,
                 "post_home_recovery_load_pct": self.post_home_recovery_load_pct,
                 "post_home_recovery_required_homes": self.post_home_recovery_required_homes,

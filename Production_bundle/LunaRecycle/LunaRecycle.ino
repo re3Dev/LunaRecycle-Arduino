@@ -313,7 +313,7 @@ const int   TC_microsteps = 4;
 // Positions, in mm from home. Negative moves away from the switch.
 const float TC_homePos       = 0.0;
 const float TC_bag1Pos       = -25.0;
-const float TC_bag2Pos       = -565.0;   // Tune to the Bag 2 stack position.
+const float TC_bag2Pos       = -537.0;   // Tune to the Bag 2 stack position.
 const float TC_bag1ShredderPos = -462.0;
 const float TC_bag2ShredderPos = -310.0;   // 20mm farther right than -275.0.
 const float TC_stepperMinPos = -570.0;

@@ -3820,8 +3820,8 @@ class ExtrusionRatioTestController:
                 return
 
             # Do not overfill: if load is already healthy, stop Stage 1 early.
-            crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
-            if crammer_connected and crammer_running and crammer_load_pct > sufficient_threshold:
+            _, _, crammer_load_pct = self._sample_crammer()
+            if crammer_load_pct > sufficient_threshold:
                 with self._lock:
                     self.message = (
                         f"Step 1/4 complete early: crammer load {crammer_load_pct:.1f}% "
@@ -3847,8 +3847,8 @@ class ExtrusionRatioTestController:
                         f"Step 1/4: startup home {idx}/{attempts} did not complete; continuing."
                     )
 
-            crammer_connected, crammer_running, crammer_load_pct = self._sample_crammer()
-            if crammer_connected and crammer_running and crammer_load_pct > sufficient_threshold:
+            _, _, crammer_load_pct = self._sample_crammer()
+            if crammer_load_pct > sufficient_threshold:
                 with self._lock:
                     self.message = (
                         f"Step 1/4 complete early after home {idx}/{attempts}: "
@@ -4071,21 +4071,21 @@ class ExtrusionRatioTestController:
                         f"Waiting for low-load <= {self.low_load_threshold_pct:.1f}% from crammer feedback."
                     )
 
+                    # Match prior stage-2/3/4 semantics: once low-load handling
+                    # has started, sufficient load should restart Stage 1 even
+                    # if RUN state is transient.
+                    if self.stage1_rearm_pending and crammer_load_pct > sufficient_restart_threshold:
+                        restart_stage1_now = True
+                        self.message = (
+                            f"Load recovered to {crammer_load_pct:.1f}% (> {sufficient_restart_threshold:.1f}%). "
+                            f"Returning to Step 1/4 startup homes."
+                        )
+
                     using_load_trigger = crammer_connected and crammer_running
 
                     if using_load_trigger:
                         now = time.monotonic()
                         below = crammer_load_pct <= self.low_load_threshold_pct
-                        sufficient_for_restart = crammer_load_pct > sufficient_restart_threshold
-
-                        # After low-load handling begins, any later sufficient
-                        # load in steps 2/3/4 should restart at Step 1 startup homes.
-                        if self.stage1_rearm_pending and sufficient_for_restart:
-                            restart_stage1_now = True
-                            self.message = (
-                                f"Load recovered to {crammer_load_pct:.1f}% (> {sufficient_restart_threshold:.1f}%). "
-                                f"Returning to Step 1/4 startup homes."
-                            )
 
                         # Continuous low-load mode: if we stay below threshold,
                         # keep homing every retrigger interval (no re-arm bounce required).

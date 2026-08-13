@@ -263,12 +263,14 @@ const float TC_vacuumThresholdV = 2.5;
 const bool  TC_vacuumDetectedWhenVoltageHigh = true;
 const int   TC_servoPickStepDeg = 1;
 const unsigned long TC_pumpPrimeMs           = 75;
+const unsigned long TC_bag2ExtraPumpPrimeMs  = 125;
 const unsigned long TC_servoStepSettleMs     = 6;
 const unsigned long TC_vacuumCheckIntervalMs = 1;
 const unsigned long TC_servoReturnMsPerDeg   = 4;
 const unsigned long TC_servoReturnMinMs      = 150;
 const unsigned long TC_postPickLiftSettleMs  = 200;
 const unsigned long TC_bag2ExtraLiftSettleMs = 400;
+const unsigned long TC_bag2VacuumRetryWindowMs = 220;
 const unsigned long TC_minTravelAfterUpMs    = 250;
 const int           TC_servoTravelMaxDeg     = 10;
 const int           TC_servoTravelAngleToleranceDeg = 5;   // allow small command-angle slack before blocking X travel
@@ -1198,7 +1200,8 @@ bool tcPickAtBag() {
 
   // Prime the vacuum pump, then descend; grab as soon as the cup seals.
   tcPumpOn();
-  delay(TC_pumpPrimeMs);
+  unsigned long primeMs = TC_pumpPrimeMs + (tcActiveBag == 2 ? TC_bag2ExtraPumpPrimeMs : 0);
+  delay(primeMs);
   Serial.println(F("[TC] Servo down"));
 
   bool bagGrabbed = false;
@@ -1215,9 +1218,25 @@ bool tcPickAtBag() {
 
   if (!bagGrabbed) {
     tcServoDown();
-    delay(TC_servoStepSettleMs);
-    tcStopPickSequence(F("[TC] Vacuum not detected - sequence stopped"));
-    return false;
+    // Bag 2 can seal a little later right at full downstroke; allow a short
+    // extra confirmation window before declaring pickup failure.
+    if (tcActiveBag == 2 && TC_bag2VacuumRetryWindowMs > 0) {
+      unsigned long retryStart = millis();
+      while ((millis() - retryStart) < TC_bag2VacuumRetryWindowMs) {
+        if (tcVacuumDetectedOnce()) {
+          bagGrabbed = true;
+          Serial.println(F("[TC] Bag 2 vacuum detected during down-position retry"));
+          break;
+        }
+        delay(TC_vacuumCheckIntervalMs);
+      }
+    }
+
+    if (!bagGrabbed) {
+      delay(TC_servoStepSettleMs);
+      tcStopPickSequence(F("[TC] Vacuum not detected - sequence stopped"));
+      return false;
+    }
   }
 
   tcReturnServoToUp();

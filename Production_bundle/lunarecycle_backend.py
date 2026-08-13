@@ -3811,6 +3811,9 @@ class ExtrusionRatioTestController:
             return
         sufficient_threshold = self.low_load_threshold_pct
 
+        with self._lock:
+            self.startup_homes_done = 0
+
         self._arduino("MOTOR_STOP")
         with self._lock:
             self.phase = "STARTUP_HOMING"
@@ -4076,25 +4079,19 @@ class ExtrusionRatioTestController:
                     continue
 
                 if not stage2_active:
-                    # Stage 1 behavior: when load first drops below threshold,
-                    # try one home attempt before enabling Stage 2 mixer motion.
-                    self._arduino("MOTOR_STOP")
-                    self._trigger_home(
-                        rotations_total,
-                        f"Stage 1 low-load ({crammer_load_pct:.1f}% <= {self.low_load_threshold_pct:.1f}%): pre-Stage-2 home attempt.",
-                        reassert_mixer=False,
-                    )
-                    with self._lock:
-                        self.low_load_home_count += 1
+                    # Whenever Stage 1 transitions toward Stage 2 (including
+                    # after returning from later stages), run the full startup
+                    # home routine with threshold checks between attempts.
+                    self._run_startup_homes()
                     if self._stop.is_set():
                         return
 
-                    _, _, load_after_home = self._sample_crammer()
-                    if load_after_home > self.low_load_threshold_pct:
+                    _, _, load_after_stage1 = self._sample_crammer()
+                    if load_after_stage1 > self.low_load_threshold_pct:
                         with self._lock:
                             self.phase = "STARTUP_HOMING"
                             self.message = (
-                                f"Stage 1 pre-Stage-2 home recovered load to {load_after_home:.1f}% "
+                                f"Stage 1 startup homes recovered load to {load_after_stage1:.1f}% "
                                 f"(> {self.low_load_threshold_pct:.1f}%). Staying in Stage 1 hold."
                             )
                         self._stop.wait(self.poll_sec)

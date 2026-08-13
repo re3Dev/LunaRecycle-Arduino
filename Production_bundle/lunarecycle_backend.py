@@ -3425,14 +3425,14 @@ class AutoWorkflowController:
             self._sleep(30.0)
             self._log("Pre-run prime complete. Starting pick/place size-reduction.", "good")
 
-            arduino.send("MOTOR_SET 150 FWD")
+            arduino.send("MOTOR_SET 255 FWD")
             arduino.send("SHREDDER_FWD")
             try:
                 arduino.send("GATE_OPEN")
             except Exception:
                 pass
             arduino.send(f"SR_START {int(cfg['pe_units'])} {int(cfg['pa_units'])}")
-            self._log("Step 1 started: Size Reduction with mixer FWD @ 150 and shredder FWD.", "good")
+            self._log("Step 1 started: Size Reduction with mixer FWD @ 255 and shredder FWD.", "good")
 
             sr_result = self._wait_sr_done(cfg)
             if sr_result.get("continued_after_empty_stream"):

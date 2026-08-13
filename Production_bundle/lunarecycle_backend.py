@@ -3399,6 +3399,12 @@ class AutoWorkflowController:
                 "info",
             )
 
+            try:
+                arduino.send(BLASTGATE_CLOSE_CMD)
+                self._log("Pre-start: blastgates CLOSED.", "info")
+            except Exception:
+                pass
+
             self._run_tc_home()
             self._log("TC_HOME complete (conveyor READY).", "good")
 

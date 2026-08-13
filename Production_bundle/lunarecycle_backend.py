@@ -3755,7 +3755,7 @@ class ExtrusionRatioTestController:
                 return line
         return ""
 
-    def _trigger_home(self, rotations_total: float, reason: str):
+    def _trigger_home(self, rotations_total: float, reason: str, reassert_mixer: bool = True):
         with self._lock:
             self.phase = "HOMING"
             self.message = reason
@@ -3763,7 +3763,8 @@ class ExtrusionRatioTestController:
         response = self._arduino("AGITATOR_HOME")
         home_ok = self._home_completed(response)
         # Re-assert the requested continuous feed behavior after each home.
-        self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+        if reassert_mixer:
+            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
         if not home_ok:
             with self._lock:
@@ -4054,6 +4055,30 @@ class ExtrusionRatioTestController:
                     continue
 
                 if not stage2_active:
+                    # Stage 1 behavior: when load first drops below threshold,
+                    # try one home attempt before enabling Stage 2 mixer motion.
+                    self._arduino("MOTOR_STOP")
+                    self._trigger_home(
+                        rotations_total,
+                        f"Stage 1 low-load ({crammer_load_pct:.1f}% <= {self.low_load_threshold_pct:.1f}%): pre-Stage-2 home attempt.",
+                        reassert_mixer=False,
+                    )
+                    with self._lock:
+                        self.low_load_home_count += 1
+                    if self._stop.is_set():
+                        return
+
+                    _, _, load_after_home = self._sample_crammer()
+                    if load_after_home > self.low_load_threshold_pct:
+                        with self._lock:
+                            self.phase = "STARTUP_HOMING"
+                            self.message = (
+                                f"Stage 1 pre-Stage-2 home recovered load to {load_after_home:.1f}% "
+                                f"(> {self.low_load_threshold_pct:.1f}%). Staying in Stage 1 hold."
+                            )
+                        self._stop.wait(self.poll_sec)
+                        continue
+
                     self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
                     stage2_active = True
 

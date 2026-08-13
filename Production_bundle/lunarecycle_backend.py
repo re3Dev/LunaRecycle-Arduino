@@ -3999,26 +3999,29 @@ class ExtrusionRatioTestController:
             # the normal retrigger cadence until load recovers.
             now = time.monotonic()
             if now >= next_home_at:
-                state = self._agitator_state()
-                if state in ("", "IDLE"):
-                    try:
-                        response = self._arduino("AGITATOR_HOME")
-                        if self._home_completed(response):
-                            stage3_home_failures = 0
-                            with self._lock:
-                                self.last_home_response = response
-                                self.home_sequences_completed += 1
-                                self.low_load_home_count += 1
+                try:
+                    response = self._arduino("AGITATOR_HOME")
+                    if self._home_completed(response):
+                        stage3_home_failures = 0
+                        with self._lock:
+                            self.last_home_response = response
+                            self.home_sequences_completed += 1
+                            self.low_load_home_count += 1
+                    else:
+                        err = self._home_error_line(response).lower()
+                        if "busy" in err:
+                            # Non-fatal: agitator is still finishing prior motion.
+                            # Keep recovery active and retry on next cadence.
+                            pass
                         else:
                             stage3_home_failures += 1
-                            err = self._home_error_line(response).lower()
                             if ("timeout" in err) or ("fault" in err) or ("driver" in err) or stage3_home_failures >= 2:
                                 raise RuntimeError(
                                     "Air-lock home failed during Stage 3 recovery; "
                                     f"aborting to prevent repeated fault retries. response={response}"
                                 )
-                    except Exception:
-                        raise
+                except Exception:
+                    raise
                 next_home_at = now + max(0.1, float(self.low_load_retrigger_sec))
 
             self._stop.wait(self.poll_sec)

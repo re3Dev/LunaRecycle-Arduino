@@ -3809,6 +3809,7 @@ class ExtrusionRatioTestController:
         attempts = max(0, int(self.startup_home_attempts))
         if attempts <= 0:
             return
+        sufficient_threshold = self.low_load_threshold_pct
 
         self._arduino("MOTOR_STOP")
         with self._lock:
@@ -3839,6 +3840,17 @@ class ExtrusionRatioTestController:
                     self.message = (
                         f"Step 1/4: startup home {idx}/{attempts} did not complete; continuing."
                     )
+
+            # Stage 1 should stop as soon as load is sufficient instead of
+            # always consuming all configured home attempts.
+            _, _, load_after_home = self._sample_crammer()
+            if load_after_home > sufficient_threshold:
+                with self._lock:
+                    self.message = (
+                        f"Step 1/4 early stop after home {idx}/{attempts}: "
+                        f"load {load_after_home:.1f}% > {sufficient_threshold:.1f}%."
+                    )
+                return
 
             if idx < attempts and FEED_STARTUP_HOME_INTERVAL_SEC > 0:
                 self._stop.wait(FEED_STARTUP_HOME_INTERVAL_SEC)

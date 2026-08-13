@@ -316,6 +316,7 @@ const float TC_bag1Pos       = -25.0;
 const float TC_bag2Pos       = -537.0;   // Tune to the Bag 2 stack position.
 const float TC_bag1ShredderPos = -462.0;
 const float TC_bag2ShredderPos = -310.0;   // 20mm farther right than -275.0.
+const float TC_bag1DropOvertravelMm = 30.0;  // fling: overshoot past Bag 1 drop, then return [tune]
 const float TC_stepperMinPos = -570.0;
 const float TC_stepperMaxPos = -10.0;
 
@@ -396,6 +397,7 @@ enum TCState {
   TC_BACK_TO_BAG1,
   TC_READY,
   TC_MOVE_TO_BAG,
+  TC_BAG1_TO_SHREDDER_OVERSHOOT,
   TC_BAG_TO_SHREDDER,
   TC_MANUAL_MOVE,
   TC_SR_SHREDDING,
@@ -563,6 +565,7 @@ void systemDiagUpdateLed() {
       tcState == TC_HOMING ||
       tcState == TC_BACK_TO_BAG1 ||
       tcState == TC_MOVE_TO_BAG ||
+      tcState == TC_BAG1_TO_SHREDDER_OVERSHOOT ||
       tcState == TC_BAG_TO_SHREDDER ||
       tcState == TC_SR_SHREDDING ||
       tcState == TC_SR_COOLING ||
@@ -1122,6 +1125,11 @@ float tcActiveShredderPosition() {
   return tcActiveBag == 2 ? TC_bag2ShredderPos : TC_bag1ShredderPos;
 }
 
+float tcBag1ShredderOvertravelPosition() {
+  // More negative mm is farther travel from home; overshoot then return to drop.
+  return max(TC_stepperMinPos, TC_bag1ShredderPos - TC_bag1DropOvertravelMm);
+}
+
 const __FlashStringHelper* tcActiveBagName() {
   return tcActiveBag == 2 ? F("Bag 2") : F("Bag 1");
 }
@@ -1530,9 +1538,15 @@ void tcRunState() {
 
     case TC_MOVE_TO_BAG:
       if (tcPickAtBag()) {
-        tcMoveTo(tcActiveShredderPosition(), TC_BAG_TO_SHREDDER);
-        Serial.println(srRunning ? F("[SIZERED] Pick OK - moving to shredder")
-                                 : F("[TC] Pick complete - moving to shredder"));
+        if (tcActiveBag == 1) {
+          tcMoveTo(tcBag1ShredderOvertravelPosition(), TC_BAG1_TO_SHREDDER_OVERSHOOT);
+          Serial.println(srRunning ? F("[SIZERED] Pick OK - Bag 1 fling overshoot")
+                                   : F("[TC] Pick complete - Bag 1 fling overshoot"));
+        } else {
+          tcMoveTo(tcActiveShredderPosition(), TC_BAG_TO_SHREDDER);
+          Serial.println(srRunning ? F("[SIZERED] Pick OK - moving to shredder")
+                                   : F("[TC] Pick complete - moving to shredder"));
+        }
       } else if (srRunning) {
         // Pick failed: mark that cassette as depleted and let the auto workflow
         // continue with the remaining stream, or finish once both are exhausted.
@@ -1543,6 +1557,12 @@ void tcRunState() {
         Serial.println(F(" cassette empty"));
         srMoveToNextBag();
       }
+      break;
+
+    case TC_BAG1_TO_SHREDDER_OVERSHOOT:
+      tcMoveTo(tcActiveShredderPosition(), TC_BAG_TO_SHREDDER);
+      Serial.println(srRunning ? F("[SIZERED] Bag 1 fling return - moving to drop point")
+                               : F("[TC] Bag 1 fling return - moving to drop point"));
       break;
 
     case TC_BAG_TO_SHREDDER:
@@ -1574,6 +1594,7 @@ void tcServiceStepper() {
   switch (tcState) {
     case TC_BACK_TO_BAG1:
     case TC_MOVE_TO_BAG:
+    case TC_BAG1_TO_SHREDDER_OVERSHOOT:
     case TC_BAG_TO_SHREDDER:
     case TC_MANUAL_MOVE:
       TC_stepper.run();
@@ -1589,6 +1610,7 @@ const __FlashStringHelper* tcStateName() {
     case TC_BACK_TO_BAG1:     return F("HOMING");
     case TC_READY:            return F("READY");
     case TC_MOVE_TO_BAG:
+    case TC_BAG1_TO_SHREDDER_OVERSHOOT:
     case TC_BAG_TO_SHREDDER:  return F("PICKING");
     case TC_MANUAL_MOVE:      return F("MANUAL");
     case TC_SR_SHREDDING:

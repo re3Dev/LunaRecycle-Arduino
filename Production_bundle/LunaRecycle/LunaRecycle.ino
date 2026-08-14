@@ -556,6 +556,16 @@ void systemDiagUpdateLed() {
     return;
   }
 
+  // Blue during feed/extrusion-style activity (auto workflow Step 3): vacuum
+  // metering active while not in size-reduction mode.
+  bool extrusionActive =
+      vacuumPercent > 0 &&
+      !srRunning;
+  if (extrusionActive) {
+    systemDiagSetColor(0, 0, 255);
+    return;
+  }
+
   // Green while the machine is actively doing work.
   bool machineActive =
       motorPwm > 0 ||

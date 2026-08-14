@@ -3358,7 +3358,7 @@ class AutoWorkflowController:
         dry_hold.start(
             int(dry_minutes * 60.0),
             dry_temp_c,
-            mixer_pwm=AUTO_DRY_HOLD_MIX_PWM,
+            mixer_pwm=0,
             mixer_dir="FWD",
             keep_dryer_on_after=False,
         )
@@ -3426,14 +3426,14 @@ class AutoWorkflowController:
             self._sleep(30.0)
             self._log("Pre-run prime complete. Starting pick/place size-reduction.", "good")
 
-            arduino.send("MOTOR_SET 255 FWD")
+            arduino.send("MOTOR_STOP")
             arduino.send("SHREDDER_FWD")
             try:
                 arduino.send("GATE_OPEN")
             except Exception:
                 pass
             arduino.send(f"SR_START {int(cfg['pe_units'])} {int(cfg['pa_units'])}")
-            self._log("Step 1 started: Size Reduction with mixer FWD @ 255 and shredder FWD.", "good")
+            self._log("Step 1 started: Size Reduction pick/place with mixer OFF and shredder FWD.", "good")
 
             sr_result = self._wait_sr_done(cfg)
             if sr_result.get("continued_after_empty_stream"):
@@ -3444,47 +3444,46 @@ class AutoWorkflowController:
             else:
                 self._log("Step 1 complete. Firmware finished the shredder post-run and turned it off.", "good")
 
+            self._set_state("POST-SHRED TAIL", "Running shredder + mixer tail before drying...", True)
+            try:
+                arduino.send("SHREDDER_FWD")
+            except Exception:
+                pass
+            try:
+                arduino.send("SHREDDER_ON")
+            except Exception:
+                pass
+            try:
+                arduino.send("GATE_OPEN")
+            except Exception:
+                pass
+            try:
+                arduino.send("MOTOR_SET 255 FWD")
+            except Exception:
+                pass
+            self._log("Post-size-reduction tail started: shredder ON + mixer FWD @ 255 for 60s.", "info")
+            tail_started = time.monotonic()
+            while (time.monotonic() - tail_started) < 60.0:
+                if self._stop.is_set():
+                    raise RuntimeError("Workflow stop requested.")
+                self._sleep(0.2)
+            try:
+                arduino.send("MOTOR_STOP")
+            except Exception:
+                pass
+            try:
+                arduino.send("SHREDDER_OFF")
+            except Exception:
+                pass
+            try:
+                arduino.send("GATE_CLOSE")
+            except Exception:
+                pass
+            self._log("Post-size-reduction tail complete: mixer OFF, shredder OFF, gates CLOSED.", "good")
+
             self._set_state("DRYING", "Running Step 2/3...", True)
-            self._log(f"Step 2 started: Dryer hold active (mixer stays FWD @ {AUTO_DRY_HOLD_MIX_PWM}).", "good")
-
-            tail_thread_stop = threading.Event()
-
-            def _tail() -> None:
-                try:
-                    arduino.send("SHREDDER_FWD")
-                except Exception:
-                    pass
-                try:
-                    arduino.send("SHREDDER_ON")
-                except Exception:
-                    pass
-                try:
-                    arduino.send("GATE_OPEN")
-                except Exception:
-                    pass
-                self._log("Drying started: keeping shredder ON for 60s tail.", "info")
-                started_tail = time.monotonic()
-                while (time.monotonic() - started_tail) < 60.0:
-                    if tail_thread_stop.is_set() or self._stop.is_set():
-                        return
-                    time.sleep(0.2)
-                if tail_thread_stop.is_set() or self._stop.is_set():
-                    return
-                try:
-                    arduino.send("SHREDDER_OFF")
-                except Exception:
-                    pass
-                try:
-                    arduino.send("GATE_CLOSE")
-                except Exception:
-                    pass
-                self._log("Shredder tail complete: shredder OFF and gates CLOSED.", "good")
-
-            tail_thread = threading.Thread(target=_tail, daemon=True)
-            tail_thread.start()
-
+            self._log("Step 2 started: Dryer hold active (mixer OFF).", "good")
             self._run_dry_hold(cfg)
-            tail_thread_stop.set()
             self._log("Step 2 complete.", "good")
 
             self._set_state("FEED", "Running Step 3/3...", True)

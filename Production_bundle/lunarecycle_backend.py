@@ -3761,6 +3761,14 @@ class ExtrusionRatioTestController:
                 return line
         return ""
 
+    def _home_count_qualified(self, home_ok: bool) -> tuple[bool, float]:
+        if not home_ok:
+            return False, 0.0
+        vacuum_on = int(self.vacuum_pct) > 0
+        _, _, load_pct = self._sample_crammer()
+        load_below_threshold = load_pct <= self.low_load_threshold_pct
+        return bool(vacuum_on and load_below_threshold), float(load_pct)
+
     def _trigger_home(self, rotations_total: float, reason: str, reassert_mixer: bool = True):
         with self._lock:
             self.phase = "HOMING"
@@ -3782,11 +3790,15 @@ class ExtrusionRatioTestController:
                 )
             return
 
+        counted, load_pct = self._home_count_qualified(home_ok)
+
         recovery_applied, pending_homes = self._post_home_recovery_if_needed()
 
         with self._lock:
             self.last_home_response = response
-            self.home_sequences_completed += 1
+            if counted:
+                self.home_sequences_completed += 1
+                self.low_load_home_count += 1
             self.last_home_rotations_total = rotations_total
             self.last_post_home_recovery_applied = bool(recovery_applied)
             self.phase = "WATCHING"
@@ -3799,6 +3811,11 @@ class ExtrusionRatioTestController:
                 )
             else:
                 recovery_note = "Recovery not needed."
+            if not counted:
+                recovery_note += (
+                    f" Home not counted (vacuum_on={int(self.vacuum_pct) > 0}, "
+                    f"load={load_pct:.1f} threshold={self.low_load_threshold_pct:.1f})."
+                )
             self.message = (
                 f"Homed {self.home_sequences_completed} time(s). "
                 f"{recovery_note} "
@@ -3828,17 +3845,27 @@ class ExtrusionRatioTestController:
 
             response = self._arduino("AGITATOR_HOME")
             home_ok = self._home_completed(response)
+            counted, load_after_home = self._home_count_qualified(home_ok)
+            if not home_ok:
+                _, _, load_after_home = self._sample_crammer()
 
             with self._lock:
                 self.last_home_response = response
                 self.startup_homes_done = idx
                 if home_ok:
-                    self.home_sequences_completed += 1
+                    if counted:
+                        self.home_sequences_completed += 1
                     self.last_home_rotations_total = self.live_extruder_rotations_total
                     self.message = (
                         f"Step 1/4: startup homing with mixer stopped "
                         f"({self.startup_homes_done}/{attempts} complete)."
                     )
+                    if not counted:
+                        self.message = (
+                            f"Step 1/4: startup home {idx}/{attempts} verified, "
+                            f"not counted (vacuum_on={int(self.vacuum_pct) > 0}, "
+                            f"load={load_after_home:.1f} threshold={sufficient_threshold:.1f})."
+                        )
                 else:
                     self.message = (
                         f"Step 1/4: startup home {idx}/{attempts} did not complete; continuing."
@@ -3846,7 +3873,6 @@ class ExtrusionRatioTestController:
 
             # Stage 1 should stop as soon as load is sufficient instead of
             # always consuming all configured home attempts.
-            _, _, load_after_home = self._sample_crammer()
             if load_after_home > sufficient_threshold:
                 with self._lock:
                     self.message = (
@@ -3944,10 +3970,12 @@ class ExtrusionRatioTestController:
                     )
                 return True, 0
 
+            counted, _ = self._home_count_qualified(True)
             with self._lock:
                 self.last_home_response = stage2_home_response
-                self.home_sequences_completed += 1
-                self.low_load_home_count += 1
+                if counted:
+                    self.home_sequences_completed += 1
+                    self.low_load_home_count += 1
 
             # Resume the barrel immediately after the home so the recovery
             # check does not leave the mixer parked for the whole window.
@@ -4006,10 +4034,12 @@ class ExtrusionRatioTestController:
                     response = self._arduino("AGITATOR_HOME")
                     if self._home_completed(response):
                         stage3_home_failures = 0
+                        counted, _ = self._home_count_qualified(True)
                         with self._lock:
                             self.last_home_response = response
-                            self.home_sequences_completed += 1
-                            self.low_load_home_count += 1
+                            if counted:
+                                self.home_sequences_completed += 1
+                                self.low_load_home_count += 1
                     else:
                         err = self._home_error_line(response).lower()
                         if "busy" in err:
@@ -4134,9 +4164,6 @@ class ExtrusionRatioTestController:
 
                 if trigger_home_now:
                     self._trigger_home(rotations_total, trigger_reason)
-                    with self._lock:
-                        if "Crammer load low" in trigger_reason:
-                            self.low_load_home_count += 1
                     self._stop.wait(self.poll_sec)
                     continue
 

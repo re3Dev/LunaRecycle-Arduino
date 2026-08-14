@@ -3766,8 +3766,7 @@ class ExtrusionRatioTestController:
             return False, 0.0
         vacuum_on = int(self.vacuum_pct) > 0
         _, _, load_pct = self._sample_crammer()
-        load_below_threshold = load_pct <= self.low_load_threshold_pct
-        return bool(vacuum_on and load_below_threshold), float(load_pct)
+        return bool(vacuum_on), float(load_pct)
 
     def _trigger_home(self, rotations_total: float, reason: str, reassert_mixer: bool = True):
         with self._lock:
@@ -3814,7 +3813,7 @@ class ExtrusionRatioTestController:
             if not counted:
                 recovery_note += (
                     f" Home not counted (vacuum_on={int(self.vacuum_pct) > 0}, "
-                    f"load={load_pct:.1f} threshold={self.low_load_threshold_pct:.1f})."
+                    f"load={load_pct:.1f})."
                 )
             self.message = (
                 f"Homed {self.home_sequences_completed} time(s). "
@@ -3864,7 +3863,7 @@ class ExtrusionRatioTestController:
                         self.message = (
                             f"Step 1/4: startup home {idx}/{attempts} verified, "
                             f"not counted (vacuum_on={int(self.vacuum_pct) > 0}, "
-                            f"load={load_after_home:.1f} threshold={sufficient_threshold:.1f})."
+                            f"load={load_after_home:.1f})."
                         )
                 else:
                     self.message = (

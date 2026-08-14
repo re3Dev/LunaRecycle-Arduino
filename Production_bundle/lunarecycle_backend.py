@@ -179,6 +179,7 @@ RATIO_TEST_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_TEST_REVERSE_SEC", "3.
 RATIO_TEST_FORWARD_RECOVER_SEC = float(os.environ.get("LUNA_RATIO_TEST_FORWARD_RECOVER_SEC", "4.0"))
 RATIO_POST_HOME_RECOVERY_CHECK_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_CHECK_SEC", "8.0"))
 RATIO_POST_HOME_RECOVERY_LOAD_PCT = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_LOAD_PCT", "60.0"))
+RATIO_MIN_HOMES_BEFORE_RECOVERY = max(0, int(os.environ.get("LUNA_RATIO_MIN_HOMES_BEFORE_RECOVERY", "0")))
 RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES = int(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES", "2"))
 RATIO_POST_HOME_RECOVERY_STOP1_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STOP1_SEC", "3.0"))
 RATIO_POST_HOME_RECOVERY_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_REVERSE_SEC", "5.0"))
@@ -3612,6 +3613,7 @@ class ExtrusionRatioTestController:
         self.startup_homes_done = 0
         self.post_home_recovery_check_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_CHECK_SEC))
         self.post_home_recovery_load_pct = max(0.0, min(100.0, float(RATIO_POST_HOME_RECOVERY_LOAD_PCT)))
+        self.min_homes_before_recovery = max(0, int(RATIO_MIN_HOMES_BEFORE_RECOVERY))
         self.post_home_recovery_required_homes = max(1, int(RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES))
         self.post_home_recovery_stop1_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP1_SEC))
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
@@ -3803,6 +3805,11 @@ class ExtrusionRatioTestController:
             self.phase = "WATCHING"
             if recovery_applied:
                 recovery_note = "Recovery applied."
+            elif self.home_sequences_completed < self.min_homes_before_recovery:
+                recovery_note = (
+                    f"Recovery gate active: need {self.min_homes_before_recovery - self.home_sequences_completed} "
+                    f"more counted home(s) before Stage 3/4 is allowed."
+                )
             elif pending_homes > 0:
                 recovery_note = (
                     f"Recovery pending: need {pending_homes} more unrecovered "
@@ -3895,6 +3902,11 @@ class ExtrusionRatioTestController:
             with self._lock:
                 self.post_home_unrecovered_streak = 0
             return False, 0
+
+        if self.home_sequences_completed < self.min_homes_before_recovery:
+            with self._lock:
+                self.post_home_unrecovered_streak = 0
+            return False, (self.min_homes_before_recovery - self.home_sequences_completed)
 
         deadline = time.monotonic() + check_sec
         recovered = False
@@ -4215,6 +4227,7 @@ class ExtrusionRatioTestController:
                 "low_load_retrigger_sec": self.low_load_retrigger_sec,
                 "low_load_home_count": self.low_load_home_count,
                 "low_load_armed": self.low_load_armed,
+                "min_homes_before_recovery": self.min_homes_before_recovery,
                 "post_home_recovery_check_sec": self.post_home_recovery_check_sec,
                 "post_home_recovery_load_pct": self.post_home_recovery_load_pct,
                 "post_home_recovery_required_homes": self.post_home_recovery_required_homes,

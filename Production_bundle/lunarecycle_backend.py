@@ -3965,36 +3965,40 @@ class ExtrusionRatioTestController:
                 return True, 0
             self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
-            # Home immediately after Stage 2 returns to forward so the next
-            # recovery step does not wait until the later Stage 3 dwell.
+            # Home twice after Stage 2 returns to forward so Stage 4 escalation
+            # cannot happen after only a single post-reverse home attempt.
             with self._lock:
                 self.phase = "RECOVERY"
-                self.message = "Stage 2 resumed forward; running air-lock home now."
+                self.message = "Stage 2 resumed forward; running 2 air-lock home attempts now."
 
-            stage2_home_response = self._arduino("AGITATOR_HOME")
-            if not self._home_completed(stage2_home_response):
-                err = self._home_error_line(stage2_home_response)
-                err_l = err.lower()
-                if (not stage2_home_response) or ("timeout" in err_l) or ("fault" in err_l) or ("driver" in err_l):
-                    raise RuntimeError(
-                        "Air-lock home failed immediately after Stage 2 forward resume; "
-                        f"aborting recovery. response={stage2_home_response}"
-                    )
+            stage2_home_attempts = 2
+            for attempt_idx in range(stage2_home_attempts):
+                if self._stop.is_set():
+                    return True, 0
+
+                stage2_home_response = self._arduino("AGITATOR_HOME")
+                if not self._home_completed(stage2_home_response):
+                    err = self._home_error_line(stage2_home_response)
+                    err_l = err.lower()
+                    if (not stage2_home_response) or ("timeout" in err_l) or ("fault" in err_l) or ("driver" in err_l):
+                        raise RuntimeError(
+                            "Air-lock home failed immediately after Stage 2 forward resume; "
+                            f"aborting recovery. response={stage2_home_response}"
+                        )
+                    with self._lock:
+                        self.last_home_response = stage2_home_response
+                        self.message = (
+                            f"Stage 2 forward home attempt {attempt_idx + 1}/{stage2_home_attempts} busy; "
+                            "continuing recovery sequence."
+                        )
+                    continue
+
+                counted, _ = self._home_count_qualified(True)
                 with self._lock:
                     self.last_home_response = stage2_home_response
-                    self.phase = "WATCHING"
-                    self.message = (
-                        "Air-lock busy immediately after Stage 2 forward resume; "
-                        "will retry on next low-load trigger."
-                    )
-                return True, 0
-
-            counted, _ = self._home_count_qualified(True)
-            with self._lock:
-                self.last_home_response = stage2_home_response
-                if counted:
-                    self.home_sequences_completed += 1
-                    self.low_load_home_count += 1
+                    if counted:
+                        self.home_sequences_completed += 1
+                        self.low_load_home_count += 1
 
             # Resume the barrel immediately after the home so the recovery
             # check does not leave the mixer parked for the whole window.

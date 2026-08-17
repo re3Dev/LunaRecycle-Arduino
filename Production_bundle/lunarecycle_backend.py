@@ -3621,7 +3621,8 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_check_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_CHECK_SEC))
         self.post_home_recovery_load_pct = max(0.0, min(100.0, float(RATIO_POST_HOME_RECOVERY_LOAD_PCT)))
         self.min_homes_before_recovery = max(0, int(RATIO_MIN_HOMES_BEFORE_RECOVERY))
-        self.post_home_recovery_required_homes = max(1, int(RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES))
+        # Enforce at least 2 unrecovered home events before Stage 4 recovery.
+        self.post_home_recovery_required_homes = max(2, int(RATIO_POST_HOME_RECOVERY_REQUIRED_HOMES))
         self.post_home_recovery_stop1_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP1_SEC))
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
@@ -4118,6 +4119,9 @@ class ExtrusionRatioTestController:
                         self._arduino("MOTOR_STOP")
                         stage2_active = False
                     with self._lock:
+                        # Reset unrecovered streak once load returns high so a
+                        # stale partial streak cannot escalate on a single later home.
+                        self.post_home_unrecovered_streak = 0
                         self.phase = "STARTUP_HOMING"
                         self.message = (
                             f"Step 1/4 hold: load {crammer_load_pct:.1f}% is above "

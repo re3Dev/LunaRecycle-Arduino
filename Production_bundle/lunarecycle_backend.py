@@ -3461,16 +3461,24 @@ class AutoWorkflowController:
                 arduino.send("MOTOR_SET 255 FWD")
             except Exception:
                 pass
-            self._log("Post-size-reduction tail started: shredder ON + mixer FWD @ 255 for 60s.", "info")
+            self._log("Post-size-reduction tail started: shredder ON for 60s, mixer FWD @ 255 for first 20s.", "info")
             tail_started = time.monotonic()
+            mixer_stopped = False
             while (time.monotonic() - tail_started) < 60.0:
                 if self._stop.is_set():
                     raise RuntimeError("Workflow stop requested.")
+                if not mixer_stopped and (time.monotonic() - tail_started) >= 20.0:
+                    try:
+                        arduino.send("MOTOR_STOP")
+                    except Exception:
+                        pass
+                    mixer_stopped = True
                 self._sleep(0.2)
-            try:
-                arduino.send("MOTOR_STOP")
-            except Exception:
-                pass
+            if not mixer_stopped:
+                try:
+                    arduino.send("MOTOR_STOP")
+                except Exception:
+                    pass
             try:
                 arduino.send("SHREDDER_OFF")
             except Exception:
@@ -3479,7 +3487,7 @@ class AutoWorkflowController:
                 arduino.send("GATE_CLOSE")
             except Exception:
                 pass
-            self._log("Post-size-reduction tail complete: mixer OFF, shredder OFF, gates CLOSED.", "good")
+            self._log("Post-size-reduction tail complete: mixer ran 20s then OFF; shredder ran 60s; gates CLOSED.", "good")
 
             self._set_state("DRYING", "Running Step 2/3...", True)
             self._log("Step 2 started: Dryer hold active (mixer OFF).", "good")

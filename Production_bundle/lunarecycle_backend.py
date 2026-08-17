@@ -4002,6 +4002,21 @@ class ExtrusionRatioTestController:
                         self.home_sequences_completed += 1
                         self.low_load_home_count += 1
 
+                # After the first Stage-2-forward home, wait briefly and
+                # re-check load before attempting a second home.
+                if attempt_idx < (stage2_home_attempts - 1):
+                    if self._stop.wait(self.post_home_recovery_stage2_home_stop_sec):
+                        return True, 0
+                    _, _, inter_home_load = self._sample_crammer()
+                    if inter_home_load > recover_threshold:
+                        with self._lock:
+                            self.post_home_unrecovered_streak = 0
+                            self.message = (
+                                f"Stage 2 forward home recovered load to {inter_home_load:.1f}% "
+                                f"> {recover_threshold:.1f}%; skipping second home."
+                            )
+                        return True, 0
+
             # Resume the barrel immediately after the home so the recovery
             # check does not leave the mixer parked for the whole window.
             self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")

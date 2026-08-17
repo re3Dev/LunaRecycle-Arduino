@@ -187,6 +187,7 @@ RATIO_POST_HOME_RECOVERY_STOP2_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_
 RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC", "15.0"))
 RATIO_POST_HOME_RECOVERY_STAGE2_HOME_STOP_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE2_HOME_STOP_SEC", "3.0"))
 RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC", "3.0"))
+RATIO_POST_HOME_RECOVERY_STAGE4_FIRST_HOME_DELAY_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE4_FIRST_HOME_DELAY_SEC", "0.5"))
 RATIO_USE_POST_HOME_RECOVERY_STAGE2 = _env_flag("LUNA_RATIO_USE_POST_HOME_RECOVERY_STAGE2", "1")
 MOONRAKER_RECONNECT_SEC = float(os.environ.get("LUNA_MOONRAKER_RECONNECT_SEC", "2.0"))
 MOONRAKER_FE_TEMP_C = float(os.environ.get("LUNA_MOONRAKER_FE_TEMP_C", "100.0"))
@@ -3628,6 +3629,7 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
         self.post_home_recovery_stage2_check_sec = max(1.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC))
         self.post_home_recovery_stage3_stop_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC))
+        self.post_home_recovery_stage4_first_home_delay_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE4_FIRST_HOME_DELAY_SEC))
         self.use_post_home_recovery_stage2 = bool(RATIO_USE_POST_HOME_RECOVERY_STAGE2)
         self.allow_post_home_recovery = True
         self.last_post_home_recovery_applied = False
@@ -4042,7 +4044,7 @@ class ExtrusionRatioTestController:
         # Hold reverse until the crammer load recovers above threshold.
         reverse_started = time.monotonic()
         min_reverse_sec = max(0.0, float(self.post_home_recovery_reverse_sec))
-        next_home_at = reverse_started + max(0.1, float(self.low_load_retrigger_sec))
+        next_home_at = reverse_started + max(0.0, float(self.post_home_recovery_stage4_first_home_delay_sec))
         stage3_home_failures = 0
         while not self._stop.is_set():
             _, _, load_pct = self._sample_crammer()
@@ -4252,6 +4254,7 @@ class ExtrusionRatioTestController:
                 "post_home_recovery_stop2_sec": self.post_home_recovery_stop2_sec,
                 "post_home_recovery_stage2_check_sec": self.post_home_recovery_stage2_check_sec,
                 "post_home_recovery_stage3_stop_sec": self.post_home_recovery_stage3_stop_sec,
+                "post_home_recovery_stage4_first_home_delay_sec": self.post_home_recovery_stage4_first_home_delay_sec,
                 "use_post_home_recovery_stage2": self.use_post_home_recovery_stage2,
                 "allow_post_home_recovery": self.allow_post_home_recovery,
                 "last_post_home_recovery_applied": self.last_post_home_recovery_applied,

@@ -3627,6 +3627,7 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_stop1_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP1_SEC))
         self.post_home_recovery_reverse_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_REVERSE_SEC))
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
+        self.post_home_recovery_stage2_home_stop_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_HOME_STOP_SEC))
         self.post_home_recovery_stage2_check_sec = max(1.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC))
         self.post_home_recovery_stage3_stop_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC))
         self.post_home_recovery_stage4_first_home_delay_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE4_FIRST_HOME_DELAY_SEC))

@@ -4114,10 +4114,11 @@ class ExtrusionRatioTestController:
                 trigger_reason = ""
                 trigger_home_now = False
 
-                if crammer_load_pct > self.low_load_threshold_pct:
-                    if stage2_active:
-                        self._arduino("MOTOR_STOP")
-                        stage2_active = False
+                # Stage 1 hold gate applies only before Stage 2 has started.
+                # Once Stage 2 is active, keep mixer-forward watching alive so
+                # load can naturally fall to the low-load trigger instead of
+                # bouncing between stages around the threshold.
+                if (not stage2_active) and (crammer_load_pct > self.low_load_threshold_pct):
                     with self._lock:
                         # Reset unrecovered streak once load returns high so a
                         # stale partial streak cannot escalate on a single later home.

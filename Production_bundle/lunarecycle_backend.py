@@ -2691,6 +2691,11 @@ RATIO_USE_CRAMMER_LOAD = _env_flag("LUNA_RATIO_USE_CRAMMER_LOAD", "1")
 RATIO_CRAMMER_LOW_LOAD_PCT = float(os.environ.get("LUNA_RATIO_CRAMMER_LOW_LOAD_PCT", "30.0"))
 RATIO_CRAMMER_LOAD_HYST_PCT = float(os.environ.get("LUNA_RATIO_CRAMMER_LOAD_HYST_PCT", "5.0"))
 RATIO_CRAMMER_RETRIGGER_SEC = float(os.environ.get("LUNA_RATIO_CRAMMER_RETRIGGER_SEC", "8.0"))
+RATIO_FEED_WATCHDOG_LOW_LOAD_PCT = float(os.environ.get("LUNA_RATIO_FEED_WATCHDOG_LOW_LOAD_PCT", "70.0"))
+RATIO_FEED_WATCHDOG_STUCK_SEC = float(os.environ.get("LUNA_RATIO_FEED_WATCHDOG_STUCK_SEC", "30.0"))
+RATIO_FEED_WATCHDOG_RESTART_STOP_SEC = float(os.environ.get("LUNA_RATIO_FEED_WATCHDOG_RESTART_STOP_SEC", "3.0"))
+RATIO_FEED_WATCHDOG_DROP_DELTA_PCT = float(os.environ.get("LUNA_RATIO_FEED_WATCHDOG_DROP_DELTA_PCT", "1.0"))
+RATIO_FEED_WATCHDOG_COOLDOWN_SEC = float(os.environ.get("LUNA_RATIO_FEED_WATCHDOG_COOLDOWN_SEC", "20.0"))
 
 
 class ProcessOrchestrator:
@@ -3619,6 +3624,15 @@ class ExtrusionRatioTestController:
         self.low_load_home_count = 0
         self.last_low_load_trigger_at = 0.0
         self.low_load_armed = True
+        self.feed_watchdog_low_load_pct = max(0.0, min(100.0, float(RATIO_FEED_WATCHDOG_LOW_LOAD_PCT)))
+        self.feed_watchdog_stuck_sec = max(1.0, float(RATIO_FEED_WATCHDOG_STUCK_SEC))
+        self.feed_watchdog_restart_stop_sec = max(0.0, float(RATIO_FEED_WATCHDOG_RESTART_STOP_SEC))
+        self.feed_watchdog_drop_delta_pct = max(0.0, float(RATIO_FEED_WATCHDOG_DROP_DELTA_PCT))
+        self.feed_watchdog_cooldown_sec = max(0.0, float(RATIO_FEED_WATCHDOG_COOLDOWN_SEC))
+        self.feed_watchdog_last_activity_at = 0.0
+        self.feed_watchdog_below_since = 0.0
+        self.feed_watchdog_last_reset_at = 0.0
+        self.feed_watchdog_last_load_pct: Optional[float] = None
         self.startup_home_attempts = max(0, int(FEED_STARTUP_HOME_ATTEMPTS))
         self.startup_post_home_check_sec = max(0.0, float(FEED_STARTUP_POST_HOME_CHECK_SEC))
         self.startup_homes_done = 0
@@ -3778,6 +3792,55 @@ class ExtrusionRatioTestController:
                 return line
         return ""
 
+    def _note_feed_activity(self, now: Optional[float] = None) -> None:
+        ts = time.monotonic() if now is None else float(now)
+        with self._lock:
+            self.feed_watchdog_last_activity_at = ts
+
+    def _maybe_restart_stuck_feed(self, load_pct: float, stage2_active: bool) -> bool:
+        now = time.monotonic()
+        with self._lock:
+            if self.feed_watchdog_last_activity_at <= 0.0:
+                self.feed_watchdog_last_activity_at = now
+            last_load = self.feed_watchdog_last_load_pct
+            if last_load is not None and (float(last_load) - float(load_pct)) >= self.feed_watchdog_drop_delta_pct:
+                self.feed_watchdog_last_activity_at = now
+
+            self.feed_watchdog_last_load_pct = float(load_pct)
+
+            if not stage2_active:
+                self.feed_watchdog_below_since = 0.0
+                return False
+
+            if load_pct < self.feed_watchdog_low_load_pct:
+                if self.feed_watchdog_below_since <= 0.0:
+                    self.feed_watchdog_below_since = now
+                below_long_enough = (now - self.feed_watchdog_below_since) >= self.feed_watchdog_stuck_sec
+            else:
+                self.feed_watchdog_below_since = 0.0
+                return False
+
+            no_activity_long_enough = (now - self.feed_watchdog_last_activity_at) >= self.feed_watchdog_stuck_sec
+            cooldown_ok = (now - self.feed_watchdog_last_reset_at) >= self.feed_watchdog_cooldown_sec
+            if not (below_long_enough and no_activity_long_enough and cooldown_ok):
+                return False
+
+            self.feed_watchdog_last_reset_at = now
+            self.feed_watchdog_last_activity_at = now
+            self.phase = "WATCHDOG"
+            self.message = (
+                f"Feed watchdog: load stuck below {self.feed_watchdog_low_load_pct:.1f}% for "
+                f">= {self.feed_watchdog_stuck_sec:.1f}s without activity. "
+                f"Restarting mixer for {self.feed_watchdog_restart_stop_sec:.1f}s."
+            )
+
+        self._arduino("MOTOR_STOP")
+        if self._stop.wait(self.feed_watchdog_restart_stop_sec):
+            return False
+        self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+        self._note_feed_activity()
+        return True
+
     def _home_count_qualified(self, home_ok: bool) -> tuple[bool, float]:
         if not home_ok:
             return False, 0.0
@@ -3807,6 +3870,7 @@ class ExtrusionRatioTestController:
             return
 
         counted, load_pct = self._home_count_qualified(home_ok)
+        self._note_feed_activity()
 
         recovery_applied, pending_homes = self._post_home_recovery_if_needed()
 
@@ -3867,6 +3931,8 @@ class ExtrusionRatioTestController:
             response = self._arduino("AGITATOR_HOME")
             home_ok = self._home_completed(response)
             counted, load_after_home = self._home_count_qualified(home_ok)
+                if home_ok:
+                    self._note_feed_activity()
             if not home_ok:
                 _, _, load_after_home = self._sample_crammer()
 
@@ -4190,6 +4256,10 @@ class ExtrusionRatioTestController:
                     self._stop.wait(self.poll_sec)
                     continue
 
+                if self._maybe_restart_stuck_feed(crammer_load_pct, stage2_active):
+                    self._stop.wait(self.poll_sec)
+                    continue
+
                 # Stage 1 hold gate applies only before Stage 2 has started.
                 # Once Stage 2 is active, keep mixer-forward watching alive so
                 # load can naturally fall to the low-load trigger instead of
@@ -4313,6 +4383,11 @@ class ExtrusionRatioTestController:
                 "low_load_threshold_pct": self.low_load_threshold_pct,
                 "low_load_hyst_pct": self.low_load_hyst_pct,
                 "low_load_retrigger_sec": self.low_load_retrigger_sec,
+                "feed_watchdog_low_load_pct": self.feed_watchdog_low_load_pct,
+                "feed_watchdog_stuck_sec": self.feed_watchdog_stuck_sec,
+                "feed_watchdog_restart_stop_sec": self.feed_watchdog_restart_stop_sec,
+                "feed_watchdog_drop_delta_pct": self.feed_watchdog_drop_delta_pct,
+                "feed_watchdog_cooldown_sec": self.feed_watchdog_cooldown_sec,
                 "low_load_home_count": self.low_load_home_count,
                 "low_load_armed": self.low_load_armed,
                 "min_homes_before_recovery": self.min_homes_before_recovery,

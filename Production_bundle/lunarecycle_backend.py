@@ -3931,8 +3931,8 @@ class ExtrusionRatioTestController:
             response = self._arduino("AGITATOR_HOME")
             home_ok = self._home_completed(response)
             counted, load_after_home = self._home_count_qualified(home_ok)
-                if home_ok:
-                    self._note_feed_activity()
+            if home_ok:
+                self._note_feed_activity()
             if not home_ok:
                 _, _, load_after_home = self._sample_crammer()
 

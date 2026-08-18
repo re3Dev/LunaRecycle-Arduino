@@ -2684,6 +2684,7 @@ FEED_POLL_SEC             = float(os.environ.get("LUNA_FEED_POLL_SEC", str(RATIO
 FEED_VACUUM_PCT           = int(os.environ.get("LUNA_FEED_VACUUM_PCT", str(RATIO_TEST_VACUUM_IDLE_PCT)))
 FEED_STARTUP_HOME_ATTEMPTS = max(0, int(os.environ.get("LUNA_FEED_STARTUP_HOME_ATTEMPTS", "3")))
 FEED_STARTUP_HOME_INTERVAL_SEC = max(0.0, float(os.environ.get("LUNA_FEED_STARTUP_HOME_INTERVAL_SEC", "0.5")))
+FEED_STARTUP_POST_HOME_CHECK_SEC = max(0.0, float(os.environ.get("LUNA_FEED_STARTUP_POST_HOME_CHECK_SEC", "1.5")))
 
 RATIO_USE_CRAMMER_LOAD = _env_flag("LUNA_RATIO_USE_CRAMMER_LOAD", "1")
 RATIO_CRAMMER_LOW_LOAD_PCT = float(os.environ.get("LUNA_RATIO_CRAMMER_LOW_LOAD_PCT", "30.0"))
@@ -3618,6 +3619,7 @@ class ExtrusionRatioTestController:
         self.last_low_load_trigger_at = 0.0
         self.low_load_armed = True
         self.startup_home_attempts = max(0, int(FEED_STARTUP_HOME_ATTEMPTS))
+        self.startup_post_home_check_sec = max(0.0, float(FEED_STARTUP_POST_HOME_CHECK_SEC))
         self.startup_homes_done = 0
         self.post_home_recovery_check_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_CHECK_SEC))
         self.post_home_recovery_load_pct = max(0.0, min(100.0, float(RATIO_POST_HOME_RECOVERY_LOAD_PCT)))
@@ -3898,8 +3900,34 @@ class ExtrusionRatioTestController:
                     )
                 return
 
-            if idx < attempts and FEED_STARTUP_HOME_INTERVAL_SEC > 0:
-                self._stop.wait(FEED_STARTUP_HOME_INTERVAL_SEC)
+            # Between startup homes, keep checking load so we do not run
+            # extra homes after recovery has already happened.
+            if idx < attempts:
+                observe_sec = max(float(self.startup_post_home_check_sec), float(FEED_STARTUP_HOME_INTERVAL_SEC))
+                if observe_sec > 0:
+                    deadline = time.monotonic() + observe_sec
+                    while not self._stop.is_set() and time.monotonic() < deadline:
+                        _, _, observed_load = self._sample_crammer()
+                        if observed_load > sufficient_threshold:
+                            with self._lock:
+                                self.message = (
+                                    f"Step 1/4 early stop after home {idx}/{attempts}: "
+                                    f"load recovered to {observed_load:.1f}% > {sufficient_threshold:.1f}% during settle check."
+                                )
+                            return
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        self._stop.wait(min(self.poll_sec, remaining))
+                else:
+                    _, _, observed_load = self._sample_crammer()
+                    if observed_load > sufficient_threshold:
+                        with self._lock:
+                            self.message = (
+                                f"Step 1/4 early stop after home {idx}/{attempts}: "
+                                f"load recovered to {observed_load:.1f}% > {sufficient_threshold:.1f}% before next home."
+                            )
+                        return
 
     def _post_home_recovery_if_needed(self) -> tuple[bool, int]:
         if not self.allow_post_home_recovery:

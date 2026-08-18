@@ -186,6 +186,7 @@ RATIO_POST_HOME_RECOVERY_REVERSE_SEC = float(os.environ.get("LUNA_RATIO_POST_HOM
 RATIO_POST_HOME_RECOVERY_STOP2_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STOP2_SEC", "3.0"))
 RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC", "15.0"))
 RATIO_POST_HOME_RECOVERY_STAGE2_HOME_STOP_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE2_HOME_STOP_SEC", "3.0"))
+RATIO_POST_HOME_RECOVERY_STAGE3_ATTEMPTS_BEFORE_STAGE4 = int(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE3_ATTEMPTS_BEFORE_STAGE4", "3"))
 RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC", "3.0"))
 RATIO_POST_HOME_RECOVERY_STAGE4_FIRST_HOME_DELAY_SEC = float(os.environ.get("LUNA_RATIO_POST_HOME_RECOVERY_STAGE4_FIRST_HOME_DELAY_SEC", "0.5"))
 RATIO_USE_POST_HOME_RECOVERY_STAGE2 = _env_flag("LUNA_RATIO_USE_POST_HOME_RECOVERY_STAGE2", "1")
@@ -3631,6 +3632,7 @@ class ExtrusionRatioTestController:
         self.post_home_recovery_stop2_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STOP2_SEC))
         self.post_home_recovery_stage2_home_stop_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_HOME_STOP_SEC))
         self.post_home_recovery_stage2_check_sec = max(1.0, float(RATIO_POST_HOME_RECOVERY_STAGE2_CHECK_SEC))
+        self.post_home_recovery_stage3_attempts_before_stage4 = max(1, int(RATIO_POST_HOME_RECOVERY_STAGE3_ATTEMPTS_BEFORE_STAGE4))
         self.post_home_recovery_stage3_stop_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE3_STOP_SEC))
         self.post_home_recovery_stage4_first_home_delay_sec = max(0.0, float(RATIO_POST_HOME_RECOVERY_STAGE4_FIRST_HOME_DELAY_SEC))
         self.use_post_home_recovery_stage2 = bool(RATIO_USE_POST_HOME_RECOVERY_STAGE2)
@@ -3983,89 +3985,97 @@ class ExtrusionRatioTestController:
             )
 
         if self.use_post_home_recovery_stage2:
-            # Stage 2: one fixed stop/reverse/stop burst, then resume forward and
-            # home the air-lock right as forward resumes.
-            self._arduino("MOTOR_STOP")
-            if self._stop.wait(self.post_home_recovery_stop1_sec):
-                return True, 0
-            self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
-            if self._stop.wait(self.post_home_recovery_reverse_sec):
-                return True, 0
-            self._arduino("MOTOR_STOP")
-            if self._stop.wait(self.post_home_recovery_stop2_sec):
-                return True, 0
-            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+            stage3_cycles = max(1, int(self.post_home_recovery_stage3_attempts_before_stage4))
+            stage3_home_attempts = 2
+            stage3_check_sec = max(check_sec, self.post_home_recovery_stage2_check_sec)
 
-            # Home twice after Stage 2 returns to forward so Stage 4 escalation
-            # cannot happen after only a single post-reverse home attempt.
-            with self._lock:
-                self.phase = "RECOVERY"
-                self.message = "Stage 2 resumed forward; running 2 air-lock home attempts now."
+            for cycle_idx in range(stage3_cycles):
+                with self._lock:
+                    self.phase = "RECOVERY"
+                    self.message = (
+                        f"Stage 3 cycle {cycle_idx + 1}/{stage3_cycles}: "
+                        "running reverse burst and air-lock homes."
+                    )
 
-            stage2_home_attempts = 2
-            for attempt_idx in range(stage2_home_attempts):
-                if self._stop.is_set():
+                self._arduino("MOTOR_STOP")
+                if self._stop.wait(self.post_home_recovery_stop1_sec):
                     return True, 0
+                self._set_mixer(RATIO_TEST_MIX_PWM_REV, "REV")
+                if self._stop.wait(self.post_home_recovery_reverse_sec):
+                    return True, 0
+                self._arduino("MOTOR_STOP")
+                if self._stop.wait(self.post_home_recovery_stop2_sec):
+                    return True, 0
+                self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
-                stage2_home_response = self._arduino("AGITATOR_HOME")
-                if not self._home_completed(stage2_home_response):
-                    err = self._home_error_line(stage2_home_response)
-                    err_l = err.lower()
-                    if (not stage2_home_response) or ("timeout" in err_l) or ("fault" in err_l) or ("driver" in err_l):
-                        raise RuntimeError(
-                            "Air-lock home failed immediately after Stage 2 forward resume; "
-                            f"aborting recovery. response={stage2_home_response}"
-                        )
+                for attempt_idx in range(stage3_home_attempts):
+                    if self._stop.is_set():
+                        return True, 0
+
+                    stage2_home_response = self._arduino("AGITATOR_HOME")
+                    if not self._home_completed(stage2_home_response):
+                        err = self._home_error_line(stage2_home_response)
+                        err_l = err.lower()
+                        if (not stage2_home_response) or ("timeout" in err_l) or ("fault" in err_l) or ("driver" in err_l):
+                            raise RuntimeError(
+                                "Air-lock home failed immediately after Stage 2 forward resume; "
+                                f"aborting recovery. response={stage2_home_response}"
+                            )
+                        with self._lock:
+                            self.last_home_response = stage2_home_response
+                            self.message = (
+                                f"Stage 3 cycle {cycle_idx + 1}/{stage3_cycles}, "
+                                f"home attempt {attempt_idx + 1}/{stage3_home_attempts} busy; continuing."
+                            )
+                        continue
+
+                    counted, _ = self._home_count_qualified(True)
                     with self._lock:
                         self.last_home_response = stage2_home_response
-                        self.message = (
-                            f"Stage 2 forward home attempt {attempt_idx + 1}/{stage2_home_attempts} busy; "
-                            "continuing recovery sequence."
-                        )
-                    continue
+                        if counted:
+                            self.home_sequences_completed += 1
+                            self.low_load_home_count += 1
 
-                counted, _ = self._home_count_qualified(True)
-                with self._lock:
-                    self.last_home_response = stage2_home_response
-                    if counted:
-                        self.home_sequences_completed += 1
-                        self.low_load_home_count += 1
+                    if attempt_idx < (stage3_home_attempts - 1):
+                        if self._stop.wait(self.post_home_recovery_stage2_home_stop_sec):
+                            return True, 0
+                        _, _, inter_home_load = self._sample_crammer()
+                        if inter_home_load > recover_threshold:
+                            with self._lock:
+                                self.post_home_unrecovered_streak = 0
+                                self.message = (
+                                    f"Stage 3 cycle {cycle_idx + 1}/{stage3_cycles} recovered load to "
+                                    f"{inter_home_load:.1f}% > {recover_threshold:.1f}% after first home."
+                                )
+                            return True, 0
 
-                # After the first Stage-2-forward home, wait briefly and
-                # re-check load before attempting a second home.
-                if attempt_idx < (stage2_home_attempts - 1):
-                    if self._stop.wait(self.post_home_recovery_stage2_home_stop_sec):
-                        return True, 0
-                    _, _, inter_home_load = self._sample_crammer()
-                    if inter_home_load > recover_threshold:
-                        with self._lock:
-                            self.post_home_unrecovered_streak = 0
-                            self.message = (
-                                f"Stage 2 forward home recovered load to {inter_home_load:.1f}% "
-                                f"> {recover_threshold:.1f}%; skipping second home."
-                            )
-                        return True, 0
+                self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
-            # Resume the barrel immediately after the home so the recovery
-            # check does not leave the mixer parked for the whole window.
-            self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
+                stage3_deadline = time.monotonic() + stage3_check_sec
+                recovered_in_cycle = False
+                while not self._stop.is_set() and time.monotonic() < stage3_deadline:
+                    _, _, load_pct = self._sample_crammer()
+                    if load_pct > recover_threshold:
+                        recovered_in_cycle = True
+                        break
+                    remaining = stage3_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._stop.wait(min(self.poll_sec, remaining))
 
-            # Re-check load after Stage 2 for a longer hold window before escalating.
-            stage2_check_sec = max(check_sec, self.post_home_recovery_stage2_check_sec)
-            stage2_deadline = time.monotonic() + stage2_check_sec
-            while not self._stop.is_set() and time.monotonic() < stage2_deadline:
-                _, _, load_pct = self._sample_crammer()
-                if load_pct > recover_threshold:
+                if self._stop.is_set():
+                    return True, 0
+                if recovered_in_cycle:
                     with self._lock:
                         self.post_home_unrecovered_streak = 0
                     return True, 0
-                remaining = stage2_deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._stop.wait(min(self.poll_sec, remaining))
 
-            if self._stop.is_set():
-                return True, 0
+                if cycle_idx < (stage3_cycles - 1):
+                    with self._lock:
+                        self.message = (
+                            f"Stage 3 cycle {cycle_idx + 1}/{stage3_cycles} did not recover load > "
+                            f"{recover_threshold:.1f}%; retrying Stage 3 before Stage 4 escalation."
+                        )
         else:
             self._set_mixer(RATIO_TEST_MIX_PWM, "FWD")
 
@@ -4313,6 +4323,7 @@ class ExtrusionRatioTestController:
                 "post_home_recovery_reverse_sec": self.post_home_recovery_reverse_sec,
                 "post_home_recovery_stop2_sec": self.post_home_recovery_stop2_sec,
                 "post_home_recovery_stage2_check_sec": self.post_home_recovery_stage2_check_sec,
+                "post_home_recovery_stage3_attempts_before_stage4": self.post_home_recovery_stage3_attempts_before_stage4,
                 "post_home_recovery_stage3_stop_sec": self.post_home_recovery_stage3_stop_sec,
                 "post_home_recovery_stage4_first_home_delay_sec": self.post_home_recovery_stage4_first_home_delay_sec,
                 "use_post_home_recovery_stage2": self.use_post_home_recovery_stage2,

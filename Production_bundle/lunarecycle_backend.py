@@ -4164,6 +4164,22 @@ class ExtrusionRatioTestController:
                 trigger_reason = ""
                 trigger_home_now = False
 
+                # When Stage 2 is active, allow fallback to Stage 1 hold once
+                # load is comfortably above threshold (with hysteresis).
+                stage1_return_threshold = self.low_load_threshold_pct + self.low_load_hyst_pct
+                if stage2_active and crammer_load_pct > stage1_return_threshold:
+                    self._arduino("MOTOR_STOP")
+                    stage2_active = False
+                    with self._lock:
+                        self.post_home_unrecovered_streak = 0
+                        self.phase = "STARTUP_HOMING"
+                        self.message = (
+                            f"Step 1/4 hold: load {crammer_load_pct:.1f}% is above "
+                            f"return threshold {stage1_return_threshold:.1f}% (low + hyst); mixer OFF."
+                        )
+                    self._stop.wait(self.poll_sec)
+                    continue
+
                 # Stage 1 hold gate applies only before Stage 2 has started.
                 # Once Stage 2 is active, keep mixer-forward watching alive so
                 # load can naturally fall to the low-load trigger instead of

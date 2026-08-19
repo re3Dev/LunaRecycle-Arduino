@@ -116,6 +116,7 @@ def _parse_int_set_env(name: str, default: str) -> set[int]:
 DRYER_RUN_ON_VALUES = _parse_int_set_env("LUNA_DRYER_RUN_ON_VALUES", "100")
 DRYER_RUN_OFF_VALUES = _parse_int_set_env("LUNA_DRYER_RUN_OFF_VALUES", "0")
 DRYER_SSR_PREHEAT_DELAY_SEC = float(os.environ.get("LUNA_DRYER_SSR_PREHEAT_DELAY_SEC", "15.0"))
+DRY_HOLD_STARTUP_TIMEOUT_SEC = float(os.environ.get("LUNA_DRY_HOLD_STARTUP_TIMEOUT_SEC", "30.0"))
 
 # Persistent event log path (JSON Lines). One event per line with CST timestamp.
 EVENT_LOG_PATH = os.environ.get(
@@ -3372,7 +3373,11 @@ class AutoWorkflowController:
         )
 
         seen_running = False
-        startup_deadline = time.monotonic() + 30.0
+        startup_timeout_sec = max(
+            float(DRY_HOLD_STARTUP_TIMEOUT_SEC),
+            float(DRYER_SSR_PREHEAT_DELAY_SEC) + 20.0,
+        )
+        startup_deadline = time.monotonic() + startup_timeout_sec
         while True:
             if self._stop.is_set():
                 raise RuntimeError("Workflow stop requested.")
@@ -3387,7 +3392,10 @@ class AutoWorkflowController:
                 if phase == "ERROR":
                     raise RuntimeError(str(st.get("message", "Dry hold failed.")))
                 if time.monotonic() > startup_deadline:
-                    raise RuntimeError("Dry hold did not enter RUNNING state in time.")
+                    raise RuntimeError(
+                        f"Dry hold did not enter RUNNING state in time "
+                        f"({startup_timeout_sec:.1f}s timeout)."
+                    )
                 self._sleep(0.5)
                 continue
 

@@ -2231,7 +2231,7 @@
 
       let seenRunning = false;
       const started = Date.now();
-      const startupTimeoutMs = 30000;
+      const startupTimeoutMs = Math.max(30000, (30 * 1000) + 20000);
       while(true){
         if(S.workflowStopRequested){ throw new Error("Workflow stop requested."); }
         const res = await apiArduino("/dry_hold/status", { method: "GET" });
@@ -2245,7 +2245,7 @@
             throw new Error(d.message || "Dry hold failed.");
           }
           if(Date.now() - started > startupTimeoutMs){
-            throw new Error("Dry hold did not enter RUNNING state in time.");
+            throw new Error(`Dry hold did not enter RUNNING state in time (${Math.round(startupTimeoutMs / 1000)}s timeout).`);
           }
           await workflowSleep(500);
           continue;
